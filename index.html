@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#05070d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Sternenfront</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <canvas id="hud"></canvas>
+
+  <!-- flight controls -->
+  <div id="flight" class="hidden">
+    <div id="stick-zone"></div>
+    <div id="stick-base"><div id="stick-knob"></div></div>
+    <div id="comm" class="hidden"><div class="avatar"></div><div><b class="who"></b><p class="txt"></p></div></div>
+    <button id="btn-pause" class="hbtn" aria-label="Pause">II</button>
+    <div id="throttle" aria-label="Schub"><div id="throttle-fill"></div><span>SCHUB</span></div>
+    <button id="btn-auto" class="hbtn">AUTOPILOT</button>
+    <button id="btn-tgt" class="rbtn">ZIEL</button>
+    <button id="btn-msl" class="rbtn">RAKETE</button>
+    <button id="btn-boost" class="rbtn">BOOST</button>
+    <button id="btn-fire" class="rbtn">FEUER</button>
+  </div>
+
+  <!-- screens -->
+  <div id="ui">
+    <section id="s-title" class="screen">
+      <div class="logo"><small>GESCHWADER NACHTFALKEN</small><h1>STERNENFRONT</h1><i>Der Perseus-Krieg</i></div>
+      <nav class="menu">
+        <button id="m-continue" class="btn primary hidden">Kampagne fortsetzen</button>
+        <button id="m-new" class="btn">Neue Kampagne</button>
+        <button id="m-help" class="btn">Steuerung</button>
+        <button id="m-settings" class="btn">Einstellungen</button>
+      </nav>
+      <footer id="pilot-line"></footer>
+    </section>
+
+    <section id="s-name" class="screen hidden">
+      <div class="panel narrow">
+        <h2>Pilotenakte anlegen</h2>
+        <p>Wähle dein Rufzeichen, Fähnrich.</p>
+        <input id="callsign" maxlength="12" value="Nova" autocomplete="off" spellcheck="false">
+        <div class="row"><button class="btn" data-back>Zurück</button><button id="name-ok" class="btn primary">Dienst antreten</button></div>
+      </div>
+    </section>
+
+    <section id="s-help" class="screen hidden">
+      <div class="panel">
+        <h2>Steuerung</h2>
+        <div class="cols">
+          <div><h3>Touch</h3><ul>
+            <li><b>Linke Bildschirmhälfte</b> – Steuerknüppel</li>
+            <li><b>FEUER</b> – Bordkanonen (halten)</li>
+            <li><b>RAKETE</b> – Lenkrakete auf aktuelles Ziel</li>
+            <li><b>BOOST</b> – Nachbrenner (halten)</li>
+            <li><b>ZIEL</b> – nächstes Ziel aufschalten</li>
+            <li><b>SCHUB</b> – Schubregler am rechten Rand</li>
+            <li><b>AUTOPILOT</b> – Sprung zum nächsten Navpunkt</li>
+          </ul></div>
+          <div><h3>Tastatur</h3><ul>
+            <li><b>WASD / Pfeile</b> – steuern</li>
+            <li><b>Leertaste</b> – feuern</li>
+            <li><b>M / Enter</b> – Rakete</li>
+            <li><b>Shift</b> – Nachbrenner</li>
+            <li><b>T</b> – Ziel · <b>J</b> – Autopilot</li>
+            <li><b>Q / E</b> – Schub · <b>Esc</b> – Pause</li>
+          </ul></div>
+        </div>
+        <p class="hint">Tipp: Der Kreis vor dem Ziel ist der Vorhaltepunkt. Wird das Fadenkreuz grün, treffen deine Schüsse.</p>
+        <div class="row"><button class="btn primary" data-back>Verstanden</button></div>
+      </div>
+    </section>
+
+    <section id="s-settings" class="screen hidden">
+      <div class="panel narrow">
+        <h2>Einstellungen</h2>
+        <button id="set-sound" class="btn toggle"></button>
+        <button id="set-invert" class="btn toggle"></button>
+        <button id="set-quality" class="btn toggle"></button>
+        <button id="set-full" class="btn toggle">Vollbild umschalten</button>
+        <div class="row"><button class="btn primary" data-back>Zurück</button></div>
+      </div>
+    </section>
+
+    <section id="s-dialog" class="screen hidden">
+      <div class="dialog">
+        <header><span id="d-kicker"></span><h2 id="d-title"></h2></header>
+        <div class="dbox">
+          <div id="d-avatar" class="avatar big"></div>
+          <div class="dtext"><b id="d-who"></b><p id="d-text"></p></div>
+        </div>
+        <div class="row"><button id="d-skip" class="btn ghost">Überspringen</button><button id="d-next" class="btn primary">Weiter</button></div>
+      </div>
+    </section>
+
+    <section id="s-brief" class="screen hidden">
+      <div class="panel wide">
+        <header><span id="b-kicker"></span><h2 id="b-title"></h2></header>
+        <div class="cols">
+          <canvas id="b-map" width="520" height="360"></canvas>
+          <div>
+            <h3>Missionsziele</h3><ul id="b-obj"></ul>
+            <h3>Zugeteilte Maschine</h3><p id="b-ship"></p>
+            <h3>Flügelmann</h3><p id="b-wing"></p>
+          </div>
+        </div>
+        <div class="row"><button class="btn" id="b-back">Hauptmenü</button><button id="b-start" class="btn primary">Start</button></div>
+      </div>
+    </section>
+
+    <section id="s-debrief" class="screen hidden">
+      <div class="panel">
+        <header><span id="r-kicker"></span><h2 id="r-title"></h2></header>
+        <p id="r-reason"></p>
+        <div class="stats" id="r-stats"></div>
+        <div class="row"><button class="btn" id="r-menu">Hauptmenü</button><button class="btn primary" id="r-next">Weiter</button></div>
+      </div>
+    </section>
+
+    <section id="s-pause" class="screen hidden dim">
+      <div class="panel narrow">
+        <h2>Pause</h2>
+        <button id="p-resume" class="btn primary">Weiterfliegen</button>
+        <button id="p-restart" class="btn">Mission neu starten</button>
+        <button id="p-quit" class="btn">Mission abbrechen</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="fade"></div>
+  <div id="rotate"><div>⟳<p>Bitte Gerät ins Querformat drehen</p></div></div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

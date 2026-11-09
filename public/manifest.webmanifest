@@ -1,0 +1,11 @@
+{
+  "name": "Sternenfront",
+  "short_name": "Sternenfront",
+  "description": "3D-Weltraumkampf mit Story-Kampagne",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#05070d",
+  "theme_color": "#05070d",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

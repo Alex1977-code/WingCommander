@@ -1,0 +1,18 @@
+{
+  "name": "sternenfront",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sternenfront – ein mobiles 3D-Weltraumkampfspiel mit Story-Kampagne",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
