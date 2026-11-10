@@ -5,10 +5,13 @@
  *  - annunciator panel + master caution that blink according to the fighter's state
  *  - yoke or stick and throttle held by gloved hands that follow the pilot's inputs
  *  - battle damage: displays drop out or flicker, buttons die, sparks fly, the canopy cracks
+ *  - retrofit look: bolted-on stainless pods with seven-segment readouts, LED bars, keypad,
+ *    guarded toggle switches, louvred ribs, display visors, hex bolts, cable bundles and conduit
  *  - procedural wear: scratches, chipped edges, grime, rivets, faded stencils, fingerprints, canopy smudges
  * Rendered as a second pass with its own camera (near plane 1 cm), lit by the real sun direction.
  */
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildShip } from './ships.js';
 
 const v = new THREE.Vector3(), v2 = new THREE.Vector3(), q = new THREE.Quaternion();
@@ -73,6 +76,76 @@ function wornTexture(base, { size = 512, stripes = false, labels = [], rivets = 
   const map = new THREE.CanvasTexture(c); map.colorSpace = THREE.SRGBColorSpace; map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 4;
   const rough = new THREE.CanvasTexture(r); rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
   return { map, rough };
+}
+
+/** brushed stainless steel with fine horizontal grain, a few scuffs and fingerprints */
+function brushedTexture() {
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#a7adb3'; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 2600; i++) {
+    const y = Math.random() * S, l = rnd(40, 400), x = rnd(-100, S);
+    g.strokeStyle = Math.random() < 0.5 ? `rgba(255,255,255,${rnd(0.03, 0.12)})` : `rgba(40,45,50,${rnd(0.03, 0.12)})`;
+    g.lineWidth = rnd(0.5, 1.5); g.beginPath(); g.moveTo(x, y); g.lineTo(x + l, y + rnd(-1, 1)); g.stroke();
+  }
+  for (let i = 0; i < 30; i++) { const x = rnd(0, S), y = rnd(0, S), rr = rnd(20, 60); const gr = g.createRadialGradient(x, y, 0, x, y, rr); gr.addColorStop(0, 'rgba(60,55,50,.18)'); gr.addColorStop(1, 'rgba(60,55,50,0)'); g.fillStyle = gr; g.fillRect(x - rr, y - rr, rr * 2, rr * 2); }
+  for (let i = 0; i < 60; i++) { const x = rnd(0, S), y = rnd(0, S), a = rnd(0, 6.283), l = rnd(8, 50); g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 0.7; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+  return t;
+}
+
+/** stripes along a cable or a corrugated conduit (u runs along the tube) */
+function ribTexture(base, rib) {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 8;
+  const g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, 64, 8);
+  if (rib) for (let x = 0; x < 64; x += 8) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x, 0, 2, 8); g.fillStyle = 'rgba(255,255,255,.18)'; g.fillRect(x + 3, 0, 2, 8); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+// seven-segment glyphs: segments a b c d e f g
+const SEG = { 0: 'abcdef', 1: 'bc', 2: 'abdeg', 3: 'abcdg', 4: 'bcfg', 5: 'acdfg', 6: 'acdefg', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg', '-': 'g', ' ': '', E: 'adefg', r: 'eg', o: 'cdeg' };
+function seg7(g, ch, x, y, w, h, on, off) {
+  const t = w * 0.2, segs = SEG[ch] ?? '';
+  const H2 = h / 2;
+  const bars = {
+    a: [x + t * 0.6, y, w - t * 1.2, t, 1], d: [x + t * 0.6, y + h - t, w - t * 1.2, t, 1], g: [x + t * 0.6, y + H2 - t / 2, w - t * 1.2, t, 1],
+    f: [x, y + t * 0.6, t, H2 - t * 0.9, 0], b: [x + w - t, y + t * 0.6, t, H2 - t * 0.9, 0],
+    e: [x, y + H2 + t * 0.3, t, H2 - t * 0.9, 0], c: [x + w - t, y + H2 + t * 0.3, t, H2 - t * 0.9, 0],
+  };
+  for (const k of 'abcdefg') {
+    const [bx, by, bw, bh, hor] = bars[k], lit = segs.includes(k);
+    g.fillStyle = lit ? on : off;
+    if (lit) { g.shadowColor = on; g.shadowBlur = 10; } else g.shadowBlur = 0;
+    g.beginPath();
+    if (hor) { g.moveTo(bx, by + bh / 2); g.lineTo(bx + bh / 2, by); g.lineTo(bx + bw - bh / 2, by); g.lineTo(bx + bw, by + bh / 2); g.lineTo(bx + bw - bh / 2, by + bh); g.lineTo(bx + bh / 2, by + bh); }
+    else { g.moveTo(bx + bw / 2, by); g.lineTo(bx + bw, by + bw / 2); g.lineTo(bx + bw, by + bh - bw / 2); g.lineTo(bx + bw / 2, by + bh); g.lineTo(bx, by + bh - bw / 2); g.lineTo(bx, by + bw / 2); }
+    g.closePath(); g.fill();
+  }
+  g.shadowBlur = 0;
+}
+function segText(g, str, x, y, w, h, on, off) {
+  let cx = x;
+  for (const ch of str) {
+    if (ch === '.' || ch === ':') {
+      g.fillStyle = on; g.shadowColor = on; g.shadowBlur = 8;
+      if (ch === '.') g.fillRect(cx - w * 0.12, y + h - w * 0.2, w * 0.18, w * 0.18);
+      else { g.fillRect(cx, y + h * 0.28, w * 0.18, w * 0.18); g.fillRect(cx, y + h * 0.65, w * 0.18, w * 0.18); cx += w * 0.4; }
+      g.shadowBlur = 0; continue;
+    }
+    seg7(g, ch, cx, y, w, h, on, off); cx += w * 1.3;
+  }
+}
+/** embossed label-maker tape */
+function dymo(g, text, x, y, h, color = '#151515') {
+  g.save(); g.translate(x, y); g.rotate(rnd(-0.025, 0.025));
+  g.font = `700 ${Math.round(h * 0.7)}px ${FONT}`;
+  const w = g.measureText(text).width + h * 0.8;
+  g.fillStyle = color; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(0, 0, w, h * 0.18);
+  g.fillStyle = 'rgba(240,240,240,.92)'; g.textBaseline = 'middle'; g.fillText(text, h * 0.4, h * 0.54);
+  g.restore();
 }
 
 function smudgeTexture() {
@@ -246,6 +319,15 @@ export class Cockpit {
     this.knuckle = new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide });
     const ws = wornTexture('#2f3429', { rivets: false, grime: 1.2 });
     this.sleeve = new THREE.MeshStandardMaterial({ color: 0xffffff, map: ws.map, roughnessMap: ws.rough, roughness: 0.95, metalness: 0 });
+    // stainless retrofit hardware, cables and conduit
+    const bt = brushedTexture();
+    this.steel = new THREE.MeshStandardMaterial({ color: 0xffffff, map: bt, metalness: 0.75, roughness: 0.34 });
+    this.steelDark = new THREE.MeshStandardMaterial({ color: 0x6d737a, map: bt, metalness: 0.8, roughness: 0.4 });
+    this.redCover = new THREE.MeshStandardMaterial({ color: 0xc0201a, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.85 });
+    this.cableMats = ['#7a1a14', '#a8801a', '#1d1e20', '#1f3f7a'].map((c) => new THREE.MeshStandardMaterial({ color: 0xffffff, map: ribTexture(c, false), roughness: 0.55, metalness: 0.05 }));
+    this.conduit = new THREE.MeshStandardMaterial({ color: 0xffffff, map: ribTexture('#4a4d52', true), roughness: 0.45, metalness: 0.6 });
+    this.toggles = []; this.keys = [];
+    this.missionT = 0;
     this.crack = crackCanvas();
     this.crackTex = new THREE.CanvasTexture(this.crack); this.crackTex.colorSpace = THREE.SRGBColorSpace;
     this.crackMat = new THREE.MeshBasicMaterial({ map: this.crackTex, transparent: true, depthWrite: false, toneMapped: false });
@@ -269,6 +351,8 @@ export class Cockpit {
     this.logs = ['LOG', 'KOM'].map((kind) => ({ kind, ...canvasMat(256, 320), lines: [], next: 0 }));
     this.buttons = [];
     this.annun = canvasMat(640, 128);
+    this.segPanel = canvasMat(512, 224);
+    this.barPanel = canvasMat(256, 224);
     this.prints = this.fingerprints(320, 240);
     this.lampState = {};
     this.mfdT = 0; this.aspect = 0; this.shake = 0; this.radarAng = 0;
@@ -327,6 +411,12 @@ export class Cockpit {
       const mh = mw * 0.75;
       place(new THREE.Mesh(roundedRect(mw * 1.22, mh * 1.3, 0.014, 0.01), this.bezel), deg, my, 0.004);
       this.elems[`mfd${i}`] = place(new THREE.Mesh(new THREE.PlaneGeometry(mw, mh), this.mfds[i].mat), deg, my, 0.012);
+      // sun visor over the display, with side cheeks
+      const vz = place(new THREE.Group(), deg, my + mh * 0.65 + 0.004, 0.006);
+      vz.rotation.order = 'YXZ';
+      const lid = new THREE.Mesh(roundedRect(mw * 1.3, 0.042, 0.006, 0.004, 0.002), this.steelDark);
+      lid.rotation.x = -1.25; lid.position.z = 0.019; vz.add(lid);
+      for (const sx of [-1, 1]) { const ck = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.03, 0.036), this.steelDark); ck.position.set(sx * mw * 0.64, -0.012, 0.016); ck.rotation.x = 0.45; vz.add(ck); }
       for (const side of [-1, 1]) for (let k = 0; k < 4; k++) {
         const b = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.006), this.rubber);
         place(b, deg + ((side * mw * 0.56) / R) / DEG, my - mh * 0.38 + k * mh * 0.25, 0.011);
@@ -360,12 +450,13 @@ export class Cockpit {
     place(new THREE.Mesh(roundedRect(0.29, 0.068, 0.008, 0.006), this.bezel), 0, 0.128, 0.006);
     this.elems.annun = place(new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.054), this.annun.mat), 0, 0.128, 0.012);
     // stickers and maintenance plaques
-    [[-32, -0.11, 0], [33, -0.105, 1], [-58, 0.08, 2]].forEach(([deg, y, i]) => { const d = place(new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.028), this.decals[i]), deg, y, 0.009); d.rotation.z = rnd(-0.06, 0.06); });
+    [[-15.5, -0.135, 0], [16, -0.14, 1], [-58, 0.08, 2]].forEach(([deg, y, i]) => { const d = place(new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.028), this.decals[i]), deg, y, 0.009); d.rotation.z = rnd(-0.06, 0.06); });
     // master caution push-button
     const mc = new THREE.Group();
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.017, 0.012, 24), this.cautionMat); cap.rotation.x = Math.PI / 2; mc.add(cap);
     mc.add(new THREE.Mesh(new THREE.TorusGeometry(0.019, 0.003, 8, 24), this.chrome));
     place(mc, -19, 0.11, 0.014);
+    this.buildRetrofit(panel, place, R, H);
     // tilt the console back and drop it so its top edge sits 42 % below the centre
     panel.rotation.x = lean;
     const topLocal = new THREE.Vector3(0, H / 2, -R).applyAxisAngle(new THREE.Vector3(1, 0, 0), lean);
@@ -375,6 +466,7 @@ export class Cockpit {
     panel.updateMatrixWorld(true);
     mc.getWorldPosition(this.alarmLight.position); this.alarmLight.position.add(new THREE.Vector3(0, 0.06, 0.12));
     this.screenLight.position.set(0, panel.position.y + 0.05, -0.35);
+    this.buildCables(S, tube);
 
     // --- canopy: curved bow, A-pillars, sill rails, hydraulic lines, smudged glass ---
     for (const sx of [-1, 1]) {
@@ -516,6 +608,105 @@ export class Cockpit {
     if (this.arms) { this.arms.stick.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st; }
   }
 
+  /**
+   * Retrofit hardware bolted onto the console: stainless instrument pods with
+   * seven-segment readouts and LED bars, guarded toggle switches, a keypad,
+   * louvred ribs between the instrument groups and hex bolts everywhere.
+   */
+  buildRetrofit(panel, place, R, H) {
+    const bolts = [], M = new THREE.Matrix4(), BR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+    const bolt = (obj, x, y, z) => { obj.updateMatrix(); bolts.push(new THREE.Matrix4().multiplyMatrices(obj.matrix, M.makeTranslation(x, y, z)).multiply(BR)); };
+    // louvred ribs between log screens and side displays
+    for (const deg of [-31, 31]) {
+      const rib = place(new THREE.Group(), deg, 0, 0.016);
+      rib.add(new THREE.Mesh(roundedRect(0.034, H * 0.92, 0.006, 0.03, 0.003), this.steelDark));
+      for (let k = 0; k < 9; k++) {
+        const sl = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.0035, 0.016), this.steel);
+        sl.position.set(0, -H * 0.36 + k * H * 0.09, 0.006); sl.rotation.x = 0.7; rib.add(sl);
+      }
+      for (const y of [-H * 0.43, H * 0.43]) bolt(rib, 0, y, 0.005);
+    }
+    // bezel bolts on the displays
+    for (const [deg, w, h, y] of [[-44, 0.183, 0.146, 0], [0, 0.244, 0.195, -0.012], [44, 0.183, 0.146, 0]]) {
+      const d = place(new THREE.Object3D(), deg, y, 0.004);
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) bolt(d, sx * (w / 2 - 0.008), sy * (h / 2 - 0.008), 0.006);
+    }
+    // instrument pods standing on the glare shield, faces tilted up towards the pilot
+    const pod = (deg, w, h, d) => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(roundedRect(w, h, 0.01, d, 0.005), this.steel));
+      // chunky side cheeks and a top visor give it a bolted-on silhouette
+      for (const sx of [-1, 1]) { const ck = new THREE.Mesh(roundedRect(0.012, h * 1.15, 0.004, d * 1.1, 0.003), this.steelDark); ck.position.set(sx * (w / 2 + 0.004), -h * 0.05, 0.004); g.add(ck); }
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(w * 1.04, 0.006, 0.03), this.steelDark); lid.position.set(0, h / 2 + 0.002, 0.008); lid.rotation.x = 0.25; g.add(lid);
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(w * 0.7, 0.02, d * 0.8), this.dark); foot.position.set(0, -h / 2 - 0.008, -d / 2); g.add(foot);
+      const a = deg * DEG, r = R - 0.004;
+      g.position.set(r * Math.sin(a), H / 2 + h / 2 + 0.012, -r * Math.cos(a));
+      g.rotation.order = 'YXZ'; g.rotation.y = -a; g.rotation.x = -0.32;
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) bolt(g, sx * (w / 2 - 0.007), sy * (h / 2 - 0.007), 0.006);
+      panel.add(g);
+      return g;
+    };
+    // left pod: three rows of seven-segment readouts
+    const pl = pod(-34, 0.17, 0.074, 0.05);
+    this.elems.seg = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.06), this.segPanel.mat); this.elems.seg.position.z = 0.0065; pl.add(this.elems.seg);
+    this.podL = pl;
+    // right pod: LED bar graphs, keypad and guarded toggle switches on top
+    const pr = pod(34, 0.17, 0.074, 0.05);
+    this.elems.bar = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.06), this.barPanel.mat); this.elems.bar.position.set(-0.042, 0, 0.0065); pr.add(this.elems.bar);
+    this.keys = [];
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) {
+      const mat = new THREE.MeshStandardMaterial({ color: 0x2a2c30, emissive: 0x000000, roughness: 0.6 });
+      const k = new THREE.Mesh(roundedRect(0.016, 0.011, 0.002, 0.004, 0.0015), mat);
+      k.position.set(0.02 + c * 0.021, 0.022 - r * 0.0145, 0.009); pr.add(k);
+      this.keys.push({ mat, phase: Math.random() * 10 });
+    }
+    // big rotary selector knob on the right cheek
+    const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.014, 18), this.rubber); knob.rotation.x = Math.PI / 2; knob.position.set(0.076, -0.02, 0.012); pr.add(knob);
+    const kp = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.012, 0.003), this.steel); kp.position.set(0.076, -0.016, 0.02); pr.add(kp);
+    this.podR = pr;
+    this.toggles = [];
+    ['NB', 'AUTO', 'WAFFE', 'ECM'].forEach((key, i) => {
+      const base = new THREE.Group(); base.position.set(-0.06 + i * 0.04, 0.037 + 0.006, 0.012); pr.add(base);
+      const nut = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.004, 6), this.steel); base.add(nut);
+      const lever = new THREE.Group(); base.add(lever);
+      const bat = new THREE.Mesh(new THREE.CylinderGeometry(0.0016, 0.0024, 0.018, 8), this.chrome); bat.position.y = 0.009; lever.add(bat);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.0028, 8, 6), this.chrome); tip.position.y = 0.018; lever.add(tip);
+      const hinge = new THREE.Group(); hinge.position.set(0, 0.002, -0.011); base.add(hinge);
+      const cover = new THREE.Mesh(new THREE.BoxGeometry(0.013, 0.022, 0.02), this.redCover); cover.position.set(0, 0.011, 0.01); hinge.add(cover);
+      const led = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 6), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0x000000 })); led.position.set(0.009, 0.001, 0.008); base.add(led);
+      this.toggles.push({ key, lever, hinge, led: led.material });
+    });
+    const bg = new THREE.CylinderGeometry(0.0035, 0.0035, 0.003, 6);
+    const im = new THREE.InstancedMesh(bg, this.steel, bolts.length);
+    bolts.forEach((m, i) => im.setMatrixAt(i, m));
+    panel.add(im);
+  }
+
+  /** cable bundles and a corrugated conduit from the pods up the canopy pillars */
+  buildCables(S, tube) {
+    const loc = (obj, x, y, z) => this.rig.worldToLocal(obj.localToWorld(new THREE.Vector3(x, y, z)));
+    for (const [pod, sx] of [[this.podL, -1], [this.podR, 1]]) {
+      const start = loc(pod, sx * 0.09, -0.01, -0.03);
+      const base = S(0.97 * sx, -0.47, 0.64), up1 = S(0.93 * sx, 0.05, 0.57), up2 = S(0.76 * sx, 0.62, 0.47);
+      for (let k = 0; k < 4; k++) {
+        const off = new THREE.Vector3(-sx * (0.004 + k * 0.006), (k - 1.5) * 0.004, 0.003 * k);
+        const sag = start.clone().lerp(base, 0.5).add(new THREE.Vector3(0, -0.05 - k * 0.012, 0.02));
+        const pts = [start.clone().add(off), sag, base.clone().add(off), up1.clone().add(off), up2.clone().add(off)];
+        const m = tube(pts, k === 3 ? 0.0055 : 0.0035, this.cableMats[k]);
+        m.material.map.repeat.set(1, 1);
+      }
+      // conduit along the sill, ribbed
+      const cd = tube([S(0.99 * sx, -0.62, 0.62), base.clone().add(new THREE.Vector3(sx * 0.012, 0, 0)), up1.clone().add(new THREE.Vector3(sx * 0.014, 0, 0.004)), up2.clone().add(new THREE.Vector3(sx * 0.012, 0, 0.004))], 0.009, this.conduit);
+      cd.material.map.repeat.set(90, 1);
+      // cable clamps and zip ties
+      for (const tpos of [0.25, 0.5, 0.75]) {
+        const c = new THREE.CatmullRomCurve3([base, up1, up2]).getPoint(tpos);
+        const cl = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.012, 0.014), this.steelDark);
+        cl.position.copy(c).add(new THREE.Vector3(-sx * 0.006, 0, 0)); cl.lookAt(0, c.y, 0); this.rig.add(cl);
+      }
+    }
+  }
+
   /** point a forearm from the wrist marker to its elbow */
   aimArm(arm, wrist, elbow) {
     wrist.getWorldPosition(v); this.rig.worldToLocal(v);
@@ -604,6 +795,7 @@ export class Cockpit {
       });
     }
     this.updateButtons(P, game, t);
+    this.updateRetrofit(P, game, t, dt);
     for (const L of this.logs) {
       if (t > L.next) { L.next = t + rnd(0.6, 1.8); if (L.kind === 'LOG') this.log(IDLE_LINES[(Math.random() * IDLE_LINES.length) | 0], '#5fc79a', 0); else this.log(`CH ${String((Math.random() * 99) | 0).padStart(2, '0')} · ${(120 + Math.random() * 40).toFixed(2)} MHZ`, '#5fa8c7', 1); }
       const f = this.fail[`log${this.logs.indexOf(L)}`];
@@ -615,6 +807,67 @@ export class Cockpit {
     for (const k in this.fail) if (Math.random() < dt * (this.fail[k] === 'dead' ? 0.8 : 0.4)) this.sparkAt(k, 4);
   }
 
+  /** seven-segment readouts, LED bars, toggle switches and keypad on the bolted-on pods */
+  updateRetrofit(P, game, t, dt) {
+    const p = P.ship;
+    this.missionT += dt;
+    const fs = this.fail.seg, fb = this.fail.bar;
+    if (this.mfdT >= 0.099 || this.mfdT <= 0) {
+      // left pod: NAV distance (red), speed (green), mission clock (amber)
+      const { g, c, tex } = this.segPanel, W = c.width, H = c.height;
+      if (fs === 'dead' || (fs === 'flicker' && Math.random() < 0.35)) this.drawStatic(g, W, H, fs === 'dead');
+      else {
+        g.fillStyle = '#0a0606'; g.fillRect(0, 0, W, H);
+        const nav = game.navPos?.();
+        const km = nav ? Math.min(999.9, nav.distanceTo(p.pos) / 1000) : null;
+        const mm = Math.floor(this.missionT / 60) % 100, ss = Math.floor(this.missionT) % 60;
+        const rows = [
+          ['NAV-DIST KM', km == null ? '---.-' : km.toFixed(1).padStart(5, ' '), '#ff3a2a', 'rgba(255,58,42,.09)'],
+          ['GESCHW. M/S', String(Math.round(p.speed)).padStart(4, '0'), '#3aff6a', 'rgba(58,255,106,.08)'],
+          ['EINSATZZEIT', `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`, '#ffb42a', 'rgba(255,180,42,.09)'],
+        ];
+        rows.forEach(([label, val, on, off], i) => {
+          const y = 8 + i * 72;
+          g.fillStyle = '#140c0c'; g.fillRect(150, y, 350, 62);
+          g.strokeStyle = 'rgba(120,120,120,.5)'; g.lineWidth = 2; g.strokeRect(150, y, 350, 62);
+          dymo(g, label, 8, y + 18, 28, i === 0 ? '#2a0c0a' : i === 1 ? '#0c2412' : '#2a1d06');
+          segText(g, val, 170, y + 8, 34, 46, on, off);
+        });
+        g.fillStyle = 'rgba(255,255,255,.04)'; g.fillRect(0, 0, W, H * 0.35);
+      }
+      tex.needsUpdate = true;
+      // right pod: two LED bar graphs (shield, afterburner charge)
+      const B = this.barPanel, bg = B.g, BW = B.c.width, BH = B.c.height;
+      if (fb === 'dead' || (fb === 'flicker' && Math.random() < 0.35)) this.drawStatic(bg, BW, BH, fb === 'dead');
+      else {
+        bg.fillStyle = '#080808'; bg.fillRect(0, 0, BW, BH);
+        const cols = [['SCHILD', p.shield / p.maxShield], ['NB', P.energy]];
+        cols.forEach(([label, k], ci) => {
+          const x = 30 + ci * 112, n = 12;
+          for (let i = 0; i < n; i++) {
+            const lit = i < Math.round(k * n);
+            const colr = i >= 9 ? [255, 70, 60] : i >= 6 ? [255, 190, 60] : [70, 255, 120];
+            const blink = ci === 1 && P.boostLock && Math.sin(t * 12) < 0;
+            bg.fillStyle = lit && !blink ? `rgb(${colr})` : `rgba(${colr},.1)`;
+            if (lit) { bg.shadowColor = `rgb(${colr})`; bg.shadowBlur = 8; }
+            bg.fillRect(x, 168 - i * 13.5, 80, 10); bg.shadowBlur = 0;
+          }
+          dymo(bg, label, x, 186, 26);
+        });
+      }
+      B.tex.needsUpdate = true;
+    }
+    // guarded toggles flip with the systems they control; the covers swing open when armed
+    const st = { NB: P.boosting, AUTO: !!game.autoAvailable?.(), WAFFE: !!P.ctrl.firing || !!P.aimLocked, ECM: !!P.missileWarn };
+    for (const T of this.toggles) {
+      const on = st[T.key];
+      T.lever.rotation.x += ((on ? 0.55 : -0.55) - T.lever.rotation.x) * Math.min(1, dt * 18);
+      T.hinge.rotation.x += ((on ? -1.6 : 0) - T.hinge.rotation.x) * Math.min(1, dt * 10);
+      T.led.emissive.setRGB(on ? 2.4 : 0.05, on ? 0.15 : 0, 0);
+    }
+    for (const K of this.keys) { const lit = Math.sin(t * 0.7 + K.phase) > 0.96; K.mat.emissive.setRGB(lit ? 0.8 : 0.02, lit ? 0.7 : 0.02, lit ? 0.4 : 0.02); }
+  }
+
   /** hull hit: the worse the damage, the likelier a panel drops out (and sparks), heavy hits crack the canopy */
   hit(dmg, hk) {
     if (hk < 0.45 && this.cracks < 4 && Math.random() < 0.18 + dmg * 0.01) { addCrack(this.crack); this.crackTex.needsUpdate = true; this.cracks++; }
@@ -624,7 +877,7 @@ export class Cockpit {
     const k = keys[(Math.random() * keys.length) | 0];
     this.fail[k] = this.fail[k] ? 'dead' : hk > 0.35 || Math.random() < 0.5 ? 'flicker' : 'dead';
     this.sparkAt(k, 18);
-    const name = { mfd0: 'SCHIFFSDISPLAY', mfd1: 'RADAR', mfd2: 'ZIELDISPLAY', log0: 'LOG-SCHIRM', log1: 'KOM-SCHIRM', annun: 'WARNTAFEL' }[k] || 'SCHALTKREIS';
+    const name = { mfd0: 'SCHIFFSDISPLAY', mfd1: 'RADAR', mfd2: 'ZIELDISPLAY', log0: 'LOG-SCHIRM', log1: 'KOM-SCHIRM', annun: 'WARNTAFEL', seg: 'NAV-RECHNER', bar: 'ENERGIEANZEIGE' }[k] || 'SCHALTKREIS';
     this.log(`STÖRUNG · ${name}${this.fail[k] === 'dead' ? ' AUSGEFALLEN' : ''}`, '#ff4d6d');
     return k;
   }
@@ -937,6 +1190,15 @@ export class Cockpit {
   }
 
   render(renderer) {
+    // soft studio reflections so brushed steel and chrome read as metal
+    if (!this.scene.environment) {
+      const pm = new THREE.PMREMGenerator(renderer);
+      const room = new RoomEnvironment();
+      this.envRT = pm.fromScene(room, 0.04);
+      room.dispose?.();
+      this.scene.environment = this.envRT.texture; this.scene.environmentIntensity = 0.3;
+      pm.dispose();
+    }
     renderer.autoClear = false;
     renderer.clearDepth();
     renderer.render(this.scene, this.camera);
@@ -945,8 +1207,9 @@ export class Cockpit {
 
   dispose() {
     this.scene.traverse((o) => { o.geometry?.dispose(); });
-    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.glove, this.knuckle, this.sleeve, this.crackMat, this.sparkMat]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
-    for (const m of [...this.mfds, ...this.logs, this.annun]) { m.tex.dispose(); m.mat.dispose(); }
+    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.glove, this.knuckle, this.sleeve, this.crackMat, this.sparkMat, this.steel, this.steelDark, this.redCover, ...this.cableMats, this.conduit, ...this.keys.map((k) => k.mat), ...this.toggles.map((x) => x.led)]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
+    this.envRT?.dispose();
+    for (const m of [...this.mfds, ...this.logs, this.annun, this.segPanel, this.barPanel]) { m.tex.dispose(); m.mat.dispose(); }
     for (const b of this.buttons) b.mat.dispose();
   }
 }
