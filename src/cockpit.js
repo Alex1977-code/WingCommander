@@ -96,6 +96,19 @@ function roundedRect(w, h, r, depth, bevel = 0.004) {
   return g;
 }
 
+// top-down outlines (right half, nose = +y), mirrored when drawn
+const SIL = {
+  sperber: [[0, 1], [0.1, 0.62], [0.16, 0.2], [0.62, -0.18], [0.66, -0.42], [0.2, -0.34], [0.14, -0.86], [0, -0.92]],
+  falke: [[0, 1], [0.12, 0.6], [0.2, 0.15], [0.72, -0.22], [0.7, -0.48], [0.22, -0.4], [0.18, -0.9], [0, -0.95]],
+  greif: [[0, 0.95], [0.1, 0.7], [0.3, 0.55], [0.34, 0.1], [0.78, -0.12], [0.8, -0.42], [0.36, -0.36], [0.32, -0.92], [0.1, -0.8], [0, -0.85]],
+};
+const IDLE_LINES = [
+  'SCHILDGENERATOR · PHASE NOMINAL', 'KÜHLMITTELDRUCK 2,4 BAR', 'TRÄGHEITSDÄMPFER AKTIV', 'NAV-SYNC MIT TUS AURORA',
+  'REAKTOR 1 · 98,2 %', 'REAKTOR 2 · 97,9 %', 'IFF-TRANSPONDER: NACHTFALKE', 'LEBENSERHALTUNG OK · O2 21 %', 'KALIBRIERE ZIELRECHNER…',
+  'SENSORPAKET 3 · RAUSCHEN 0,4', 'KANZELDRUCK STABIL', 'KANONEN 1–4 · LADUNG 100 %', 'DATENBUS 4 · 1 PAKETVERLUST', 'TELEMETRIE → AURORA',
+  'TRIEBWERKSTEMPERATUR 1180 K', 'FREQUENZSPRUNG KANAL 07', 'SELBSTTEST BESTANDEN', 'KOMPENSATOR DRIFT 0,02°',
+];
+
 // ---------------------------------------------------------------------------
 const LAMPS = [
   ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['RAKETE', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
@@ -135,8 +148,9 @@ export class Cockpit {
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
       return { c, g: c.getContext('2d'), tex, mat: new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }) };
     };
-    this.mfds = ['SYS', 'TGT', 'RAD'].map((kind) => ({ kind, ...canvasMat(320, 240) }));
-    this.gauges = ['SPEED', 'ATT'].map((kind) => ({ kind, ...canvasMat(256, 256) }));
+    this.mfds = ['TGT', 'SCHIFF', 'RAD'].map((kind) => ({ kind, ...canvasMat(320, 240) }));
+    this.logs = ['LOG', 'KOM'].map((kind) => ({ kind, ...canvasMat(256, 320), lines: [], next: 0 }));
+    this.buttons = [];
     this.annun = canvasMat(640, 128);
     this.prints = this.fingerprints(320, 240);
     this.lampState = {};
@@ -192,8 +206,8 @@ export class Cockpit {
     tube(arc(R * 1.02, -H / 2, -halfSpan + 4, halfSpan - 4), 0.02, this.rubber, panel);
     const place = (obj, deg, y, inset = 0.012) => { const a = deg * DEG, r = R - inset; obj.position.set(r * Math.sin(a), y, -r * Math.cos(a)); obj.rotation.y = -a; panel.add(obj); return obj; };
     // three MFDs with rounded, worn bezels and soft keys
-    const mw = 0.15, mh = 0.115;
-    [[-44, 0], [0, 1], [44, 2]].forEach(([deg, i]) => {
+    [[-44, 0, 0.15], [0, 1, 0.17], [44, 2, 0.15]].forEach(([deg, i, mw]) => {
+      const mh = mw * 0.75;
       place(new THREE.Mesh(roundedRect(mw * 1.22, mh * 1.3, 0.014, 0.01), this.bezel), deg, 0.0, 0.004);
       place(new THREE.Mesh(new THREE.PlaneGeometry(mw, mh), this.mfds[i].mat), deg, 0.0, 0.012);
       for (const side of [-1, 1]) for (let k = 0; k < 4; k++) {
@@ -201,14 +215,31 @@ export class Cockpit {
         place(b, deg + ((side * mw * 0.56) / R) / DEG, -mh * 0.38 + k * mh * 0.25, 0.011);
       }
     });
-    // round instruments: speed and attitude
-    [[-22, 0], [22, 1]].forEach(([deg, i]) => {
-      place(new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.007, 10, 40), this.chrome), deg, 0.01, 0.012);
-      place(new THREE.Mesh(new THREE.CircleGeometry(0.045, 40), this.gauges[i].mat), deg, 0.01, 0.011);
+    // narrow text screens with scrolling system messages
+    [[-23, 0], [23, 1]].forEach(([deg, i]) => {
+      place(new THREE.Mesh(roundedRect(0.074, 0.112, 0.01, 0.008), this.bezel), deg, 0.012, 0.005);
+      place(new THREE.Mesh(new THREE.PlaneGeometry(0.064, 0.08), this.logs[i].mat), deg, 0.012, 0.012);
     });
+    // banks of illuminated push-buttons under the displays
+    this.buttons = [];
+    const capGeo = new THREE.BoxGeometry(0.013, 0.009, 0.006);
+    const bank = (deg, y, n, kinds) => {
+      const step = 0.017;
+      for (let k = 0; k < n; k++) {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x1d1f22, emissive: 0x000000, roughness: 0.5 });
+        const b = new THREE.Mesh(capGeo, mat);
+        place(b, deg + (((k - (n - 1) / 2) * step) / R) / DEG, y, 0.012);
+        this.buttons.push({ mat, kind: kinds[k % kinds.length], idx: k, phase: Math.random() * 6 });
+      }
+    };
+    bank(-44, -0.095, 7, ['shieldgen', 'idle', 'guns', 'idle', 'nav', 'idle', 'ecm']);
+    bank(0, -0.095, 10, ['missile']);
+    bank(44, -0.095, 7, ['boost', 'idle', 'comm', 'idle', 'auto', 'idle', 'hull']);
+    bank(-23, -0.075, 4, ['idle', 'nav', 'idle', 'guns']);
+    bank(23, -0.075, 4, ['comm', 'idle', 'ecm', 'idle']);
     // annunciator strip above the target display
-    place(new THREE.Mesh(roundedRect(0.29, 0.068, 0.008, 0.006), this.bezel), 0, 0.108, 0.006);
-    place(new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.054), this.annun.mat), 0, 0.108, 0.012);
+    place(new THREE.Mesh(roundedRect(0.29, 0.068, 0.008, 0.006), this.bezel), 0, 0.12, 0.006);
+    place(new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.054), this.annun.mat), 0, 0.12, 0.012);
     // stickers and maintenance plaques
     [[-32, -0.11, 0], [33, -0.105, 1], [-58, 0.08, 2]].forEach(([deg, y, i]) => { const d = place(new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.028), this.decals[i]), deg, y, 0.009); d.rotation.z = rnd(-0.06, 0.06); });
     // master caution push-button
@@ -241,7 +272,9 @@ export class Cockpit {
     for (const sx of [-1, 1]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.0016, 0.0016, hh * 2.1, 6), this.chrome); post.position.copy(hc).add(new THREE.Vector3(sx * hw, hh * 0.9, 0)); post.rotation.x = -0.35; this.rig.add(post); }
     const edge = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, 0.0014, 0.0014), this.hudEdge); edge.position.copy(hc).add(new THREE.Vector3(0, hh * 1.85, -0.017)); edge.rotation.x = -0.35; this.rig.add(edge);
 
-    // --- flight stick and throttle ---
+    // --- flight controls: yoke or stick (setting), plus throttle ---
+    this.yoke = this.buildYoke(S);
+    this.rig.add(this.yoke);
     const stick = new THREE.Group();
     stick.add(new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.03, 0.05, 14), this.rubber));
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.007, 0.09, 10), this.chrome); shaft.position.y = 0.06; stick.add(shaft);
@@ -250,6 +283,7 @@ export class Cockpit {
     const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.006, 10), this.chrome); hat.position.set(0, 0.158, 0.004); stick.add(hat);
     stick.position.copy(S(0.62, -1.42, 0.34));
     this.rig.add(stick); this.stick = stick;
+    this.applyStyle();
     const thr = new THREE.Group();
     const rail = new THREE.Mesh(roundedRect(0.05, 0.16, 0.012, 0.018), this.metal); rail.rotation.x = -Math.PI / 2; thr.add(rail);
     const lever = new THREE.Group();
@@ -260,6 +294,36 @@ export class Cockpit {
     thr.position.copy(S(-0.62, -1.18, 0.4));
     thr.rotation.y = 0.25;
     this.rig.add(thr); this.lever = lever;
+  }
+
+  /** Two-handed control yoke: centre column, curved horns with grips, thumb buttons. */
+  buildYoke(S) {
+    const y = new THREE.Group();
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.16, 12), this.chrome); col.rotation.x = 0.5; col.position.set(0, -0.05, 0.04); y.add(col);
+    const hub = new THREE.Mesh(roundedRect(0.08, 0.05, 0.012, 0.03), this.metal); hub.position.set(0, 0.02, 0.012); y.add(hub);
+    const wheel = new THREE.Group();
+    const bar = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-0.17, 0.07, 0), new THREE.Vector3(-0.15, 0.0, 0), new THREE.Vector3(-0.06, -0.02, 0), new THREE.Vector3(0.06, -0.02, 0), new THREE.Vector3(0.15, 0.0, 0), new THREE.Vector3(0.17, 0.07, 0)]), 40, 0.011, 10), this.dark);
+    wheel.add(bar);
+    for (const sx of [-1, 1]) {
+      const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.06, 6, 12), this.rubber); grip.position.set(sx * 0.175, 0.105, 0); grip.rotation.z = -sx * 0.12; wheel.add(grip);
+      const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.005, 12), sx < 0 ? this.trim : this.chrome); btn.rotation.x = Math.PI / 2; btn.position.set(sx * 0.17, 0.145, 0.012); wheel.add(btn);
+    }
+    wheel.position.set(0, 0.03, 0.03);
+    y.add(wheel);
+    y.scale.setScalar(0.82);
+    y.position.copy(S(0, -1.28, 0.42));
+    y.userData.wheel = wheel; y.userData.base = y.position.clone();
+    return y;
+  }
+
+  setStyle(style) { this.style = style; this.applyStyle(); }
+  applyStyle() { if (this.yoke) this.yoke.visible = this.style !== 'stick'; if (this.stick) this.stick.visible = this.style === 'stick'; }
+
+  /** add a line to the scrolling message screens */
+  log(text, color = '#6dffb0', screen = 0) {
+    const L = this.logs[screen];
+    L.lines.push({ text: text.toUpperCase().slice(0, 30), color, t: performance.now() });
+    if (L.lines.length > 14) L.lines.shift();
   }
 
   // ---------------------------------------------------------------------------
@@ -278,6 +342,11 @@ export class Cockpit {
     const cx = P.ctrl.x || 0, cy = (P.ctrl.y || 0) * (game.invert ? 1 : -1);
     this.stick.rotation.z += (-cx * 0.35 - this.stick.rotation.z) * Math.min(1, dt * 14);
     this.stick.rotation.x += (cy * 0.3 - this.stick.rotation.x) * Math.min(1, dt * 14);
+    if (this.yoke?.visible) {
+      const w = this.yoke.userData.wheel;
+      w.rotation.z += (-cx * 0.6 - w.rotation.z) * Math.min(1, dt * 12);
+      this.yoke.position.z += ((this.yoke.userData.base.z + cy * 0.035) - this.yoke.position.z) * Math.min(1, dt * 12);
+    }
     this.lever.position.z += ((0.05 - P.throttle * 0.1) - this.lever.position.z) * Math.min(1, dt * 10);
     this.lever.rotation.x = P.boosting ? -0.5 : -0.25 - P.throttle * 0.2;
 
@@ -314,7 +383,11 @@ export class Cockpit {
       this.mfdT = 0.1;
       for (const m of this.mfds) { this.drawMFD(m, P, game); m.g.drawImage(this.prints, 0, 0); m.tex.needsUpdate = true; }
     }
-    for (const gz of this.gauges) { this.drawGauge(gz, P); gz.tex.needsUpdate = true; }
+    this.updateButtons(P, game, t);
+    for (const L of this.logs) {
+      if (t > L.next) { L.next = t + rnd(0.6, 1.8); if (L.kind === 'LOG') this.log(IDLE_LINES[(Math.random() * IDLE_LINES.length) | 0], '#5fc79a', 0); else this.log(`CH ${String((Math.random() * 99) | 0).padStart(2, '0')} · ${(120 + Math.random() * 40).toFixed(2)} MHZ`, '#5fa8c7', 1); }
+      this.drawLog(L, t); L.tex.needsUpdate = true;
+    }
   }
 
   drawAnnunciator(t) {
@@ -339,47 +412,113 @@ export class Cockpit {
     tex.needsUpdate = true;
   }
 
-  drawGauge(gz, P) {
-    const g = gz.g, W = 256, c = W / 2, p = P.ship;
-    g.clearRect(0, 0, W, W);
-    g.save(); g.beginPath(); g.arc(c, c, c - 2, 0, 6.283); g.clip();
-    if (gz.kind === 'SPEED') {
-      g.fillStyle = '#0c0e10'; g.fillRect(0, 0, W, W);
-      const max = 500, a0 = 0.75 * Math.PI, a1 = 2.25 * Math.PI;
-      g.strokeStyle = 'rgba(255,90,60,.8)'; g.lineWidth = 10;
-      g.beginPath(); g.arc(c, c, c - 22, a0 + (a1 - a0) * (p.def.speed / max), a1); g.stroke();
-      g.strokeStyle = '#d8dde2'; g.fillStyle = '#d8dde2'; g.font = `700 22px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
-      for (let s = 0; s <= max; s += 25) {
-        const a = a0 + (a1 - a0) * (s / max), big = s % 100 === 0;
-        g.lineWidth = big ? 4 : 2;
-        g.beginPath(); g.moveTo(c + Math.cos(a) * (c - 14), c + Math.sin(a) * (c - 14)); g.lineTo(c + Math.cos(a) * (c - (big ? 34 : 26)), c + Math.sin(a) * (c - (big ? 34 : 26))); g.stroke();
-        if (big) g.fillText(String(s / 100), c + Math.cos(a) * (c - 52), c + Math.sin(a) * (c - 52));
+  updateButtons(P, game, t) {
+    const p = P.ship, col = (mat, r, g, b) => mat.emissive.setRGB(r, g, b);
+    const blink = (rate, ph = 0) => Math.sin(t * rate + ph) > 0;
+    for (const B of this.buttons) {
+      const m = B.mat;
+      switch (B.kind) {
+        case 'missile': B.idx < p.missiles ? col(m, 1.6, 0.9, 0.1) : col(m, 0.04, 0.02, 0); break;
+        case 'shieldgen': p.shieldT > 0 && p.shield < p.maxShield ? (blink(8) ? col(m, 0.2, 0.9, 2) : col(m, 0.02, 0.1, 0.2)) : col(m, 0.1, 0.6, 1.4); break;
+        case 'guns': P.ctrl.firing ? (blink(20, B.idx) ? col(m, 2, 0.3, 0.2) : col(m, 0.3, 0.05, 0.03)) : col(m, 0.9, 0.12, 0.1); break;
+        case 'boost': P.boosting ? col(m, 0.3, 0.6, 2.4) : P.boostLock ? (blink(6) ? col(m, 2, 0.1, 0.1) : col(m, 0.1, 0, 0)) : col(m, 0.05, 0.12, 0.3); break;
+        case 'comm': game.ui?.commActive?.() ? (blink(10, B.idx) ? col(m, 0.3, 1.8, 0.6) : col(m, 0.03, 0.2, 0.06)) : col(m, 0.03, 0.12, 0.04); break;
+        case 'auto': game.autoAvailable?.() ? (blink(3) ? col(m, 0.3, 1.6, 0.5) : col(m, 0.05, 0.3, 0.1)) : col(m, 0.02, 0.06, 0.03); break;
+        case 'hull': p.hp < p.maxHp * 0.3 ? (blink(7) ? col(m, 2.2, 0.15, 0.1) : col(m, 0.2, 0, 0)) : p.hp < p.maxHp * 0.65 ? col(m, 1.6, 0.8, 0.05) : col(m, 0.05, 0.2, 0.05); break;
+        case 'nav': col(m, 0.1, 0.5, 0.9); break;
+        case 'ecm': P.missileWarn ? (blink(14) ? col(m, 2, 1.2, 0.1) : col(m, 0.2, 0.1, 0)) : col(m, 0.15, 0.1, 0.02); break;
+        default: blink(0.7 + (B.phase % 1.3), B.phase) ? col(m, 0.5, 0.45, 0.35) : col(m, 0.03, 0.03, 0.02);
       }
-      g.font = `600 16px ${FONT}`; g.fillText('M/S ×100', c, c + 44);
-      const a = a0 + (a1 - a0) * Math.min(1, p.speed / max);
-      g.strokeStyle = '#ffb020'; g.lineWidth = 5; g.beginPath(); g.moveTo(c - Math.cos(a) * 16, c - Math.sin(a) * 16); g.lineTo(c + Math.cos(a) * (c - 30), c + Math.sin(a) * (c - 30)); g.stroke();
-      g.fillStyle = '#2a2d31'; g.beginPath(); g.arc(c, c, 12, 0, 6.283); g.fill();
-    } else {
-      // attitude indicator: pitch from the nose direction, roll from the bank
-      v.set(0, 0, 1).applyQuaternion(p.quat);
-      const pitch = Math.asin(Math.max(-1, Math.min(1, v.y)));
-      g.translate(c, c); g.rotate(-(p.bank || 0) * 0.8);
-      const off = (pitch / (Math.PI / 2)) * c * 1.6;
-      g.fillStyle = '#2f6fb0'; g.fillRect(-W, -W * 2 + off, W * 2, W * 2);
-      g.fillStyle = '#5a3a1c'; g.fillRect(-W, off, W * 2, W * 2);
-      g.strokeStyle = '#fff'; g.lineWidth = 3; g.beginPath(); g.moveTo(-W, off); g.lineTo(W, off); g.stroke();
-      g.lineWidth = 2; g.fillStyle = '#fff'; g.font = `700 16px ${FONT}`; g.textAlign = 'left';
-      for (let d = -60; d <= 60; d += 15) { if (!d) continue; const y = off - (d / 90) * c * 1.6; const w = d % 30 ? 20 : 36; g.beginPath(); g.moveTo(-w, y); g.lineTo(w, y); g.stroke(); if (!(d % 30)) g.fillText(String(Math.abs(d)), w + 4, y + 5); }
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      g.strokeStyle = '#ffb020'; g.lineWidth = 6;
-      g.beginPath(); g.moveTo(c - 70, c); g.lineTo(c - 22, c); g.lineTo(c - 10, c + 14); g.moveTo(c + 70, c); g.lineTo(c + 22, c); g.lineTo(c + 10, c + 14); g.stroke();
-      g.fillStyle = '#ffb020'; g.beginPath(); g.arc(c, c, 5, 0, 6.283); g.fill();
     }
-    g.restore();
-    const gl = g.createLinearGradient(0, 0, W, W);
-    gl.addColorStop(0, 'rgba(255,255,255,.22)'); gl.addColorStop(0.35, 'rgba(255,255,255,0)'); gl.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = gl; g.beginPath(); g.arc(c, c, c - 2, 0, 6.283); g.fill();
-    g.strokeStyle = 'rgba(0,0,0,.8)'; g.lineWidth = 6; g.beginPath(); g.arc(c, c, c - 3, 0, 6.283); g.stroke();
+  }
+
+  /** scrolling, flickering text screen */
+  drawLog(L, t) {
+    const g = L.g, W = L.c.width, H = L.c.height;
+    g.fillStyle = '#030a07'; g.fillRect(0, 0, W, H);
+    g.font = `700 22px ${FONT}`; g.textBaseline = 'top';
+    g.fillStyle = '#6dffb0'; g.globalAlpha = 0.8; g.fillText(L.kind, 8, 6); g.globalAlpha = 1;
+    const lh = 27, n = L.lines.length;
+    const newest = n ? L.lines[n - 1] : null;
+    const slide = newest ? Math.max(0, 1 - (performance.now() - newest.t) / 220) * lh : 0;
+    for (let i = 0; i < n; i++) {
+      const ln = L.lines[i];
+      const y = H - (n - i) * lh + slide - 4;
+      if (y < 26) continue;
+      const age = (performance.now() - ln.t) / 1000;
+      // freshly arrived lines type in; everything flickers a little
+      const shown = Math.min(ln.text.length, Math.floor(age * 60));
+      g.globalAlpha = (0.55 + Math.random() * 0.45) * Math.max(0.35, 1 - age / 14);
+      g.fillStyle = ln.color;
+      const dx = Math.random() < 0.03 ? rnd(-6, 6) : 0;
+      g.fillText(ln.text.slice(0, shown) + (shown < ln.text.length ? '▌' : ''), 8 + dx, y);
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = 'rgba(0,0,0,.35)'; for (let y = 0; y < H; y += 3) g.fillRect(0, y, W, 1);
+    const sy = ((t * 70) % (H + 40)) - 20;
+    g.fillStyle = 'rgba(120,255,190,.07)'; g.fillRect(0, sy, W, 18);
+    g.drawImage(this.prints, -40, -20);
+  }
+
+  /** top-down schematic of the pilot's own fighter: outline, guns, missiles, shield sectors and hits */
+  drawShip(g, W, H, P) {
+    const p = P.ship, def = p.def, now = performance.now();
+    const G = '#6dffb0', A = '#ffc857', R = '#ff4d6d';
+    const cx = W * 0.5, cy = H * 0.54, sc = H * 0.33;
+    const L = def.radius * 1.15;
+    const toS = (x, z) => [cx - (x / L) * sc, cy - (z / L) * sc];
+    // shield: four sectors that flash on the side that was hit
+    const sk = p.shield / p.maxShield;
+    const sectors = [['front', -Math.PI * 0.75, -Math.PI * 0.25], ['right', -Math.PI * 0.25, Math.PI * 0.25], ['back', Math.PI * 0.25, Math.PI * 0.75], ['left', Math.PI * 0.75, Math.PI * 1.25]];
+    for (const [side, a0, a1] of sectors) {
+      const hitAge = (now - (P.hitSide?.[side] || 0)) / 1000;
+      const flash = hitAge < 0.6;
+      g.strokeStyle = flash ? (Math.sin(now / 40) > 0 ? '#ffffff' : R) : sk > 0.5 ? G : sk > 0.15 ? A : R;
+      g.globalAlpha = sk <= 0.01 && !flash ? 0.15 : 0.4 + sk * 0.6;
+      g.lineWidth = flash ? 7 : 4;
+      g.beginPath(); g.ellipse(cx, cy, sc * 0.95, sc * 1.25, 0, a0 + 0.06, a1 - 0.06); g.stroke();
+    }
+    g.globalAlpha = 1;
+    // hull outline coloured by integrity
+    const hk = p.hp / p.maxHp;
+    const sil = SIL[p.type] || SIL.falke;
+    const pts = [...sil, ...sil.slice(1, -1).reverse().map(([x, y]) => [-x, y])];
+    g.beginPath();
+    pts.forEach(([x, y], i) => { const X = cx + x * sc * 0.9, Y = cy - y * sc; i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.closePath();
+    g.fillStyle = hk > 0.65 ? 'rgba(109,255,176,.12)' : hk > 0.3 ? 'rgba(255,200,87,.16)' : 'rgba(255,77,109,.2)';
+    g.fill();
+    g.strokeStyle = hk > 0.65 ? G : hk > 0.3 ? A : R; g.lineWidth = 2.5; g.stroke();
+    g.strokeStyle = 'rgba(109,255,176,.35)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx, cy - sc * 0.9); g.lineTo(cx, cy + sc * 0.85); g.stroke();
+    // engine glow
+    const eg = Math.min(1, p.speed / def.boost);
+    g.fillStyle = P.boosting ? '#7fd6ff' : `rgba(127,214,255,${0.3 + eg * 0.5})`;
+    g.fillRect(cx - 6, cy + sc * 0.88, 12, 4 + eg * 10);
+    // guns: hardpoints flash when firing
+    const firing = (p.cool ?? 0) > def.rof * 0.5;
+    for (const [x, , z] of def.guns) { const [X, Y] = toS(x, z); g.fillStyle = firing ? '#ffffff' : G; g.fillRect(X - 3, Y - 6, 6, 10); }
+    // missile pylons
+    const maxM = def.missiles || 0;
+    for (let i = 0; i < maxM; i++) {
+      const side = i % 2 ? 1 : -1, row = Math.floor(i / 2);
+      const X = cx + side * sc * (0.28 + row * 0.07), Y = cy + sc * 0.05 + row * 4;
+      g.fillStyle = i < p.missiles ? A : 'rgba(255,200,87,.15)';
+      g.beginPath(); g.moveTo(X, Y - 6); g.lineTo(X + 3, Y + 4); g.lineTo(X - 3, Y + 4); g.closePath(); g.fill();
+    }
+    // persistent hull hit marks
+    for (const mk of P.marks || []) {
+      const [X, Y] = toS(mk.x, mk.z);
+      const fresh = (now - mk.t) < 800;
+      g.strokeStyle = fresh ? '#ffffff' : R; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(X - 5, Y - 5); g.lineTo(X + 5, Y + 5); g.moveTo(X + 5, Y - 5); g.lineTo(X - 5, Y + 5); g.stroke();
+      g.fillStyle = 'rgba(255,77,109,.25)'; g.beginPath(); g.arc(X, Y, fresh ? 10 : 6, 0, 6.283); g.fill();
+    }
+    g.font = `700 16px ${FONT}`; g.textAlign = 'left';
+    g.fillStyle = sk > 0.15 ? G : R; g.fillText(`SCHILD ${Math.round(sk * 100)}%`, 10, H - 22);
+    g.fillStyle = hk > 0.3 ? G : R; g.textAlign = 'right'; g.fillText(`HÜLLE ${Math.round(hk * 100)}%`, W - 10, H - 22);
+    g.fillStyle = A; g.fillText(`${p.name?.toUpperCase?.() || ''} · ${def.name.toUpperCase()}`, W - 10, 8);
+    g.textAlign = 'left';
   }
 
   drawMFD(m, P, game) {
@@ -390,7 +529,9 @@ export class Cockpit {
     g.font = `700 18px ${FONT}`; g.textBaseline = 'top'; g.textAlign = 'left';
     const G = '#6dffb0', A = '#ffc857', R = '#ff4d6d';
     g.fillStyle = G; g.fillText(m.kind, 10, 8);
-    if (m.kind === 'SYS') {
+    if (m.kind === 'SCHIFF') {
+      this.drawShip(g, W, H, P);
+    } else if (m.kind === 'SYS') {
       const sk = p.shield / p.maxShield, hk = p.hp / p.maxHp;
       g.strokeStyle = sk > 0.5 ? G : sk > 0.2 ? A : R; g.lineWidth = 3;
       g.beginPath(); g.ellipse(W * 0.3, H * 0.55, 62, 74, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.02, sk)); g.stroke();
@@ -440,6 +581,7 @@ export class Cockpit {
   dispose() {
     this.scene.traverse((o) => { o.geometry?.dispose(); });
     for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
-    for (const m of [...this.mfds, ...this.gauges, this.annun]) { m.tex.dispose(); m.mat.dispose(); }
+    for (const m of [...this.mfds, ...this.logs, this.annun]) { m.tex.dispose(); m.mat.dispose(); }
+    for (const b of this.buttons) b.mat.dispose();
   }
 }

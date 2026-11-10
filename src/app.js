@@ -23,7 +23,7 @@ let save = load(SAVE_KEY, NEW_SAVE());
 if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
 if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
 save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
-const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, view: 'cockpit', quality: 'high', coop: false, callsign2: 'Orion' });
+const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, view: 'cockpit', control: 'yoke', quality: 'high', coop: false, callsign2: 'Orion' });
 
 const hub = new InputHub();
 const audio = new Audio();
@@ -168,7 +168,12 @@ function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; comm
 
 // ---------- UI bridge used by the game ----------
 const ui = {
-  comm(who, text) { if (commQ.length < 6) commQ.push({ who, text }); if (!commT) nextComm(); },
+  comm(who, text) {
+    if (commQ.length < 6) commQ.push({ who, text });
+    if (!commT) nextComm();
+    const ch = CHARS[who] || CHARS.erz;
+    for (const P of game.pilots) P.cockpit?.log(`${(ch.call || ch.short)}: ${fill(text)}`, ch.color, 1);
+  },
   setAuto(on) { $('btn-auto').classList.toggle('on', on); },
   commActive() { return !!commT && !$('comm').classList.contains('hidden'); },
   viewChanged(P) { if (P.idx === 0) { settings.view = P.view; game.view = P.view; store(SET_KEY, settings); } audio.ui('ok'); },
@@ -252,6 +257,7 @@ const game = new Game($('view'), $('hud'), audio, ui);
 game.invert = settings.invert;
 game.sens = settings.sens;
 game.view = settings.view;
+game.controlStyle = settings.control;
 game.setQuality(settings.quality);
 game.startAttract();
 
@@ -608,6 +614,7 @@ $('name-ok').onclick = () => {
 
 function refreshSettings() {
   setLabel($('set-music'), `Musik: ${settings.music ? 'An' : 'Aus'}`);
+  setLabel($('set-control'), `Steuer im Cockpit: ${settings.control === 'stick' ? 'Steuerknüppel' : 'Steuerjoch'}`);
   setLabel($('set-sens'), `Empfindlichkeit: ${settings.sens < 1 ? 'Niedrig' : settings.sens > 1 ? 'Hoch' : 'Normal'}`);
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
   setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Flugzeug (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
@@ -615,6 +622,7 @@ function refreshSettings() {
   store(SET_KEY, settings);
 }
 $('set-music').onclick = () => { settings.music = !settings.music; audio.setMusic(settings.music); refreshSettings(); };
+$('set-control').onclick = () => { settings.control = settings.control === 'stick' ? 'yoke' : 'stick'; game.controlStyle = settings.control; for (const P of game.pilots) P.cockpit?.setStyle(settings.control); refreshSettings(); };
 $('set-sens').onclick = () => { settings.sens = settings.sens < 1 ? 1 : settings.sens === 1 ? 1.25 : 0.8; game.sens = settings.sens; refreshSettings(); };
 $('set-sound').onclick = () => { settings.sound = !settings.sound; audio.setEnabled(settings.sound); refreshSettings(); };
 $('set-invert').onclick = () => { settings.invert = !settings.invert; game.invert = settings.invert; refreshSettings(); };

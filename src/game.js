@@ -181,13 +181,13 @@ export class Game {
         target: null, energy: 1, boosting: false, throttle: 0.75,
         aimPoint: new THREE.Vector3(), leadPoint: new THREE.Vector3(), aimLocked: false,
         shake: 0, hurt: 0, bumpT: 0, deadT: 0, missileWarn: false, warnT: 0,
-        color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0, view: this.view || 'cockpit', cockpit: new Cockpit(),
+        color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0, view: this.view || 'cockpit', cockpit: new Cockpit(), hitSide: {}, marks: [],
       };
       ship.pilot = P;
       ctrl.reset();
       this.pilots.push(P);
     });
-    for (const P of this.pilots) if (this.quality === 'high') P.composer = this.makeComposer(P.camera);
+    for (const P of this.pilots) { if (this.quality === 'high') P.composer = this.makeComposer(P.camera); P.cockpit.setStyle(this.controlStyle || 'yoke'); P.cockpit.log(`START · ${def.title}`, '#ffc857'); }
     this.wingman = null;
     if (def.wingman) {
       const who = opts.wingman || def.wingman;
@@ -321,6 +321,17 @@ export class Game {
     if (!s.def.capital) { s.ai.evadeT = 0.9; s.ai.evade.randomDirection(); }
     if (s.isPlayer) {
       const P = s.pilot;
+      // which side was hit, and where on the hull (for the cockpit schematic)
+      t5.copy(point).sub(s.pos).applyQuaternion(q3.copy(s.quat).invert());
+      const ang = Math.atan2(-t5.x, t5.z);
+      const side = Math.abs(ang) < Math.PI / 4 ? 'front' : Math.abs(ang) > Math.PI * 0.75 ? 'back' : ang > 0 ? 'right' : 'left';
+      P.hitSide[side] = performance.now();
+      const sideTxt = { front: 'BUG', back: 'HECK', left: 'BACKBORD', right: 'STEUERBORD' }[side];
+      if (!hadShield) {
+        P.marks.push({ x: t5.x, z: t5.z, t: performance.now() });
+        if (P.marks.length > 14) P.marks.shift();
+        P.cockpit?.log(`TREFFER ${sideTxt} · HÜLLE ${Math.max(0, Math.round((s.hp - dmg) / s.maxHp * 100))}%`, '#ff4d6d');
+      } else if (Math.random() < 0.35) P.cockpit?.log(`SCHILD ${sideTxt} ABSORBIERT`, '#7fd6ff');
       P.shake = Math.min(1.2, P.shake + dmg * 0.035);
       P.hurt = Math.min(0.7, P.hurt + dmg * 0.02);
       this.audio.hit(hadShield);
@@ -372,6 +383,7 @@ export class Game {
       if (by?.isPlayer) {
         this.stats.kills++; this.stats.score += s.def.score || 100;
         this.stats.per[by.pilot.idx]++;
+        by.pilot.cockpit?.log(`ZIEL ZERSTÖRT · ${s.name}`, '#ffc857');
         this.setBanner(`${s.name.toUpperCase()} ZERSTÖRT`);
         if (this.wingman?.alive && Math.random() < 0.3) this.ui.comm(this.wingman.who, ['Guter Schuss, {cs}!', 'Abschuss bestätigt!', 'Den hast du sauber erwischt!'][Math.random() * 3 | 0].replace('{cs}', by.name));
       } else if (by?.wingman && Math.random() < 0.5) {
@@ -393,7 +405,7 @@ export class Game {
     s.missiles = Math.ceil(s.def.missiles / 2);
     s.cool = 0;
     this.scene.add(s.mesh);
-    P.camQ.copy(s.quat); P.energy = 1; P.hurt = 0;
+    P.camQ.copy(s.quat); P.energy = 1; P.hurt = 0; P.marks = []; P.hitSide = {};
     this.fx.flash(s.pos, 120, new THREE.Color(2, 3, 5), 0.6);
     this.setBanner(`${s.name.toUpperCase()} WIEDER IM EINSATZ`);
   }
@@ -663,6 +675,7 @@ export class Game {
     if (p.missiles <= 0 || !p.alive) { this.audio.beep(220); return; }
     p.missiles--;
     this.launchMissile(p, P.target && P.target.alive ? P.target : null);
+    P.cockpit?.log(`RAKETE ${p.def.missiles - p.missiles} AB → ${P.target?.alive ? P.target.name : 'FREI'}`, '#ffc857');
   }
 
   cycleTarget(P) {
@@ -674,6 +687,7 @@ export class Game {
     list.sort((a, b) => score(a) - score(b));
     const i = list.indexOf(P.target);
     P.target = list[(i + 1) % list.length];
+    P.cockpit?.log(`ZIEL: ${P.target.name} · ${Math.round(P.target.pos.distanceTo(p.pos))} M`, '#7fd6ff');
     P.targetT = performance.now();
     this.audio.lock();
   }
@@ -1106,10 +1120,7 @@ export class Game {
       const k = (0.55 + Math.min(1.2, s.speed / s.def.speed) * 0.6) * (boost ? 1.7 : 1) * (0.92 + Math.random() * 0.16);
       for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * k);
       this.shipFx(s, dt, boost);
-      if (!s.def.capital && s.hp < s.maxHp * 0.4 && Math.random() < dt * 14) {
-        this.fx.particle(s.pos.x, s.pos.y, s.pos.z, rnd(-6, 6), rnd(-6, 6), rnd(-6, 6), 1.6, 0.7, 0.3, 4, 0.7, 0.5);
-        if (Math.random() < 0.5) this.fx.smoke(s.pos, 2.5, 1.6, null, 0.14, 0.5);
-      }
+      if (!s.def.capital) this.damageSmoke(s, dt);
     }
 
     this.updateBolts(dt);
@@ -1171,6 +1182,24 @@ export class Game {
         P.camera.position.y += rnd(-1, 1) * P.shake * 1.6;
       }
       P.invQ.copy(p.quat).invert();
+    }
+  }
+
+  /** Damaged fighters trail smoke: grey wisps from 70 % hull, thick black smoke, sparks and flames below 35 %. */
+  damageSmoke(s, dt) {
+    const k = 1 - s.hp / s.maxHp;
+    if (k < 0.3 || !s.mesh.visible || this.ear(s.pos) > 1600) return;
+    // emit from a damaged spot slightly behind the cockpit, drifting back with the ship's wake
+    t5.set(s.radius * 0.25 * Math.sin(s.radius * 7), s.radius * 0.12, -s.radius * 0.35).applyQuaternion(s.quat).add(s.pos);
+    t4.copy(FWD).applyQuaternion(s.quat).multiplyScalar(-s.speed * 0.15);
+    const rate = (k - 0.3) * 70;
+    s.smokeAcc = (s.smokeAcc || 0) + rate * dt;
+    while (s.smokeAcc >= 1) {
+      s.smokeAcc -= 1;
+      const heavy = k > 0.65;
+      this.fx.smoke(t5, heavy ? rnd(5, 8) : rnd(3, 5), heavy ? rnd(2.2, 3.4) : rnd(1.4, 2.2), t4, heavy ? rnd(0.2, 0.28) : rnd(0.42, 0.55), heavy ? 0.85 : 0.6);
+      if (heavy && Math.random() < 0.5) this.fx.particle(t5.x, t5.y, t5.z, t4.x + rnd(-5, 5), t4.y + rnd(-5, 5), t4.z + rnd(-5, 5), 2.8, 1.1, 0.3, rnd(3, 5), rnd(0.25, 0.45), 1.5);
+      if (heavy && Math.random() < 0.15) this.fx.sparks(t5, COL.spark, 2, 50);
     }
   }
 
