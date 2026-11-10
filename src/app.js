@@ -170,6 +170,7 @@ function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; comm
 const ui = {
   comm(who, text) { if (commQ.length < 6) commQ.push({ who, text }); if (!commT) nextComm(); },
   setAuto(on) { $('btn-auto').classList.toggle('on', on); },
+  commActive() { return !!commT && !$('comm').classList.contains('hidden'); },
   viewChanged(P) { if (P.idx === 0) { settings.view = P.view; game.view = P.view; store(SET_KEY, settings); } audio.ui('ok'); },
   setThrottle(v) { $('throttle-fill').style.height = v * 100 + '%'; },
   fade(cb) {
