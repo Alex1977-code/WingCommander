@@ -243,6 +243,9 @@ export function drawHud(ctx, g, P) {
     }
   }
 
+  // --- cockpit head-up display: speed tape, set-speed caret, throttle and afterburner ---
+  if (P.view === 'cockpit') cockpitHud(ctx, P, w, h, s, t);
+
   // --- status panel (top-left) ---
   const px = 12 * s + safeL, py = (solo ? 40 : 10) * s, bw = 118 * s, bh = 13 * s;
   if (!solo) {
@@ -369,5 +372,71 @@ function arrow(ctx, P, pos, color, s) {
   ctx.translate(x, y); ctx.rotate(a);
   ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 8;
   ctx.beginPath(); ctx.moveTo(10 * s, 0); ctx.lineTo(-6 * s, 6 * s); ctx.lineTo(-2 * s, 0); ctx.lineTo(-6 * s, -6 * s); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+/** speed tape (left), throttle / afterburner scale (right) and a pitch-roll ladder, projected on the combiner */
+function cockpitHud(ctx, P, w, h, s, t) {
+  const p = P.ship, def = p.def;
+  const col = 'rgba(125,255,176,.9)', dimc = 'rgba(125,255,176,.35)';
+  const cy = h * 0.47, th = 105 * s, x0 = w / 2 - 98 * s;
+  ctx.save();
+  ctx.shadowColor = '#6dffb0'; ctx.shadowBlur = 6;
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.3 * s;
+  // speed tape: 1 px per m/s scaled, ticks every 10, labels every 50
+  const ppm = 1.4 * s, spd = p.speed;
+  ctx.save(); ctx.beginPath(); ctx.rect(x0 - 50 * s, cy - th / 2, 60 * s, th); ctx.clip();
+  ctx.font = `700 ${9 * s}px ${FONT}`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let vv = Math.floor((spd - th / 2 / ppm) / 10) * 10; vv <= spd + th / 2 / ppm; vv += 10) {
+    if (vv < 0) continue;
+    const y = cy - (vv - spd) * ppm, major = vv % 50 === 0;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 - (major ? 10 : 5) * s, y); ctx.stroke();
+    if (major) ctx.fillText(String(vv), x0 - 13 * s, y);
+  }
+  // cruise speed and afterburner band
+  const yb = cy - (def.boost - spd) * ppm;
+  ctx.fillStyle = 'rgba(127,214,255,.35)'; ctx.fillRect(x0 + 2 * s, yb - 3 * s, 4 * s, 6 * s);
+  ctx.restore();
+  ctx.beginPath(); ctx.moveTo(x0, cy - th / 2); ctx.lineTo(x0, cy + th / 2); ctx.stroke();
+  // set-speed caret from the throttle
+  const want = P.boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);
+  const yc = Math.max(cy - th / 2, Math.min(cy + th / 2, cy - (want - spd) * ppm));
+  ctx.beginPath(); ctx.moveTo(x0 + 2 * s, yc); ctx.lineTo(x0 + 9 * s, yc - 5 * s); ctx.lineTo(x0 + 9 * s, yc + 5 * s); ctx.closePath(); ctx.stroke();
+  // trend arrow (where the speed will be in ~1 s)
+  const tr = Math.max(-th / 2, Math.min(th / 2, (want - spd) * ppm * 0.6));
+  if (Math.abs(tr) > 3 * s) { ctx.beginPath(); ctx.moveTo(x0 + 13 * s, cy); ctx.lineTo(x0 + 13 * s, cy - tr); ctx.stroke(); }
+  // readout box
+  const bw = 52 * s, bh = 18 * s;
+  ctx.fillStyle = 'rgba(0,20,10,.55)'; ctx.fillRect(x0 - bw - 4 * s, cy - bh / 2, bw, bh);
+  ctx.strokeRect(x0 - bw - 4 * s, cy - bh / 2, bw, bh);
+  ctx.fillStyle = col; ctx.font = `800 ${12 * s}px ${DISPLAY}`; ctx.textAlign = 'right';
+  ctx.fillText(String(Math.round(spd)), x0 - 8 * s, cy + 1);
+  ctx.font = `700 ${8 * s}px ${FONT}`; ctx.textAlign = 'left';
+  ctx.fillText('M/S', x0 - bw - 2 * s, cy - th / 2 - 9 * s);
+  if (P.boosting && Math.sin(t * 10) > -0.3) { ctx.fillStyle = '#7fd6ff'; ctx.fillText('NACHBRENNER', x0 - bw - 2 * s, cy + th / 2 + 9 * s); }
+
+  // throttle / energy scale on the right
+  const x1 = w / 2 + 98 * s;
+  ctx.strokeStyle = col; ctx.fillStyle = col;
+  ctx.beginPath(); ctx.moveTo(x1, cy - th / 2); ctx.lineTo(x1, cy + th / 2); ctx.stroke();
+  for (let i = 0; i <= 10; i++) { const y = cy + th / 2 - (i / 10) * th; ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x1 + (i % 5 ? 5 : 10) * s, y); ctx.stroke(); }
+  const yt = cy + th / 2 - P.throttle * th;
+  ctx.beginPath(); ctx.moveTo(x1 - 2 * s, yt); ctx.lineTo(x1 - 10 * s, yt - 5 * s); ctx.lineTo(x1 - 10 * s, yt + 5 * s); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = P.boostLock ? (Math.sin(t * 12) > 0 ? '#ff4d6d' : 'rgba(255,77,109,.3)') : 'rgba(127,214,255,.7)';
+  ctx.fillRect(x1 + 14 * s, cy + th / 2 - P.energy * th, 4 * s, P.energy * th);
+  ctx.fillStyle = col; ctx.font = `700 ${8 * s}px ${FONT}`; ctx.textAlign = 'left';
+  ctx.fillText(`SCHUB ${Math.round(P.throttle * 100)}%`, x1 - 8 * s, cy - th / 2 - 9 * s);
+  ctx.fillText('NB', x1 + 12 * s, cy + th / 2 + 9 * s);
+
+  // roll scale + bank pointer around the reticle area
+  ctx.strokeStyle = dimc; ctx.lineWidth = 1.2 * s;
+  const rr = 64 * s, rcx = w / 2, rcy = cy;
+  ctx.beginPath(); ctx.arc(rcx, rcy, rr, Math.PI * 1.25, Math.PI * 1.75); ctx.stroke();
+  for (let a = -45; a <= 45; a += 15) { const r0 = (a - 90) * Math.PI / 180; ctx.beginPath(); ctx.moveTo(rcx + Math.cos(r0) * rr, rcy + Math.sin(r0) * rr); ctx.lineTo(rcx + Math.cos(r0) * (rr + (a % 45 ? 4 : 8) * s), rcy + Math.sin(r0) * (rr + (a % 45 ? 4 : 8) * s)); ctx.stroke(); }
+  const ba = -Math.PI / 2 - (p.bank || 0) * 0.9;
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.moveTo(rcx + Math.cos(ba) * (rr - 2 * s), rcy + Math.sin(ba) * (rr - 2 * s));
+  ctx.lineTo(rcx + Math.cos(ba - 0.05) * (rr - 10 * s), rcy + Math.sin(ba - 0.05) * (rr - 10 * s));
+  ctx.lineTo(rcx + Math.cos(ba + 0.05) * (rr - 10 * s), rcy + Math.sin(ba + 0.05) * (rr - 10 * s)); ctx.closePath(); ctx.fill();
   ctx.restore();
 }

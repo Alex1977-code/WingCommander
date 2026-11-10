@@ -133,17 +133,33 @@ function fighter(o) {
 
   const hulls = o.twin ? [-o.twin, o.twin] : [0];
   for (const hx of hulls) {
-    const f = mk(g, fuselageGeo(o.noseR, o.bodyR, L * 0.62), m.hull, hx, 0, L * 0.19);
+    // stubby armoured forward hull with a blunt sensor nose instead of a jet's needle
+    const f = mk(g, fuselageGeo(Math.max(o.noseR, o.bodyR * 0.5), o.bodyR, L * 0.5), m.hull, hx, 0, L * 0.13);
     f.scale.set(o.wide, o.flat, 1);
+    const capR = Math.max(o.noseR, o.bodyR * 0.5);
+    const cap = new THREE.CylinderGeometry(capR * 0.72, capR, L * 0.08, 6); cap.rotateX(Math.PI / 2);
+    const nc = mk(g, cap, m.dark, hx, 0, L * 0.42); nc.scale.set(o.wide, o.flat, 1);
+    const ring = new THREE.TorusGeometry(capR * 0.8, 0.07, 6, 6);
+    mk(g, ring, m.line, hx, 0, L * 0.462).scale.set(o.wide, o.flat, 1);
+    const tipG = new THREE.CylinderGeometry(0.12, 0.2, L * 0.05, 8); tipG.rotateX(Math.PI / 2);
+    mk(g, tipG, m.dark, hx, 0, L * 0.485);
+    // chin sensor / intake block and side armour cheeks
+    mk(g, new THREE.BoxGeometry(o.bodyR * o.wide * 1.05, o.bodyR * o.flat * 0.4, L * 0.24), m.dark, hx, -o.bodyR * o.flat * 0.75, L * 0.16);
+    for (const sx of [-1, 1]) {
+      const ch = mk(g, new THREE.BoxGeometry(0.25, o.bodyR * o.flat * 0.8, L * 0.2), m.hull, hx + sx * o.bodyR * o.wide * 0.92, 0, L * 0.2);
+      ch.rotation.y = sx * 0.12;
+    }
     const r = mk(g, fuselageGeo(o.bodyR, o.bodyR * 0.78, L * 0.38), m.hull, hx, 0, -L * 0.31);
     r.scale.set(o.wide, o.flat, 1);
-    const c = mk(g, new THREE.SphereGeometry(1, 16, 10), m.canopy, hx, o.bodyR * o.flat * 0.62, L * 0.1);
-    c.scale.set(o.bodyR * 0.52, o.bodyR * 0.5, L * 0.17);
+    const c = mk(g, new THREE.IcosahedronGeometry(1, 1), m.canopy, hx, o.bodyR * o.flat * 0.6, L * 0.12);
+    c.scale.set(o.bodyR * 0.46, o.bodyR * 0.42, L * 0.13);
+    mk(g, new THREE.BoxGeometry(o.bodyR * 0.95, 0.12, 0.12), m.dark, hx, o.bodyR * o.flat * 0.95, L * 0.12);
   }
   if (o.twin) mk(g, new THREE.BoxGeometry(o.twin * 2, o.bodyR * 0.7, L * 0.35), m.dark, 0, 0, -L * 0.1);
 
   // wings
-  const wg = wingGeo(o.span, o.root, o.tip, o.sweep);
+  o = { ...o, span: o.span * 0.74, tip: o.tip * 1.5, sweep: o.sweep * 0.8 };
+  const wg = wingGeo(o.span, o.root, o.tip, o.sweep, 0.95);
   const wx = (o.twin || 0) + o.bodyR * o.wide * 0.6;
   for (const sgn of [1, -1]) {
     const w = mk(g, wg, m.hull, sgn * wx, o.wingY || 0, o.wingZ);
@@ -169,6 +185,58 @@ function fighter(o) {
   }
   // engines
   for (const [ex, ey] of o.engines) engine(g, engines, ex, ey, -L * 0.5, o.engR, m.glow, m.dark, o.pal.glow);
+
+  // --- spacecraft hardware: engine block, nacelles, armour, sensors, thrusters, radiators ---
+  const union = o.pal === PAL.union;
+  const bw = (o.twin ? o.twin * 2 : 0) + o.bodyR * o.wide * 2.3, bh = o.bodyR * o.flat * 1.7;
+  mk(g, new THREE.BoxGeometry(bw, bh, L * 0.3), m.dark, 0, 0, -L * 0.33);
+  mk(g, new THREE.BoxGeometry(bw * 1.08, bh * 0.25, L * 0.06), m.hull, 0, bh * 0.45, -L * 0.22);
+  for (let i = 0; i < 5; i++) mk(g, new THREE.BoxGeometry(bw * 0.18, bh * 0.15, L * 0.05), m.hull, (i - 2) * bw * 0.2, -bh * 0.55, -L * 0.3 - (i % 2) * L * 0.05);
+  // dorsal armour plates behind the canopy
+  for (let i = 0; i < 3; i++) {
+    const pl = mk(g, new THREE.BoxGeometry(o.bodyR * o.wide * (1.3 - i * 0.18), 0.22, L * 0.09), i % 2 ? m.dark : m.hull, 0, o.bodyR * o.flat * 0.95 - i * 0.05, -L * 0.02 - i * L * 0.09);
+    pl.rotation.x = -0.08;
+  }
+  // sensor mast and dish
+  mk(g, new THREE.CylinderGeometry(0.06, 0.08, 1.6, 6), m.dark, o.bodyR * 0.4, o.bodyR * o.flat + 0.9, -L * 0.26);
+  mk(g, new THREE.SphereGeometry(0.22, 8, 6), union ? m.accent : m.line, o.bodyR * 0.4, o.bodyR * o.flat + 1.7, -L * 0.26);
+  // RCS thruster blocks at the wing tips
+  for (const sgn of [1, -1]) {
+    const tipX = sgn * (wx + o.span * Math.cos(o.dihedral || 0));
+    const tipY = (o.wingY || 0) + o.span * Math.sin(o.dihedral || 0);
+    mk(g, new THREE.BoxGeometry(0.7, 0.5, 0.9), m.dark, tipX + sgn * 0.2, tipY, o.wingZ - o.sweep - o.root * 0.25);
+    mk(g, new THREE.BoxGeometry(0.12, 0.16, 0.16), m.glow, tipX + sgn * 0.58, tipY, o.wingZ - o.sweep - o.root * 0.25);
+  }
+  if (union) {
+    // twin engine nacelles under the wing roots
+    for (const sgn of [1, -1]) {
+      const nx = sgn * (wx + o.span * 0.32), ny = -o.bodyR * o.flat * 0.35, nz = -L * 0.2;
+      const nac = new THREE.CylinderGeometry(o.engR * 1.15, o.engR * 1.3, L * 0.42, 10);
+      nac.rotateX(Math.PI / 2);
+      mk(g, nac, m.hull, nx, ny, nz);
+      const ring = new THREE.TorusGeometry(o.engR * 1.15, 0.12, 6, 14);
+      mk(g, ring, m.dark, nx, ny, nz + L * 0.21);
+      mk(g, new THREE.BoxGeometry(0.06, o.engR * 0.9, L * 0.3), m.accent, nx + sgn * o.engR * 1.25, ny, nz);
+      engine(g, engines, nx, ny, nz - L * 0.21 - o.engR * 0.6, o.engR * 0.9, m.glow, m.dark, o.pal.glow);
+    }
+    // radiator panels on the flanks with a glowing coolant strip
+    for (const sgn of [1, -1]) {
+      mk(g, new THREE.BoxGeometry(0.12, bh * 0.7, L * 0.18), m.dark, sgn * bw * 0.52, 0, -L * 0.33);
+      mk(g, new THREE.BoxGeometry(0.05, bh * 0.08, L * 0.16), m.line, sgn * bw * 0.555, bh * 0.2, -L * 0.33);
+    }
+  } else {
+    // Aszendenz: chitinous spines and glowing veins
+    for (let i = 0; i < 4; i++) {
+      const sp = new THREE.ConeGeometry(0.28, 2.2 - i * 0.3, 5);
+      const c = mk(g, sp, m.dark, 0, o.bodyR * o.flat * 0.9 + 0.6, L * 0.1 - i * L * 0.12);
+      c.rotation.x = -0.6;
+    }
+    for (const sgn of [1, -1]) {
+      mk(g, new THREE.BoxGeometry(0.1, 0.1, L * 0.55), m.line, sgn * o.bodyR * o.wide * 0.85, 0, -L * 0.05);
+      const claw = new THREE.ConeGeometry(0.35, 3, 5); claw.rotateX(Math.PI / 2);
+      mk(g, claw, m.dark, sgn * o.bodyR * o.wide * 0.7, -o.bodyR * 0.4, L * 0.42);
+    }
+  }
   // intake / detail
   mk(g, new THREE.BoxGeometry(o.bodyR * o.wide * 1.5, o.bodyR * 0.35, L * 0.2), m.dark, 0, -o.bodyR * o.flat * 0.75, 0);
   if (o.pal !== PAL.union) {

@@ -330,7 +330,8 @@ export class Game {
       if (!hadShield) {
         P.marks.push({ x: t5.x, z: t5.z, t: performance.now() });
         if (P.marks.length > 14) P.marks.shift();
-        P.cockpit?.log(`TREFFER ${sideTxt} · HÜLLE ${Math.max(0, Math.round((s.hp - dmg) / s.maxHp * 100))}%`, '#ff4d6d');
+        P.cockpit?.log(`TREFFER ${sideTxt} · HÜLLE ${Math.max(0, Math.round(s.hp / s.maxHp * 100))}%`, '#ff4d6d');
+        if (s.hp > 0 && P.cockpit?.hit(dmg, s.hp / s.maxHp)) this.audio.hit(false);
       } else if (Math.random() < 0.35) P.cockpit?.log(`SCHILD ${sideTxt} ABSORBIERT`, '#7fd6ff');
       P.shake = Math.min(1.2, P.shake + dmg * 0.035);
       P.hurt = Math.min(0.7, P.hurt + dmg * 0.02);
@@ -405,7 +406,7 @@ export class Game {
     s.missiles = Math.ceil(s.def.missiles / 2);
     s.cool = 0;
     this.scene.add(s.mesh);
-    P.camQ.copy(s.quat); P.energy = 1; P.hurt = 0; P.marks = []; P.hitSide = {};
+    P.camQ.copy(s.quat); P.energy = 1; P.hurt = 0; P.marks = []; P.hitSide = {}; P.cockpit?.repair();
     this.fx.flash(s.pos, 120, new THREE.Color(2, 3, 5), 0.6);
     this.setBanner(`${s.name.toUpperCase()} WIEDER IM EINSATZ`);
   }

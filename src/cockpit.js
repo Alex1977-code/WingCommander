@@ -1,16 +1,19 @@
 /**
  * First-person cockpit of a well-used Union fighter.
  *  - curved wrap-around instrument console, rounded glare shield, bubble-canopy frame
- *  - live instruments: SYS / TGT / RAD displays, analog speed gauge, attitude indicator
+ *  - live instruments: ship schematic (traced from the real 3D model), 3D radar scope, target display
  *  - annunciator panel + master caution that blink according to the fighter's state
- *  - flight stick and throttle that follow the pilot's inputs
+ *  - yoke or stick and throttle held by gloved hands that follow the pilot's inputs
+ *  - battle damage: displays drop out or flicker, buttons die, sparks fly, the canopy cracks
  *  - procedural wear: scratches, chipped edges, grime, rivets, faded stencils, fingerprints, canopy smudges
  * Rendered as a second pass with its own camera (near plane 1 cm), lit by the real sun direction.
  */
 import * as THREE from 'three';
+import { buildShip } from './ships.js';
 
 const v = new THREE.Vector3(), v2 = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEG = Math.PI / 180;
+const UP = new THREE.Vector3(0, 1, 0);
 const rnd = (a, b) => a + Math.random() * (b - a);
 const FONT = "'Rajdhani', system-ui, sans-serif";
 
@@ -96,12 +99,107 @@ function roundedRect(w, h, r, depth, bevel = 0.004) {
   return g;
 }
 
-// top-down outlines (right half, nose = +y), mirrored when drawn
-const SIL = {
-  sperber: [[0, 1], [0.1, 0.62], [0.16, 0.2], [0.62, -0.18], [0.66, -0.42], [0.2, -0.34], [0.14, -0.86], [0, -0.92]],
-  falke: [[0, 1], [0.12, 0.6], [0.2, 0.15], [0.72, -0.22], [0.7, -0.48], [0.22, -0.4], [0.18, -0.9], [0, -0.95]],
-  greif: [[0, 0.95], [0.1, 0.7], [0.3, 0.55], [0.34, 0.1], [0.78, -0.12], [0.8, -0.42], [0.36, -0.36], [0.32, -0.92], [0.1, -0.8], [0, -0.85]],
-};
+/**
+ * Top-down schematic traced from the fighter's actual 3D model: filled silhouette,
+ * glowing outline and faint panel lines, cached per ship type and tint.
+ */
+const OUTLINES = {};
+function shipOutline(type) {
+  if (OUTLINES[type]) return OUTLINES[type];
+  const N = 256;
+  const root = buildShip(type); root.updateMatrixWorld(true);
+  const meshes = [];
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  const p = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.geometry?.attributes?.position) return;
+    const pos = o.geometry.attributes.position;
+    const pts = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+      p.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      pts[i * 2] = p.x; pts[i * 2 + 1] = p.z;
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    meshes.push({ o, pts, index: o.geometry.index });
+  });
+  const midX = (minX + maxX) / 2, midZ = (minZ + maxZ) / 2;
+  const k = (N * 0.9) / Math.max(maxX - minX, maxZ - minZ, 1e-3);
+  // nose (+z) points up, ship's +x (port) is drawn on the left
+  const map = (x, z) => [N / 2 - (x - midX) * k, N / 2 - (z - midZ) * k];
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = N; return c; };
+  const mask = mk(), mg = mask.getContext('2d');
+  mg.fillStyle = '#fff'; mg.strokeStyle = '#fff'; mg.lineWidth = 0.6; mg.lineJoin = 'round';
+  for (const { pts, index } of meshes) {
+    const n = index ? index.count : pts.length / 2;
+    mg.beginPath();
+    for (let t = 0; t + 2 < n; t += 3) {
+      for (let j = 0; j < 3; j++) {
+        const i = index ? index.getX(t + j) : t + j;
+        const [X, Y] = map(pts[i * 2], pts[i * 2 + 1]);
+        j ? mg.lineTo(X, Y) : mg.moveTo(X, Y);
+      }
+      mg.closePath();
+    }
+    mg.fill(); mg.stroke();
+  }
+  // outline ring = dilated mask minus mask
+  const ring = mk(), rg = ring.getContext('2d');
+  for (let a = 0; a < 8; a++) rg.drawImage(mask, Math.round(Math.cos(a * Math.PI / 4) * 2), Math.round(Math.sin(a * Math.PI / 4) * 2));
+  rg.globalCompositeOperation = 'destination-out'; rg.drawImage(mask, 0, 0);
+  // panel lines from sharp model edges, clipped to the silhouette
+  const det = mk(), dg = det.getContext('2d');
+  dg.strokeStyle = '#fff'; dg.lineWidth = 0.7;
+  for (const { o } of meshes) {
+    const eg = new THREE.EdgesGeometry(o.geometry, 32);
+    const ep = eg.attributes.position;
+    dg.beginPath();
+    for (let i = 0; i + 1 < ep.count; i += 2) {
+      p.fromBufferAttribute(ep, i).applyMatrix4(o.matrixWorld); const [x1, y1] = map(p.x, p.z);
+      p.fromBufferAttribute(ep, i + 1).applyMatrix4(o.matrixWorld); const [x2, y2] = map(p.x, p.z);
+      dg.moveTo(x1, y1); dg.lineTo(x2, y2);
+    }
+    dg.stroke(); eg.dispose();
+  }
+  dg.globalCompositeOperation = 'destination-in'; dg.drawImage(mask, 0, 0);
+  const tints = {};
+  const tint = (col) => {
+    if (tints[col]) return tints[col];
+    const c = mk(), g = c.getContext('2d');
+    g.globalAlpha = 0.16; g.drawImage(mask, 0, 0);
+    g.globalAlpha = 0.45; g.drawImage(det, 0, 0);
+    g.globalAlpha = 1; g.drawImage(ring, 0, 0);
+    g.globalCompositeOperation = 'source-in'; g.fillStyle = col; g.fillRect(0, 0, N, N);
+    return (tints[col] = c);
+  };
+  return (OUTLINES[type] = { N, map, tint, halfW: ((maxX - minX) / 2) * k, halfL: ((maxZ - minZ) / 2) * k });
+}
+
+/** canvas of radial glass cracks that accumulate on heavy hits */
+function crackCanvas() {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 640;
+  return c;
+}
+function addCrack(c) {
+  const g = c.getContext('2d');
+  const x = rnd(c.width * 0.12, c.width * 0.88), y = rnd(c.height * 0.1, c.height * 0.75);
+  g.lineCap = 'round';
+  const arms = 6 + ((Math.random() * 6) | 0);
+  for (let a = 0; a < arms; a++) {
+    let px = x, py = y, ang = (a / arms) * 6.283 + rnd(-0.3, 0.3);
+    const len = rnd(60, 200);
+    g.beginPath(); g.moveTo(px, py);
+    for (let d = 0; d < len; d += rnd(10, 26)) { ang += rnd(-0.35, 0.35); px += Math.cos(ang) * 16; py += Math.sin(ang) * 16; g.lineTo(px, py); }
+    g.strokeStyle = `rgba(235,245,255,${rnd(0.22, 0.5)})`; g.lineWidth = rnd(0.8, 2); g.stroke();
+  }
+  for (let r = 1; r < 4; r++) {
+    g.beginPath();
+    for (let a = 0; a <= arms; a++) { const ang = (a / arms) * 6.283, rr = r * rnd(12, 22); a ? g.lineTo(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr) : g.moveTo(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr); }
+    g.strokeStyle = 'rgba(235,245,255,.35)'; g.lineWidth = 0.8; g.stroke();
+  }
+  const gr = g.createRadialGradient(x, y, 0, x, y, 26); gr.addColorStop(0, 'rgba(255,255,255,.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(x - 26, y - 26, 52, 52);
+}
+
 const IDLE_LINES = [
   'SCHILDGENERATOR · PHASE NOMINAL', 'KÜHLMITTELDRUCK 2,4 BAR', 'TRÄGHEITSDÄMPFER AKTIV', 'NAV-SYNC MIT TUS AURORA',
   'REAKTOR 1 · 98,2 %', 'REAKTOR 2 · 97,9 %', 'IFF-TRANSPONDER: NACHTFALKE', 'LEBENSERHALTUNG OK · O2 21 %', 'KALIBRIERE ZIELRECHNER…',
@@ -142,13 +240,32 @@ export class Cockpit {
     this.canopyMat = new THREE.MeshBasicMaterial({ map: smudgeTexture(), transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
     this.cautionMat = new THREE.MeshStandardMaterial({ color: 0x401014, emissive: 0x000000, roughness: 0.4 });
     this.hudEdge = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 0.8), toneMapped: false });
+    // pilot's flight gloves (worn leather, padded knuckles) and flight-suit sleeves
+    const wg = wornTexture('#3b342d', { rivets: false, grime: 2 });
+    this.glove = new THREE.MeshStandardMaterial({ color: 0xffffff, map: wg.map, roughnessMap: wg.rough, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide });
+    this.knuckle = new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide });
+    const ws = wornTexture('#2f3429', { rivets: false, grime: 1.2 });
+    this.sleeve = new THREE.MeshStandardMaterial({ color: 0xffffff, map: ws.map, roughnessMap: ws.rough, roughness: 0.95, metalness: 0 });
+    this.crack = crackCanvas();
+    this.crackTex = new THREE.CanvasTexture(this.crack); this.crackTex.colorSpace = THREE.SRGBColorSpace;
+    this.crackMat = new THREE.MeshBasicMaterial({ map: this.crackTex, transparent: true, depthWrite: false, toneMapped: false });
+    this.cracks = 0;
+    // sparks from failing electronics
+    this.sparks = Array.from({ length: 60 }, () => ({ p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }));
+    this.sparkGeo = new THREE.BufferGeometry();
+    this.sparkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(60 * 3), 3));
+    this.sparkMat = new THREE.PointsMaterial({ color: new THREE.Color(3, 1.8, 0.6), size: 0.006, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.sparkPts = new THREE.Points(this.sparkGeo, this.sparkMat); this.sparkPts.frustumCulled = false;
+    this.scene.add(this.sparkPts);
+    this.fail = {}; // element key -> 'flicker' | 'dead'
+    this.elems = {};
 
     const canvasMat = (w, h) => {
       const c = document.createElement('canvas'); c.width = w; c.height = h;
       const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
       return { c, g: c.getContext('2d'), tex, mat: new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }) };
     };
-    this.mfds = ['TGT', 'SCHIFF', 'RAD'].map((kind) => ({ kind, ...canvasMat(320, 240) }));
+    this.mfds = ['SCHIFF', 'RAD', 'TGT'].map((kind) => ({ kind, ...canvasMat(320, 240) }));
     this.logs = ['LOG', 'KOM'].map((kind) => ({ kind, ...canvasMat(256, 320), lines: [], next: 0 }));
     this.buttons = [];
     this.annun = canvasMat(640, 128);
@@ -206,40 +323,42 @@ export class Cockpit {
     tube(arc(R * 1.02, -H / 2, -halfSpan + 4, halfSpan - 4), 0.02, this.rubber, panel);
     const place = (obj, deg, y, inset = 0.012) => { const a = deg * DEG, r = R - inset; obj.position.set(r * Math.sin(a), y, -r * Math.cos(a)); obj.rotation.y = -a; panel.add(obj); return obj; };
     // three MFDs with rounded, worn bezels and soft keys
-    [[-44, 0, 0.15], [0, 1, 0.17], [44, 2, 0.15]].forEach(([deg, i, mw]) => {
+    [[-44, 0, 0.15, 0], [0, 1, 0.2, -0.012], [44, 2, 0.15, 0]].forEach(([deg, i, mw, my]) => {
       const mh = mw * 0.75;
-      place(new THREE.Mesh(roundedRect(mw * 1.22, mh * 1.3, 0.014, 0.01), this.bezel), deg, 0.0, 0.004);
-      place(new THREE.Mesh(new THREE.PlaneGeometry(mw, mh), this.mfds[i].mat), deg, 0.0, 0.012);
+      place(new THREE.Mesh(roundedRect(mw * 1.22, mh * 1.3, 0.014, 0.01), this.bezel), deg, my, 0.004);
+      this.elems[`mfd${i}`] = place(new THREE.Mesh(new THREE.PlaneGeometry(mw, mh), this.mfds[i].mat), deg, my, 0.012);
       for (const side of [-1, 1]) for (let k = 0; k < 4; k++) {
         const b = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.006), this.rubber);
-        place(b, deg + ((side * mw * 0.56) / R) / DEG, -mh * 0.38 + k * mh * 0.25, 0.011);
+        place(b, deg + ((side * mw * 0.56) / R) / DEG, my - mh * 0.38 + k * mh * 0.25, 0.011);
       }
     });
     // narrow text screens with scrolling system messages
     [[-23, 0], [23, 1]].forEach(([deg, i]) => {
       place(new THREE.Mesh(roundedRect(0.074, 0.112, 0.01, 0.008), this.bezel), deg, 0.012, 0.005);
-      place(new THREE.Mesh(new THREE.PlaneGeometry(0.064, 0.08), this.logs[i].mat), deg, 0.012, 0.012);
+      this.elems[`log${i}`] = place(new THREE.Mesh(new THREE.PlaneGeometry(0.064, 0.08), this.logs[i].mat), deg, 0.012, 0.012);
     });
     // banks of illuminated push-buttons under the displays
     this.buttons = [];
     const capGeo = new THREE.BoxGeometry(0.013, 0.009, 0.006);
+    let bankNo = 0;
     const bank = (deg, y, n, kinds) => {
-      const step = 0.017;
+      const step = 0.017, id = `bank${bankNo++}`;
       for (let k = 0; k < n; k++) {
         const mat = new THREE.MeshStandardMaterial({ color: 0x1d1f22, emissive: 0x000000, roughness: 0.5 });
         const b = new THREE.Mesh(capGeo, mat);
         place(b, deg + (((k - (n - 1) / 2) * step) / R) / DEG, y, 0.012);
-        this.buttons.push({ mat, kind: kinds[k % kinds.length], idx: k, phase: Math.random() * 6 });
+        if (k === (n >> 1)) this.elems[id] = b;
+        this.buttons.push({ mat, kind: kinds[k % kinds.length], idx: k, phase: Math.random() * 6, bank: id });
       }
     };
     bank(-44, -0.095, 7, ['shieldgen', 'idle', 'guns', 'idle', 'nav', 'idle', 'ecm']);
-    bank(0, -0.095, 10, ['missile']);
+    bank(0, -0.128, 10, ['missile']);
     bank(44, -0.095, 7, ['boost', 'idle', 'comm', 'idle', 'auto', 'idle', 'hull']);
     bank(-23, -0.075, 4, ['idle', 'nav', 'idle', 'guns']);
     bank(23, -0.075, 4, ['comm', 'idle', 'ecm', 'idle']);
     // annunciator strip above the target display
-    place(new THREE.Mesh(roundedRect(0.29, 0.068, 0.008, 0.006), this.bezel), 0, 0.12, 0.006);
-    place(new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.054), this.annun.mat), 0, 0.12, 0.012);
+    place(new THREE.Mesh(roundedRect(0.29, 0.068, 0.008, 0.006), this.bezel), 0, 0.128, 0.006);
+    this.elems.annun = place(new THREE.Mesh(new THREE.PlaneGeometry(0.27, 0.054), this.annun.mat), 0, 0.128, 0.012);
     // stickers and maintenance plaques
     [[-32, -0.11, 0], [33, -0.105, 1], [-58, 0.08, 2]].forEach(([deg, y, i]) => { const d = place(new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.028), this.decals[i]), deg, y, 0.009); d.rotation.z = rnd(-0.06, 0.06); });
     // master caution push-button
@@ -267,6 +386,13 @@ export class Cockpit {
     const glass = new THREE.Mesh(new THREE.SphereGeometry(0.9, 32, 16, Math.PI * 0.2, Math.PI * 0.6, Math.PI * 0.18, Math.PI * 0.45), this.canopyMat);
     glass.rotation.y = Math.PI; glass.position.y = -0.05;
     this.rig.add(glass);
+    // cracks in the canopy glass (canvas grows with heavy hits)
+    {
+      const d = 0.5, a = S(-1, 1, d), b = S(1, -0.28, d);
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(b.x - a.x, a.y - b.y), this.crackMat);
+      pl.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, -d); pl.renderOrder = 5;
+      this.rig.add(pl);
+    }
     // HUD combiner frame
     const hc = S(0, -0.3, 0.58), hw = 0.075, hh = 0.05;
     for (const sx of [-1, 1]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.0016, 0.0016, hh * 2.1, 6), this.chrome); post.position.copy(hc).add(new THREE.Vector3(sx * hw, hh * 0.9, 0)); post.rotation.x = -0.35; this.rig.add(post); }
@@ -278,22 +404,86 @@ export class Cockpit {
     const stick = new THREE.Group();
     stick.add(new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.03, 0.05, 14), this.rubber));
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.007, 0.09, 10), this.chrome); shaft.position.y = 0.06; stick.add(shaft);
-    const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.05, 6, 12), this.rubber); grip.position.set(0, 0.125, 0.004); grip.rotation.x = 0.25; stick.add(grip);
-    const trig = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.016, 0.01), this.trim); trig.position.set(0, 0.13, -0.017); stick.add(trig);
-    const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.006, 10), this.chrome); hat.position.set(0, 0.158, 0.004); stick.add(hat);
-    stick.position.copy(S(0.62, -1.42, 0.34));
+    const gf = new THREE.Group(); gf.position.set(0, 0.125, 0.004); gf.rotation.x = 0.25; stick.add(gf);
+    gf.add(new THREE.Mesh(new THREE.CapsuleGeometry(0.017, 0.06, 6, 12), this.rubber));
+    const trig = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.016, 0.01), this.trim); trig.position.set(0, 0.012, -0.019); gf.add(trig);
+    const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.006, 10), this.chrome); hat.position.set(0, 0.048, 0); gf.add(hat);
+    this.stickHand = this.gripHand(0.017, 1); gf.add(this.stickHand);
+    stick.position.copy(S(0.36, -1.32, 0.3));
     this.rig.add(stick); this.stick = stick;
-    this.applyStyle();
     const thr = new THREE.Group();
     const rail = new THREE.Mesh(roundedRect(0.05, 0.16, 0.012, 0.018), this.metal); rail.rotation.x = -Math.PI / 2; thr.add(rail);
     const lever = new THREE.Group();
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.06, 0.012), this.chrome); arm.position.y = 0.03; lever.add(arm);
     const knob = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.028, 0.034), this.rubber); knob.position.y = 0.068; lever.add(knob);
     const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.006, 10), this.trim); btn.rotation.z = Math.PI / 2; btn.position.set(0.027, 0.07, 0); lever.add(btn);
+    this.thrHand = this.throttleHand(); this.thrHand.position.y = 0.068; lever.add(this.thrHand);
     thr.add(lever);
-    thr.position.copy(S(-0.62, -1.18, 0.4));
+    thr.position.copy(S(-0.7, -1.42, 0.34));
     thr.rotation.y = 0.25;
     this.rig.add(thr); this.lever = lever;
+    // forearms: from each wrist back to an elbow below the field of view
+    this.arms = {};
+    const armGeo = new THREE.CylinderGeometry(0.034, 0.042, 1, 14, 1, true); armGeo.translate(0, 0.5, 0);
+    for (const k of ['stick', 'thr', 'yokeL', 'yokeR']) {
+      const m = new THREE.Mesh(armGeo, this.sleeve); m.frustumCulled = false; this.rig.add(m);
+      this.arms[k] = m;
+    }
+    this.elbows = { stick: S(0.75, -2.7, 0.12), thr: S(-0.95, -2.6, 0.12), yokeL: S(-0.7, -2.7, 0.12), yokeR: S(0.7, -2.7, 0.12) };
+    this.applyStyle();
+  }
+
+  /**
+   * Gloved hand wrapped round a vertical grip of radius r (grip axis = local y).
+   * side 1 = right hand (knuckles outboard on +x), -1 = mirrored left hand.
+   */
+  gripHand(r, side) {
+    const h = new THREE.Group();
+    const tube = 0.0088, ring = r + tube * 0.85;
+    // four curled fingers, stacked along the grip
+    [-0.027, -0.009, 0.009, 0.026].forEach((y, i) => {
+      const arc = 3.6 - i * 0.12;
+      const f = new THREE.Mesh(new THREE.TorusGeometry(ring, tube * (i === 3 ? 0.85 : 1), 8, 18, arc), this.glove);
+      f.rotation.x = -Math.PI / 2; f.position.y = y; h.add(f);
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(tube * 0.95, 8, 6), this.glove);
+      tip.position.set(Math.cos(arc) * ring, y, -Math.sin(arc) * ring); h.add(tip);
+      const kn = new THREE.Mesh(new THREE.SphereGeometry(tube * 1.15, 8, 6), this.knuckle);
+      kn.position.set(ring + 0.002, y, 0.004); kn.scale.set(0.7, 0.9, 1); h.add(kn);
+    });
+    // back of the hand and palm
+    const palm = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.05, 6, 12), this.glove);
+    palm.position.set(r + 0.012, -0.002, 0.03); palm.scale.set(0.75, 1, 1.4); h.add(palm);
+    const pad = new THREE.Mesh(roundedRect(0.034, 0.05, 0.008, 0.006, 0.002), this.knuckle);
+    pad.position.set(r + 0.027, 0, 0.026); pad.rotation.y = Math.PI / 2; h.add(pad);
+    // thumb across the top of the grip
+    const th = new THREE.Mesh(new THREE.CapsuleGeometry(0.0085, 0.032, 6, 10), this.glove);
+    th.position.set(0.004, 0.042, 0.012); th.rotation.set(0.25, 0.5, Math.PI / 2 - 0.25); h.add(th);
+    // gauntlet cuff
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.026, 0.035, 14), this.knuckle);
+    cuff.position.set(r + 0.016, -0.012, 0.07); cuff.rotation.x = Math.PI / 2 - 0.3; h.add(cuff);
+    const wrist = new THREE.Object3D(); wrist.position.set(r + 0.016, -0.016, 0.085); h.add(wrist);
+    h.userData.wrist = wrist;
+    if (side < 0) h.scale.x = -1;
+    return h;
+  }
+
+  /** left hand resting on the throttle knob, fingers curled over its front edge */
+  throttleHand() {
+    const h = new THREE.Group();
+    const palm = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.03, 6, 12), this.glove);
+    palm.rotation.x = Math.PI / 2; palm.scale.set(1.25, 1, 0.6); palm.position.set(0, 0.02, 0.012); h.add(palm);
+    [-0.02, -0.007, 0.007, 0.02].forEach((x) => {
+      const f = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.0078, 8, 14, 2.3), this.glove);
+      f.rotation.y = Math.PI / 2; f.rotation.z = 0.2; f.position.set(x, 0.002, -0.012); h.add(f);
+      const kn = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), this.knuckle); kn.position.set(x, 0.022, -0.016); kn.scale.set(0.8, 0.6, 0.8); h.add(kn);
+    });
+    const th = new THREE.Mesh(new THREE.CapsuleGeometry(0.0085, 0.03, 6, 10), this.glove);
+    th.position.set(0.03, 0.004, 0.006); th.rotation.x = Math.PI / 2 + 0.3; h.add(th);
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.026, 0.035, 14), this.knuckle);
+    cuff.position.set(-0.004, 0.028, 0.055); cuff.rotation.x = Math.PI / 2 - 0.5; h.add(cuff);
+    const wrist = new THREE.Object3D(); wrist.position.set(-0.004, 0.034, 0.07); h.add(wrist);
+    h.userData.wrist = wrist;
+    return h;
   }
 
   /** Two-handed control yoke: centre column, curved horns with grips, thumb buttons. */
@@ -306,6 +496,8 @@ export class Cockpit {
     wheel.add(bar);
     for (const sx of [-1, 1]) {
       const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.06, 6, 12), this.rubber); grip.position.set(sx * 0.175, 0.105, 0); grip.rotation.z = -sx * 0.12; wheel.add(grip);
+      const hand = this.gripHand(0.015, sx); hand.position.copy(grip.position); hand.rotation.z = grip.rotation.z; wheel.add(hand);
+      y.userData[sx < 0 ? 'handL' : 'handR'] = hand;
       const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.005, 12), sx < 0 ? this.trim : this.chrome); btn.rotation.x = Math.PI / 2; btn.position.set(sx * 0.17, 0.145, 0.012); wheel.add(btn);
     }
     wheel.position.set(0, 0.03, 0.03);
@@ -317,7 +509,22 @@ export class Cockpit {
   }
 
   setStyle(style) { this.style = style; this.applyStyle(); }
-  applyStyle() { if (this.yoke) this.yoke.visible = this.style !== 'stick'; if (this.stick) this.stick.visible = this.style === 'stick'; }
+  applyStyle() {
+    const st = this.style === 'stick';
+    if (this.yoke) this.yoke.visible = !st;
+    if (this.stick) this.stick.visible = st;
+    if (this.arms) { this.arms.stick.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st; }
+  }
+
+  /** point a forearm from the wrist marker to its elbow */
+  aimArm(arm, wrist, elbow) {
+    wrist.getWorldPosition(v); this.rig.worldToLocal(v);
+    v2.copy(elbow).sub(v);
+    const len = v2.length();
+    arm.position.copy(v);
+    arm.quaternion.setFromUnitVectors(UP, v2.multiplyScalar(1 / len));
+    arm.scale.set(1, len, 1);
+  }
 
   /** add a line to the scrolling message screens */
   log(text, color = '#6dffb0', screen = 0) {
@@ -345,10 +552,18 @@ export class Cockpit {
     if (this.yoke?.visible) {
       const w = this.yoke.userData.wheel;
       w.rotation.z += (-cx * 0.6 - w.rotation.z) * Math.min(1, dt * 12);
-      this.yoke.position.z += ((this.yoke.userData.base.z + cy * 0.035) - this.yoke.position.z) * Math.min(1, dt * 12);
+      this.yoke.position.z += ((this.yoke.userData.base.z + cy * 0.022) - this.yoke.position.z) * Math.min(1, dt * 12);
     }
     this.lever.position.z += ((0.05 - P.throttle * 0.1) - this.lever.position.z) * Math.min(1, dt * 10);
     this.lever.rotation.x = P.boosting ? -0.5 : -0.25 - P.throttle * 0.2;
+    // trigger finger / thumb squeeze while firing, then the forearms follow the hands
+    const squeeze = P.ctrl.firing ? 0.92 : 1;
+    this.stickHand.scale.set(squeeze, 1, squeeze);
+    this.rig.updateMatrixWorld(true);
+    if (this.stick.visible) this.aimArm(this.arms.stick, this.stickHand.userData.wrist, this.elbows.stick);
+    else { this.aimArm(this.arms.yokeL, this.yoke.userData.handL.userData.wrist, this.elbows.yokeL); this.aimArm(this.arms.yokeR, this.yoke.userData.handR.userData.wrist, this.elbows.yokeR); }
+    this.aimArm(this.arms.thr, this.thrHand.userData.wrist, this.elbows.thr);
+    this.updateSparks(dt);
 
     // ---- status lamps: '!' slow blink, '!!' fast blink ----
     const t = performance.now() / 1000;
@@ -378,19 +593,96 @@ export class Cockpit {
 
     this.mfdT -= dt;
     this.radarAng += dt * 2.2;
-    this.drawAnnunciator(t);
+    this.drawAnnunciator(t, this.fail.annun);
     if (this.mfdT <= 0) {
       this.mfdT = 0.1;
-      for (const m of this.mfds) { this.drawMFD(m, P, game); m.g.drawImage(this.prints, 0, 0); m.tex.needsUpdate = true; }
+      this.mfds.forEach((m, i) => {
+        const f = this.fail[`mfd${i}`];
+        if (f === 'dead' || (f === 'flicker' && Math.random() < 0.35)) this.drawStatic(m.g, 320, 240, f === 'dead');
+        else { this.drawMFD(m, P, game); if (f === 'flicker') this.tear(m.g, 320, 240); }
+        m.g.drawImage(this.prints, 0, 0); m.tex.needsUpdate = true;
+      });
     }
     this.updateButtons(P, game, t);
     for (const L of this.logs) {
       if (t > L.next) { L.next = t + rnd(0.6, 1.8); if (L.kind === 'LOG') this.log(IDLE_LINES[(Math.random() * IDLE_LINES.length) | 0], '#5fc79a', 0); else this.log(`CH ${String((Math.random() * 99) | 0).padStart(2, '0')} · ${(120 + Math.random() * 40).toFixed(2)} MHZ`, '#5fa8c7', 1); }
-      this.drawLog(L, t); L.tex.needsUpdate = true;
+      const f = this.fail[`log${this.logs.indexOf(L)}`];
+      if (f === 'dead' || (f === 'flicker' && Math.random() < 0.3)) this.drawStatic(L.g, L.c.width, L.c.height, f === 'dead');
+      else this.drawLog(L, t);
+      L.tex.needsUpdate = true;
+    }
+    // failing electronics keep spitting the odd spark
+    for (const k in this.fail) if (Math.random() < dt * (this.fail[k] === 'dead' ? 0.8 : 0.4)) this.sparkAt(k, 4);
+  }
+
+  /** hull hit: the worse the damage, the likelier a panel drops out (and sparks), heavy hits crack the canopy */
+  hit(dmg, hk) {
+    if (hk < 0.45 && this.cracks < 4 && Math.random() < 0.18 + dmg * 0.01) { addCrack(this.crack); this.crackTex.needsUpdate = true; this.cracks++; }
+    if (hk > 0.72 || Math.random() > Math.min(0.65, (0.75 - hk) * 0.9 + dmg * 0.01)) return null;
+    const keys = Object.keys(this.elems).filter((k) => this.fail[k] !== 'dead');
+    if (!keys.length) return null;
+    const k = keys[(Math.random() * keys.length) | 0];
+    this.fail[k] = this.fail[k] ? 'dead' : hk > 0.35 || Math.random() < 0.5 ? 'flicker' : 'dead';
+    this.sparkAt(k, 18);
+    const name = { mfd0: 'SCHIFFSDISPLAY', mfd1: 'RADAR', mfd2: 'ZIELDISPLAY', log0: 'LOG-SCHIRM', log1: 'KOM-SCHIRM', annun: 'WARNTAFEL' }[k] || 'SCHALTKREIS';
+    this.log(`STÖRUNG · ${name}${this.fail[k] === 'dead' ? ' AUSGEFALLEN' : ''}`, '#ff4d6d');
+    return k;
+  }
+
+  /** repaired / fresh ship */
+  repair() {
+    this.fail = {}; this.cracks = 0;
+    this.crack.getContext('2d').clearRect(0, 0, this.crack.width, this.crack.height); this.crackTex.needsUpdate = true;
+  }
+
+  sparkAt(key, n) {
+    const el = this.elems[key];
+    if (!el) return;
+    el.getWorldPosition(v);
+    for (const sp of this.sparks) {
+      if (sp.life > 0) continue;
+      sp.p.copy(v).add(v2.set(rnd(-0.03, 0.03), rnd(-0.02, 0.02), 0.01));
+      sp.v.set(rnd(-0.25, 0.25), rnd(-0.05, 0.3), rnd(0.05, 0.35));
+      sp.life = rnd(0.25, 0.7);
+      if (--n <= 0) break;
     }
   }
 
-  drawAnnunciator(t) {
+  updateSparks(dt) {
+    const a = this.sparkGeo.attributes.position;
+    this.sparks.forEach((sp, i) => {
+      if (sp.life > 0) { sp.life -= dt; sp.p.addScaledVector(sp.v, dt); sp.v.y -= dt * 0.25; sp.v.multiplyScalar(1 - dt * 1.5); }
+      if (sp.life > 0) a.setXYZ(i, sp.p.x, sp.p.y, sp.p.z); else a.setXYZ(i, 0, -50, 0);
+    });
+    a.needsUpdate = true;
+    this.sparkMat.opacity = 0.7 + Math.random() * 0.3;
+  }
+
+  /** picture lost: snow, rolling bars and an intermittent message */
+  drawStatic(g, W, H, dead) {
+    g.fillStyle = dead ? '#020403' : '#06100b'; g.fillRect(0, 0, W, H);
+    const n = dead ? 260 : 900;
+    for (let i = 0; i < n; i++) { const c = (Math.random() * (dead ? 70 : 190)) | 0; g.fillStyle = `rgb(${c},${c + 10},${c})`; g.fillRect(Math.random() * W, Math.random() * H, rnd(1, 4), rnd(1, 2)); }
+    const by = (performance.now() / 4) % H;
+    g.fillStyle = 'rgba(160,255,200,.08)'; g.fillRect(0, by, W, H * 0.12);
+    if (Math.sin(performance.now() / 260) > -0.3) {
+      g.font = `700 ${Math.round(W / 14)}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = dead ? 'rgba(255,77,109,.85)' : 'rgba(255,200,87,.85)';
+      g.fillText(dead ? 'SIGNAL VERLOREN' : 'STÖRUNG', W / 2, H / 2);
+      g.textAlign = 'left'; g.textBaseline = 'top';
+    }
+  }
+
+  /** a flickering display: horizontal tearing and colour loss */
+  tear(g, W, H) {
+    for (let i = 0; i < 3; i++) {
+      const y = rnd(0, H), h = rnd(4, 22), dx = rnd(-30, 30);
+      g.drawImage(g.canvas, 0, y, W, h, dx, y, W, h);
+    }
+    g.fillStyle = `rgba(0,0,0,${rnd(0, 0.45)})`; g.fillRect(0, 0, W, H);
+  }
+
+  drawAnnunciator(t, fail) {
     const { g, c, tex } = this.annun, W = c.width, H = c.height;
     g.fillStyle = '#0b0c0e'; g.fillRect(0, 0, W, H);
     const cols = 5, cw = W / cols, ch = H / 2;
@@ -398,7 +690,9 @@ export class Cockpit {
       const s = this.lampState[key] || 'off';
       const base = s.replace(/!/g, '');
       const rate = s.endsWith('!!') ? 12 : s.endsWith('!') ? 4.5 : 0;
-      const on = base !== 'off' && (!rate || Math.sin(t * rate) > -0.2);
+      let on = base !== 'off' && (!rate || Math.sin(t * rate) > -0.2);
+      if (fail === 'dead') on = Math.random() < 0.02;
+      else if (fail === 'flicker' && Math.random() < 0.3) on = !on;
       const [r, gg, b] = LAMP_RGB[on ? base : 'off'];
       const x = (i % cols) * cw + 6, y = Math.floor(i / cols) * ch + 6, w = cw - 12, h = ch - 12;
       g.fillStyle = `rgb(${r * 0.22},${gg * 0.22},${b * 0.22})`; g.fillRect(x, y, w, h);
@@ -417,6 +711,9 @@ export class Cockpit {
     const blink = (rate, ph = 0) => Math.sin(t * rate + ph) > 0;
     for (const B of this.buttons) {
       const m = B.mat;
+      const f = this.fail[B.bank];
+      if (f === 'dead') { Math.random() < 0.01 ? col(m, 2, 1.4, 0.6) : col(m, 0, 0, 0); continue; }
+      if (f === 'flicker' && Math.random() < 0.4) { col(m, 0, 0, 0); continue; }
       switch (B.kind) {
         case 'missile': B.idx < p.missiles ? col(m, 1.6, 0.9, 0.1) : col(m, 0.04, 0.02, 0); break;
         case 'shieldgen': p.shieldT > 0 && p.shield < p.maxShield ? (blink(8) ? col(m, 0.2, 0.9, 2) : col(m, 0.02, 0.1, 0.2)) : col(m, 0.1, 0.6, 1.4); break;
@@ -465,8 +762,8 @@ export class Cockpit {
     const p = P.ship, def = p.def, now = performance.now();
     const G = '#6dffb0', A = '#ffc857', R = '#ff4d6d';
     const cx = W * 0.5, cy = H * 0.54, sc = H * 0.33;
-    const L = def.radius * 1.15;
-    const toS = (x, z) => [cx - (x / L) * sc, cy - (z / L) * sc];
+    const ol = shipOutline(p.type), D = H * 0.74, ok = D / ol.N;
+    const toS = (x, z) => { const [u, w] = ol.map(x, z); return [cx + (u - ol.N / 2) * ok, cy + (w - ol.N / 2) * ok]; };
     // shield: four sectors that flash on the side that was hit
     const sk = p.shield / p.maxShield;
     const sectors = [['front', -Math.PI * 0.75, -Math.PI * 0.25], ['right', -Math.PI * 0.25, Math.PI * 0.25], ['back', Math.PI * 0.25, Math.PI * 0.75], ['left', Math.PI * 0.75, Math.PI * 1.25]];
@@ -481,20 +778,13 @@ export class Cockpit {
     g.globalAlpha = 1;
     // hull outline coloured by integrity
     const hk = p.hp / p.maxHp;
-    const sil = SIL[p.type] || SIL.falke;
-    const pts = [...sil, ...sil.slice(1, -1).reverse().map(([x, y]) => [-x, y])];
-    g.beginPath();
-    pts.forEach(([x, y], i) => { const X = cx + x * sc * 0.9, Y = cy - y * sc; i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
-    g.closePath();
-    g.fillStyle = hk > 0.65 ? 'rgba(109,255,176,.12)' : hk > 0.3 ? 'rgba(255,200,87,.16)' : 'rgba(255,77,109,.2)';
-    g.fill();
-    g.strokeStyle = hk > 0.65 ? G : hk > 0.3 ? A : R; g.lineWidth = 2.5; g.stroke();
-    g.strokeStyle = 'rgba(109,255,176,.35)'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(cx, cy - sc * 0.9); g.lineTo(cx, cy + sc * 0.85); g.stroke();
+    g.drawImage(ol.tint(hk > 0.65 ? G : hk > 0.3 ? A : R), cx - D / 2, cy - D / 2, D, D);
+    // damage: the hull outline flickers red where it is weakest
+    if (hk < 0.3 && Math.sin(now / 120) > 0) { g.globalAlpha = 0.5; g.drawImage(ol.tint('#ffffff'), cx - D / 2, cy - D / 2, D, D); g.globalAlpha = 1; }
     // engine glow
     const eg = Math.min(1, p.speed / def.boost);
     g.fillStyle = P.boosting ? '#7fd6ff' : `rgba(127,214,255,${0.3 + eg * 0.5})`;
-    g.fillRect(cx - 6, cy + sc * 0.88, 12, 4 + eg * 10);
+    g.fillRect(cx - 6, cy + ol.halfL * ok + 2, 12, 4 + eg * 10);
     // guns: hardpoints flash when firing
     const firing = (p.cool ?? 0) > def.rof * 0.5;
     for (const [x, , z] of def.guns) { const [X, Y] = toS(x, z); g.fillStyle = firing ? '#ffffff' : G; g.fillRect(X - 3, Y - 6, 6, 10); }
@@ -502,7 +792,7 @@ export class Cockpit {
     const maxM = def.missiles || 0;
     for (let i = 0; i < maxM; i++) {
       const side = i % 2 ? 1 : -1, row = Math.floor(i / 2);
-      const X = cx + side * sc * (0.28 + row * 0.07), Y = cy + sc * 0.05 + row * 4;
+      const X = cx + side * ol.halfW * ok * (0.38 + row * 0.1), Y = cy + sc * 0.1 + row * 5;
       g.fillStyle = i < p.missiles ? A : 'rgba(255,200,87,.15)';
       g.beginPath(); g.moveTo(X, Y - 6); g.lineTo(X + 3, Y + 4); g.lineTo(X - 3, Y + 4); g.closePath(); g.fill();
     }
@@ -518,6 +808,91 @@ export class Cockpit {
     g.fillStyle = sk > 0.15 ? G : R; g.fillText(`SCHILD ${Math.round(sk * 100)}%`, 10, H - 22);
     g.fillStyle = hk > 0.3 ? G : R; g.textAlign = 'right'; g.fillText(`HÜLLE ${Math.round(hk * 100)}%`, W - 10, H - 22);
     g.fillStyle = A; g.fillText(`${p.name?.toUpperCase?.() || ''} · ${def.name.toUpperCase()}`, W - 10, 8);
+    g.textAlign = 'left';
+  }
+
+  /**
+   * 3D radar scope: an inclined disc around the own ship, contacts stand on height stalks
+   * (above / below the flight plane). Friends = green triangles, foes = red diamonds,
+   * capital ships larger, mines orange, nav point cyan; the current target is bracketed.
+   */
+  drawRadar(g, W, H, P, game) {
+    const p = P.ship, G = '#6dffb0', R = '#ff4d6d';
+    const cx = W / 2, cy = H * 0.58, RX = W * 0.44, RY = RX * 0.42, range = 3000;
+    const now = performance.now();
+    // disc, range rings, forward cone
+    g.fillStyle = 'rgba(30,120,80,.12)'; g.beginPath(); g.ellipse(cx, cy, RX, RY, 0, 0, 6.283); g.fill();
+    g.strokeStyle = 'rgba(109,255,176,.55)'; g.lineWidth = 1.5;
+    for (const k of [1, 0.66, 0.33]) { g.beginPath(); g.ellipse(cx, cy, RX * k, RY * k, 0, 0, 6.283); g.stroke(); }
+    g.strokeStyle = 'rgba(109,255,176,.3)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(cx - RX, cy); g.lineTo(cx + RX, cy); g.moveTo(cx, cy - RY); g.lineTo(cx, cy + RY);
+    g.moveTo(cx, cy); g.lineTo(cx - RX * 0.7, cy - RY * 0.7); g.moveTo(cx, cy); g.lineTo(cx + RX * 0.7, cy - RY * 0.7); g.stroke();
+    const sw = this.radarAng % 6.283;
+    for (let i = 0; i < 14; i++) {
+      const a0 = sw - i * 0.05;
+      g.strokeStyle = `rgba(109,255,176,${0.4 * (1 - i / 14)})`; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a0) * RX, cy + Math.sin(a0) * RY); g.stroke();
+    }
+    // own ship
+    g.fillStyle = '#ffffff'; g.beginPath(); g.moveTo(cx, cy - 7); g.lineTo(cx + 5, cy + 5); g.lineTo(cx - 5, cy + 5); g.closePath(); g.fill();
+    const inv = q.copy(p.quat).invert();
+    let friends = 0, foes = 0;
+    const contacts = [];
+    const add = (pos, kind, o) => {
+      v2.copy(pos).sub(p.pos).applyQuaternion(inv);
+      const d = v2.length();
+      let k = d / range, edge = false;
+      if (k > 1) { k = 1; edge = true; }
+      const hd = Math.hypot(v2.x, v2.z) || 1;
+      const X = cx - (v2.x / hd) * k * RX * (hd / d), Y = cy - (v2.z / hd) * k * RY * (hd / d);
+      const hgt = edge ? 0 : (v2.y / range) * RX * 0.7;
+      contacts.push({ X, Y, hgt, kind, o, edge, depth: Y });
+    };
+    for (const o of game.ships) {
+      if (!o.alive || o === p) continue;
+      const kind = o.team === 1 ? 'foe' : o.team === 3 ? 'neutral' : 'friend';
+      if (kind === 'foe') foes++; else if (kind === 'friend') friends++;
+      add(o.pos, kind, o);
+    }
+    for (const mn of game.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < range) add(mn.pos, 'mine', null);
+    const nav = game.navPos?.();
+    if (nav) add(nav, 'nav', null);
+    contacts.sort((a, b) => a.depth - b.depth);
+    for (const c of contacts) {
+      const col = c.kind === 'foe' ? R : c.kind === 'friend' ? G : c.kind === 'mine' ? '#ff9a3a' : c.kind === 'nav' ? '#7fd6ff' : '#9fe8ff';
+      const big = c.o?.def?.capital;
+      const sz = big ? 7 : c.kind === 'mine' ? 2.5 : 4.5;
+      const bx = c.X, by = c.Y - c.hgt;
+      if (c.edge) {
+        g.fillStyle = col; g.globalAlpha = 0.7;
+        g.beginPath(); g.arc(c.X, c.Y, 2.5, 0, 6.283); g.fill(); g.globalAlpha = 1;
+        continue;
+      }
+      // stalk + foot
+      g.strokeStyle = col; g.globalAlpha = 0.6; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(c.X, c.Y); g.lineTo(bx, by); g.stroke();
+      g.beginPath(); g.ellipse(c.X, c.Y, 3, 1.4, 0, 0, 6.283); g.stroke();
+      g.globalAlpha = 1; g.fillStyle = col;
+      g.beginPath();
+      if (c.kind === 'foe') { g.moveTo(bx, by - sz); g.lineTo(bx + sz, by); g.lineTo(bx, by + sz); g.lineTo(bx - sz, by); }
+      else if (c.kind === 'friend' || c.kind === 'neutral') { g.moveTo(bx, by - sz); g.lineTo(bx + sz, by + sz * 0.8); g.lineTo(bx - sz, by + sz * 0.8); }
+      else if (c.kind === 'nav') { g.rect(bx - 1, by - 6, 2, 12); g.rect(bx - 6, by - 1, 12, 2); }
+      else g.arc(bx, by, sz, 0, 6.283);
+      g.closePath(); g.fill();
+      if (big) { g.strokeStyle = col; g.lineWidth = 1.5; g.strokeRect(bx - sz - 3, by - sz - 3, (sz + 3) * 2, (sz + 3) * 2); }
+      if (c.o && c.o === P.target) {
+        const r = 10 + Math.sin(now / 120) * 1.5;
+        g.strokeStyle = '#ffffff'; g.lineWidth = 1.5; g.beginPath();
+        for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { g.moveTo(bx + sx * r, by + sy * (r - 5)); g.lineTo(bx + sx * r, by + sy * r); g.lineTo(bx + sx * (r - 5), by + sy * r); }
+        g.stroke();
+        g.font = `700 13px ${FONT}`; g.fillStyle = '#ffffff'; g.fillText(c.o.name.toUpperCase().slice(0, 12), Math.min(W - 70, bx + 12), by - 16);
+      }
+    }
+    g.font = `700 16px ${FONT}`; g.textBaseline = 'top';
+    g.fillStyle = G; g.textAlign = 'right'; g.fillText('3 KM', W - 10, 8);
+    g.textAlign = 'left';
+    g.fillStyle = G; g.fillText(`▲ FREUND ${friends}`, 10, H - 24);
+    g.fillStyle = R; g.textAlign = 'right'; g.fillText(`FEIND ${foes} ◆`, W - 10, H - 24);
     g.textAlign = 'left';
   }
 
@@ -543,17 +918,7 @@ export class Cockpit {
       bar(132, 'NACHBRENNER', P.energy, A);
       g.fillStyle = A; g.fillText(`RAK ${p.missiles}   ${Math.round(p.speed)} M/S`, W * 0.58, 184);
     } else if (m.kind === 'RAD') {
-      const cx = W / 2, cy = H / 2 + 8, R0 = H * 0.42, range = 3000;
-      g.strokeStyle = 'rgba(109,255,176,.5)';
-      for (const k of [1, 0.5]) { g.beginPath(); g.arc(cx, cy, R0 * k, 0, 6.283); g.stroke(); }
-      g.beginPath(); g.moveTo(cx - R0, cy); g.lineTo(cx + R0, cy); g.moveTo(cx, cy - R0); g.lineTo(cx, cy + R0); g.stroke();
-      const sweep = g.createConicGradient?.(this.radarAng, cx, cy);
-      if (sweep) { sweep.addColorStop(0, 'rgba(109,255,176,.35)'); sweep.addColorStop(0.08, 'rgba(109,255,176,0)'); sweep.addColorStop(1, 'rgba(109,255,176,0)'); g.fillStyle = sweep; g.beginPath(); g.arc(cx, cy, R0, 0, 6.283); g.fill(); }
-      const inv = q.copy(p.quat).invert();
-      const blip = (pos, col, sz) => { v2.copy(pos).sub(p.pos).applyQuaternion(inv); const d = Math.hypot(v2.x, v2.z); if (d > range) return; g.fillStyle = col; g.fillRect(cx - (v2.x / range) * R0 - sz / 2, cy - (v2.z / range) * R0 - sz / 2, sz, sz); };
-      for (const o of game.ships) if (o.alive && o !== p) blip(o.pos, o === P.target ? '#ffffff' : o.team === 1 ? R : o.team === 3 ? '#9fe8ff' : G, o.def.capital ? 8 : 5);
-      for (const mn of game.mines || []) if (mn.alive) blip(mn.pos, '#ff7a3a', 3);
-      g.fillStyle = G; g.fillText('3 KM', W - 52, 8);
+      this.drawRadar(g, W, H, P, game);
     } else {
       const tg = P.target;
       if (!tg || !tg.alive) { g.fillStyle = G; g.fillText('KEIN ZIEL', W / 2 - 40, H / 2 - 10); return; }
@@ -580,7 +945,7 @@ export class Cockpit {
 
   dispose() {
     this.scene.traverse((o) => { o.geometry?.dispose(); });
-    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
+    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.glove, this.knuckle, this.sleeve, this.crackMat, this.sparkMat]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
     for (const m of [...this.mfds, ...this.logs, this.annun]) { m.tex.dispose(); m.mat.dispose(); }
     for (const b of this.buttons) b.mat.dispose();
   }
