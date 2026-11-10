@@ -292,7 +292,8 @@ export function drawHud(ctx, g, P) {
     bar(ctx, w / 2 - bw2 / 2, oy + 28 * s, bw2, 10 * s, k, k < 0.35 ? 'rgba(255,70,90,.9)' : 'rgba(110,230,160,.8)', g.protect.name.toUpperCase(), s * 0.85);
   }
 
-  // --- radar (bottom-center) ---
+  // --- radar (bottom-center; in the cockpit the radar lives on the right MFD) ---
+  if (P.view !== 'cockpit') {
   const R = (solo ? 40 : 34) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s;
   ctx.fillStyle = 'rgba(6,14,24,.6)';
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.fill();
@@ -325,6 +326,7 @@ export function drawHud(ctx, g, P) {
   if (nav) blip(nav, C.warn, 4 * s);
   for (const mk of g.markers()) blip(mk.pos, mk.color, 3.5 * s);
 
+  }
   // warnings
   if (P.missileWarn && Math.sin(t * 16) > 0) {
     ctx.font = `800 ${14 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

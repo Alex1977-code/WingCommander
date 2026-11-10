@@ -23,7 +23,7 @@ let save = load(SAVE_KEY, NEW_SAVE());
 if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
 if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
 save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
-const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, quality: 'high', coop: false, callsign2: 'Orion' });
+const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, view: 'cockpit', quality: 'high', coop: false, callsign2: 'Orion' });
 
 const hub = new InputHub();
 const audio = new Audio();
@@ -170,6 +170,7 @@ function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; comm
 const ui = {
   comm(who, text) { if (commQ.length < 6) commQ.push({ who, text }); if (!commT) nextComm(); },
   setAuto(on) { $('btn-auto').classList.toggle('on', on); },
+  viewChanged(P) { if (P.idx === 0) { settings.view = P.view; game.view = P.view; store(SET_KEY, settings); } audio.ui('ok'); },
   setThrottle(v) { $('throttle-fill').style.height = v * 100 + '%'; },
   fade(cb) {
     const f = $('fade');
@@ -249,6 +250,7 @@ document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('bu
 const game = new Game($('view'), $('hud'), audio, ui);
 game.invert = settings.invert;
 game.sens = settings.sens;
+game.view = settings.view;
 game.setQuality(settings.quality);
 game.startAttract();
 

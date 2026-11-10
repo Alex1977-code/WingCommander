@@ -31,6 +31,7 @@ const html = `
     <div id="pad-stick" class="pad-stick"><div class="ring"><div id="pad-knob" class="knob"></div></div></div>
     <div class="pad-buttons">
       <button data-e="pause" class="pbtn sm">II</button>
+      <button data-e="view" class="pbtn sm">SICHT</button>
       <button data-e="auto" class="pbtn sm">AUTO</button>
       <button data-e="target" class="pbtn">ZIEL</button>
       <button data-e="missile" class="pbtn msl">RAKETE</button>

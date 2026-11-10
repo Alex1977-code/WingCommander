@@ -77,13 +77,15 @@ export function countUp(el, to, suffix = '', ms = 900) {
 // ---------------------------------------------------------------------------
 
 const LOOKS = {
-  brandt: { head: 0.9, hair: 'bun', cap: true },
-  rook: { head: 1.05, hair: 'short', jaw: 1.1 },
-  kolibri: { head: 0.92, hair: 'long' },
-  veyl: { head: 1.0, hair: 'mask' },
-  flug: { head: 0.95, hair: 'headset' },
-  samariter: { head: 0.95, hair: 'headset' },
-  erz: { head: 1, hair: 'emblem' },
+  brandt: { kind: 'officer', hair: 'short', headset: true, rank: 3 },
+  holt: { kind: 'officer', hair: 'receding', earpiece: true, rank: 2 },
+  flug: { kind: 'crew', hair: 'short', headset: true },
+  samariter: { kind: 'crew', hair: 'short', headset: true, medic: true },
+  rook: { kind: 'pilot', visor: 'up', stripe: true, mask: true, jaw: 1.12 },
+  kolibri: { kind: 'pilot', visor: 'up', ponytail: true },
+  juno: { kind: 'pilot', visor: 'down', stripe: true },
+  veyl: { kind: 'cyborg' },
+  erz: { kind: 'emblem' },
 };
 
 function hexA(hex, a) {
@@ -127,59 +129,105 @@ export class Hologram {
     body.addColorStop(0, hexA(col, 0.95)); body.addColorStop(1, hexA(col, 0.15));
     g.fillStyle = body; g.strokeStyle = hexA(col, 1); g.lineWidth = 1.2 * s;
 
-    if (look.hair === 'emblem') {
-      // narrator: rotating wireframe sigil
-      g.rotate(t * 0.4);
-      for (let i = 0; i < 3; i++) {
-        g.beginPath(); g.ellipse(0, 0, 30 * s, 12 * s, i * Math.PI / 3, 0, 6.283); g.stroke();
-      }
-      g.beginPath(); g.arc(0, 0, 6 * s, 0, 6.283); g.fill();
-    } else {
-      // shoulders
-      g.beginPath();
-      g.moveTo(-46 * s, 52 * s); g.quadraticCurveTo(-44 * s, 22 * s, -18 * s, 18 * s);
-      g.lineTo(18 * s, 18 * s); g.quadraticCurveTo(44 * s, 22 * s, 46 * s, 52 * s); g.closePath(); g.fill();
-      // collar / rank lines
-      g.strokeStyle = hexA('#ffffff', 0.5);
-      g.beginPath(); g.moveTo(-14 * s, 20 * s); g.lineTo(0, 34 * s); g.lineTo(14 * s, 20 * s); g.stroke();
-      // neck
-      g.fillStyle = hexA(col, 0.6); g.fillRect(-7 * s, 6 * s, 14 * s, 14 * s);
-      // head
-      const hw = 17 * s * look.head, hh = 22 * s;
+    const P = (x) => x * s;
+    const dim = hexA(col, 0.35), solid = hexA(col, 1), mid = hexA(col, 0.6), white = (al) => `rgba(255,255,255,${al})`;
+    const blink = (t % 4.2) < 0.12 ? 0.2 : 1;
+    const face = (cx, cy, w) => {
+      g.fillStyle = '#ffffff'; g.shadowColor = col; g.shadowBlur = P(6);
+      g.fillRect(cx - P(8.5) * w, cy - P(2), P(5) * w, P(1.7) * blink); g.fillRect(cx + P(3.5) * w, cy - P(2), P(5) * w, P(1.7) * blink);
+      const m = this.talk > 0 ? P(0.6 + Math.abs(Math.sin(t * 19)) * 3) : P(0.8);
+      g.fillRect(cx - P(4.5), cy + P(11), P(9), m);
+      g.shadowBlur = 0;
+    };
+    const torso = (pads) => {
       g.fillStyle = body;
-      g.beginPath(); g.ellipse(0, -8 * s, hw, hh, 0, 0, 6.283); g.fill();
-      if (look.jaw) { g.fillRect(-hw * 0.8, -4 * s, hw * 1.6, 12 * s * look.jaw); }
-      g.fillStyle = hexA(col, 1);
-      if (look.hair === 'short') { g.beginPath(); g.ellipse(0, -22 * s, hw * 1.02, 11 * s, 0, Math.PI, 0); g.fill(); }
-      if (look.hair === 'long') {
-        g.beginPath(); g.ellipse(0, -18 * s, hw * 1.12, 15 * s, 0, Math.PI, 0); g.fill();
-        g.fillRect(-hw * 1.12, -18 * s, 7 * s, 34 * s); g.fillRect(hw * 1.12 - 7 * s, -18 * s, 7 * s, 34 * s);
-      }
-      if (look.hair === 'bun') { g.beginPath(); g.ellipse(0, -22 * s, hw * 1.02, 10 * s, 0, Math.PI, 0); g.fill(); g.beginPath(); g.arc(0, -33 * s, 6 * s, 0, 6.283); g.fill(); }
-      if (look.cap) { g.fillRect(-hw * 1.1, -27 * s, hw * 2.2, 4 * s); }
-      if (look.hair === 'headset') {
-        g.lineWidth = 2.4 * s; g.strokeStyle = hexA(col, 1);
-        g.beginPath(); g.arc(0, -10 * s, hw * 1.15, Math.PI * 1.05, Math.PI * 1.95); g.stroke();
-        g.beginPath(); g.moveTo(-hw * 1.1, -4 * s); g.quadraticCurveTo(-hw * 0.9, 12 * s, -4 * s, 8 * s); g.stroke();
-      }
-      if (look.hair === 'mask') {
-        g.fillStyle = hexA('#000000', 0.55);
-        g.beginPath(); g.moveTo(-hw, -14 * s); g.lineTo(hw, -14 * s); g.lineTo(hw * 0.6, 8 * s); g.lineTo(0, 14 * s); g.lineTo(-hw * 0.6, 8 * s); g.closePath(); g.fill();
-        g.fillStyle = '#fff'; g.shadowColor = col; g.shadowBlur = 10 * s;
-        g.fillRect(-hw * 0.7, -9 * s, hw * 1.4, 2.4 * s);
-        g.shadowBlur = 0;
-        // horns / crest
-        g.fillStyle = hexA(col, 1);
-        g.beginPath(); g.moveTo(-hw * 0.3, -28 * s); g.lineTo(0, -42 * s); g.lineTo(hw * 0.3, -28 * s); g.fill();
+      g.beginPath();
+      g.moveTo(P(-48), P(54)); g.quadraticCurveTo(P(-47), P(26), P(-22), P(17));
+      g.lineTo(P(22), P(17)); g.quadraticCurveTo(P(47), P(26), P(48), P(54)); g.closePath(); g.fill();
+      if (pads) { g.fillStyle = mid; for (const sx of [-1, 1]) { g.beginPath(); g.ellipse(P(33 * sx), P(26), P(13), P(7), sx * 0.35, 0, 6.283); g.fill(); } }
+    };
+
+    if (look.kind === 'emblem') {
+      g.rotate(t * 0.4);
+      for (let i = 0; i < 3; i++) { g.beginPath(); g.ellipse(0, 0, P(30), P(12), i * Math.PI / 3, 0, 6.283); g.stroke(); }
+      g.beginPath(); g.arc(0, 0, P(6), 0, 6.283); g.fill();
+    } else if (look.kind === 'pilot') {
+      // flight suit with padded shoulders, harness, helmet neck seal, oxygen hose
+      if (look.ponytail) { g.fillStyle = mid; g.beginPath(); g.ellipse(P(21), P(8), P(5), P(15), -0.25, 0, 6.283); g.fill(); }
+      torso(true);
+      g.strokeStyle = white(0.55); g.lineWidth = P(2.6);
+      g.beginPath(); g.moveTo(P(-24), P(19)); g.lineTo(P(0), P(42)); g.lineTo(P(24), P(19)); g.moveTo(P(-30), P(38)); g.lineTo(P(30), P(38)); g.stroke();
+      g.fillStyle = white(0.7); g.beginPath(); g.arc(0, P(41), P(4), 0, 6.283); g.fill();
+      g.strokeStyle = solid; g.lineWidth = P(2);
+      g.beginPath(); g.ellipse(0, P(15), P(17), P(4.5), 0, 0, 6.283); g.stroke();
+      // oxygen hose (ribbed)
+      g.strokeStyle = mid; g.lineWidth = P(4);
+      g.beginPath(); g.moveTo(P(-7), P(6)); g.bezierCurveTo(P(-16), P(18), P(-10), P(30), P(-20), P(46)); g.stroke();
+      g.strokeStyle = white(0.35); g.lineWidth = P(1); g.setLineDash([P(1.5), P(2)]);
+      g.beginPath(); g.moveTo(P(-7), P(6)); g.bezierCurveTo(P(-16), P(18), P(-10), P(30), P(-20), P(46)); g.stroke(); g.setLineDash([]);
+      // helmet shell + ear cups
+      g.fillStyle = body;
+      g.beginPath(); g.ellipse(0, P(-12), P(23), P(26), 0, 0, 6.283); g.fill();
+      g.fillStyle = mid;
+      for (const sx of [-1, 1]) { g.beginPath(); g.roundRect?.(P(sx > 0 ? 18 : -25), P(-14), P(7), P(16), P(3)); g.fill(); }
+      if (look.stripe) { g.fillStyle = white(0.55); g.fillRect(P(-2.5), P(-38), P(5), P(16)); }
+      if (look.visor === 'down') {
+        const vg = g.createLinearGradient(P(-14), P(-24), P(14), P(6));
+        vg.addColorStop(0, 'rgba(0,0,0,0.75)'); vg.addColorStop(0.55, 'rgba(0,0,0,0.55)'); vg.addColorStop(1, hexA(col, 0.4));
+        g.fillStyle = vg; g.beginPath(); g.ellipse(0, P(-8), P(17), P(15), 0, 0, 6.283); g.fill();
+        g.strokeStyle = white(0.6); g.lineWidth = P(1.6);
+        g.beginPath(); g.moveTo(P(-10), P(-18)); g.lineTo(P(2), P(-3)); g.stroke();
+        g.strokeStyle = solid; g.lineWidth = P(1.2); g.beginPath(); g.ellipse(0, P(-8), P(17), P(15), 0, 0, 6.283); g.stroke();
+        if (this.talk > 0 && Math.sin(t * 20) > 0) { g.fillStyle = '#fff'; g.fillRect(P(-1.5), P(8), P(3), P(3)); }
       } else {
-        // eyes + mouth
-        const blink = (t % 4.2) < 0.12 ? 0.2 : 1;
-        g.fillStyle = '#ffffff'; g.shadowColor = col; g.shadowBlur = 6 * s;
-        g.fillRect(-9 * s, -10 * s, 5.5 * s, 1.8 * s * blink); g.fillRect(3.5 * s, -10 * s, 5.5 * s, 1.8 * s * blink);
-        const m = this.talk > 0 ? (0.6 + Math.abs(Math.sin(t * 19)) * 3.2) * s : 0.8 * s;
-        g.fillRect(-5 * s, 4 * s, 10 * s, m);
-        g.shadowBlur = 0;
+        // visor raised: face visible in the opening, dark visor band on the forehead
+        g.fillStyle = hexA(col, 0.22); g.beginPath(); g.ellipse(0, P(-5), P(14) * (look.jaw || 1), P(16), 0, 0, 6.283); g.fill();
+        g.fillStyle = 'rgba(0,0,0,0.55)'; g.beginPath(); g.ellipse(0, P(-27), P(19), P(7), 0, Math.PI, 0); g.fill(); g.fillRect(P(-19), P(-27), P(38), P(3));
+        g.strokeStyle = white(0.45); g.lineWidth = P(1); g.beginPath(); g.moveTo(P(-12), P(-29)); g.lineTo(P(8), P(-31)); g.stroke();
+        face(0, P(-10), 1);
+        if (look.mask) { g.fillStyle = mid; g.beginPath(); g.ellipse(P(-14), P(6), P(5), P(4), 0.4, 0, 6.283); g.fill(); }
       }
+    } else if (look.kind === 'cyborg') {
+      torso(true);
+      g.strokeStyle = white(0.4); g.lineWidth = P(1.2);
+      for (let i = 0; i < 4; i++) { g.beginPath(); g.moveTo(P(-40 + i * 6), P(30 + i * 5)); g.lineTo(P(-20 + i * 4), P(22 + i * 5)); g.moveTo(P(40 - i * 6), P(30 + i * 5)); g.lineTo(P(20 - i * 4), P(22 + i * 5)); g.stroke(); }
+      g.strokeStyle = mid; g.lineWidth = P(2.2);
+      for (const sx of [-1, 1]) { g.beginPath(); g.moveTo(P(10 * sx), P(4)); g.bezierCurveTo(P(16 * sx), P(14), P(22 * sx), P(14), P(26 * sx), P(24)); g.stroke(); }
+      g.fillStyle = body;
+      g.beginPath(); g.moveTo(P(-18), P(-30)); g.lineTo(P(18), P(-30)); g.lineTo(P(20), P(-6)); g.lineTo(P(10), P(10)); g.lineTo(P(-10), P(10)); g.lineTo(P(-20), P(-6)); g.closePath(); g.fill();
+      g.fillStyle = 'rgba(0,0,0,0.6)';
+      g.beginPath(); g.moveTo(P(-16), P(-16)); g.lineTo(P(16), P(-16)); g.lineTo(P(9), P(4)); g.lineTo(P(-9), P(4)); g.closePath(); g.fill();
+      g.fillStyle = '#fff'; g.shadowColor = col; g.shadowBlur = P(10);
+      g.fillRect(P(-12), P(-11), P(24), P(2.4)); g.shadowBlur = 0;
+      g.fillStyle = solid; g.beginPath(); g.moveTo(P(-6), P(-30)); g.lineTo(0, P(-46)); g.lineTo(P(6), P(-30)); g.fill();
+      if (this.talk > 0) { g.fillStyle = white(0.8); g.fillRect(P(-6), P(0), P(12), P(0.6 + Math.abs(Math.sin(t * 17)) * 2)); }
+    } else {
+      // officer / crew: uniform tunic with high collar
+      torso(false);
+      g.fillStyle = mid; g.fillRect(P(-11), P(9), P(22), P(11));
+      g.strokeStyle = white(0.5); g.lineWidth = P(1);
+      g.beginPath(); g.moveTo(P(-11), P(9)); g.lineTo(P(11), P(9)); g.moveTo(P(4), P(20)); g.lineTo(P(14), P(54)); g.stroke();
+      if (look.kind === 'officer') {
+        for (const sx of [-1, 1]) {
+          g.fillStyle = mid; g.fillRect(P(sx > 0 ? 22 : -38), P(19), P(16), P(5));
+          g.fillStyle = white(0.8); for (let r = 0; r < look.rank; r++) g.fillRect(P((sx > 0 ? 24 : -36) + r * 4.5), P(20), P(2.4), P(3));
+        }
+        g.fillStyle = white(0.7); for (let r = 0; r < look.rank; r++) g.fillRect(P(-9 + r * 3.2), P(12), P(2), P(2));
+      }
+      if (look.medic) { g.fillStyle = white(0.85); g.fillRect(P(-34), P(26), P(8), P(2.4)); g.fillRect(P(-31.2), P(23.2), P(2.4), P(8)); }
+      g.fillStyle = hexA(col, 0.6); g.fillRect(P(-6), P(2), P(12), P(9));
+      g.fillStyle = body; g.beginPath(); g.ellipse(0, P(-10), P(16), P(20), 0, 0, 6.283); g.fill();
+      g.fillStyle = solid;
+      if (look.hair === 'short') { g.beginPath(); g.ellipse(0, P(-20), P(16.5), P(11), 0, Math.PI, 0); g.fill(); g.fillRect(P(-16.5), P(-21), P(4), P(9)); g.fillRect(P(12.5), P(-21), P(4), P(9)); }
+      if (look.hair === 'receding') { g.beginPath(); g.ellipse(0, P(-23), P(15), P(6), 0, Math.PI, 0); g.fill(); g.fillRect(P(-16), P(-22), P(3), P(10)); g.fillRect(P(13), P(-22), P(3), P(10)); }
+      face(0, P(-10), 0.95);
+      if (look.headset) {
+        g.strokeStyle = solid; g.lineWidth = P(2.4);
+        g.beginPath(); g.arc(0, P(-10), P(19), Math.PI * 1.08, Math.PI * 1.92); g.stroke();
+        g.fillStyle = solid; g.beginPath(); g.roundRect?.(P(-21), P(-14), P(6), P(11), P(2)); g.fill();
+        g.lineWidth = P(1.6); g.beginPath(); g.moveTo(P(-18), P(-4)); g.quadraticCurveTo(P(-15), P(6), P(-5), P(4)); g.stroke();
+      }
+      if (look.earpiece) { g.fillStyle = white(0.9); g.beginPath(); g.arc(P(16), P(-8), P(2), 0, 6.283); g.fill(); g.strokeStyle = white(0.5); g.lineWidth = P(0.8); g.beginPath(); g.moveTo(P(16), P(-6)); g.quadraticCurveTo(P(17), P(4), P(12), P(10)); g.stroke(); }
     }
     g.restore();
 

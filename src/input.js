@@ -63,7 +63,7 @@ export class TouchKeys {
     hold('btn-fire', 'fireBtn');
     hold('btn-boost', 'boostBtn');
     const tap = (id, ev) => $(id).addEventListener('pointerdown', (e) => { this.events.push(ev); e.preventDefault(); });
-    tap('btn-msl', 'missile'); tap('btn-tgt', 'target'); tap('btn-auto', 'auto'); tap('btn-pause', 'pause');
+    tap('btn-msl', 'missile'); tap('btn-tgt', 'target'); tap('btn-auto', 'auto'); tap('btn-pause', 'pause'); tap('btn-view', 'view');
 
     const thr = $('throttle');
     const setThr = (e) => {
@@ -85,6 +85,7 @@ export class TouchKeys {
       if (e.code === 'KeyM' || e.code === 'Enter') this.events.push('missile');
       if (e.code === 'KeyT') this.events.push('target');
       if (e.code === 'KeyJ') this.events.push('auto');
+      if (e.code === 'KeyV' || e.code === 'KeyC') this.events.push('view');
       if (e.code === 'Escape' || e.code === 'KeyP') this.events.push('pause');
     });
     window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
@@ -134,6 +135,7 @@ export class GamepadDevice {
     if (edge(2) || edge(5)) this.events.push('missile');
     if (edge(3)) this.events.push('target');
     if (edge(8)) this.events.push('auto');
+    if (edge(10) || edge(11)) this.events.push('view');
     if (edge(9)) this.events.push('pause');
     // menu navigation (with stick auto-repeat)
     if (edge(0)) this.hub.menu('ok');
@@ -169,7 +171,7 @@ export class RemoteDevice {
       this.firing = !!m.f; this.boosting = !!m.b;
       if (Number.isFinite(m.th) && Math.abs(m.th - (this.lastTh ?? -1)) > 0.002) { this.lastTh = m.th; this.throttleSet = Math.max(0, Math.min(1, m.th)); }
     } else if (m.t === 'e') {
-      if (['missile', 'target', 'auto', 'pause'].includes(m.e)) this.events.push(m.e);
+      if (['missile', 'target', 'auto', 'pause', 'view'].includes(m.e)) this.events.push(m.e);
     } else if (m.t === 'm') {
       if (['up', 'down', 'left', 'right', 'ok', 'back', 'start'].includes(m.e)) this.hub.menu(m.e);
     } else if (m.t === 'hello' && typeof m.name === 'string') {

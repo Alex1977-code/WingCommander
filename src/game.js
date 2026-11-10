@@ -9,6 +9,7 @@ import { Fx, glowTexture } from './fx.js';
 import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
 import { installCutscenes, passes } from './cutscene.js';
+import { Cockpit } from './cockpit.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3();
@@ -16,7 +17,9 @@ const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), q3 = new THREE.Q
 const t5 = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
 const ZERO = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, 1);
-const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0);
+const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0), AZ = new THREE.Vector3(0, 0, 1);
+// pilot eye position inside each fighter (ship space, +Z forward)
+const EYE = { sperber: [0, 1.15, 1.6], falke: [0, 1.25, 1.8], greif: [0, 1.4, 2.0] };
 const FLIP = new THREE.Quaternion().setFromAxisAngle(AY, Math.PI);
 const rnd = (a, b) => a + Math.random() * (b - a);
 
@@ -135,7 +138,7 @@ export class Game {
       this.env?.dispose();
     }
     disposeComposer(this.composer);
-    this.pilots.forEach((P) => disposeComposer(P.composer));
+    this.pilots.forEach((P) => { disposeComposer(P.composer); P.cockpit?.dispose(); });
     this.pilots = [];
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
@@ -178,7 +181,7 @@ export class Game {
         target: null, energy: 1, boosting: false, throttle: 0.75,
         aimPoint: new THREE.Vector3(), leadPoint: new THREE.Vector3(), aimLocked: false,
         shake: 0, hurt: 0, bumpT: 0, deadT: 0, missileWarn: false, warnT: 0,
-        color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0,
+        color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0, view: this.view || 'cockpit', cockpit: new Cockpit(),
       };
       ship.pilot = P;
       ctrl.reset();
@@ -623,6 +626,7 @@ export class Game {
       else if (e === 'target') this.cycleTarget(P);
       else if (e === 'auto') this.autopilot();
       else if (e === 'pause') this.ui.pause();
+      else if (e === 'view') { P.view = P.view === 'cockpit' ? 'chase' : 'cockpit'; this.ui.viewChanged?.(P); }
     }
 
     for (const a of this.asteroids) {
@@ -1021,6 +1025,7 @@ export class Game {
   loop(t) {
     requestAnimationFrame((tt) => this.loop(tt));
     let dt = Math.min(0.05, (t - this.last) / 1000 || 0.016);
+    this.lastDt = dt;
     this.last = t;
     this.ui.frame?.(dt);
     if (this.mode === 'idle' || !this.scene) return;
@@ -1063,10 +1068,15 @@ export class Game {
       r.setViewport(P.vx, y, P.vw, P.vh);
       if (split) r.setScissor(P.vx, y, P.vw, P.vh);
       this.env.update(P.camera);
+      const inCockpit = P.view === 'cockpit' && P.ship.alive;
+      // hide only this pilot's own ship from its own cockpit view
+      for (const Q of this.pilots) Q.ship.mesh.visible = !(Q === P && inCockpit);
       if (this.quality === 'high' && P.composer) P.composer.render(); else r.render(this.scene, P.camera);
+      if (inCockpit) { P.cockpit.update(P, this, this.lastDt || 0.016, P.camera); P.cockpit.render(r); }
       P.camera.updateMatrixWorld();
       drawHud(this.hud, this, P);
     }
+    for (const Q of this.pilots) Q.ship.mesh.visible = true;
     if (split) {
       // divider line
       const ctx = this.hud;
@@ -1137,11 +1147,22 @@ export class Game {
     for (const P of this.pilots) {
       const p = P.ship;
       if (p.alive) {
-        P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 5.5));
-        const back = 27 + (p.speed / p.def.boost) * 9;
-        P.camera.position.copy(t1.set(0, 7.5, -back).applyQuaternion(P.camQ).add(p.pos));
-        P.camera.quaternion.copy(P.camQ).multiply(FLIP);
-        const fov = P.baseFov + (p.speed / p.def.boost) * 16;
+        let fov;
+        if (P.view === 'cockpit') {
+          // pilot's eye: locked to the ship, horizon leans into turns, slight head lag
+          P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 22));
+          const eye = EYE[p.type] || [0, 1.2, 1.7];
+          P.camera.position.copy(t1.set(eye[0], eye[1], eye[2]).applyQuaternion(p.quat).add(p.pos));
+          q1.setFromAxisAngle(AZ, p.bank * 0.45);
+          P.camera.quaternion.copy(P.camQ).multiply(q1).multiply(FLIP);
+          fov = P.baseFov + 10 + (p.speed / p.def.boost) * 10;
+        } else {
+          P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 5.5));
+          const back = 27 + (p.speed / p.def.boost) * 9;
+          P.camera.position.copy(t1.set(0, 7.5, -back).applyQuaternion(P.camQ).add(p.pos));
+          P.camera.quaternion.copy(P.camQ).multiply(FLIP);
+          fov = P.baseFov + (p.speed / p.def.boost) * 16;
+        }
         if (Math.abs(fov - P.camera.fov) > 0.05) { P.camera.fov += (fov - P.camera.fov) * Math.min(1, dt * 4); P.camera.updateProjectionMatrix(); }
       }
       if (P.shake > 0) {
