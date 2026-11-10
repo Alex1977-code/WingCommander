@@ -96,6 +96,36 @@ export function drawHud(ctx, g, P) {
     return;
   }
 
+  // --- sun lens flare (drawn under the HUD) ---
+  if (g.env?.sunDir) {
+    v.copy(g.env.sunDir).multiplyScalar(20000).add(P.camera.position);
+    const q = project(P, v);
+    if (!q.behind) {
+      const cx = w / 2, cy = h / 2, dx = cx - q.x, dy = cy - q.y;
+      const off = Math.max(0, Math.max(Math.abs(q.x - cx) / (w * 0.75), Math.abs(q.y - cy) / (h * 0.75)) - 0.6);
+      const k = Math.max(0, 1 - off * 2.5);
+      if (k > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const ghosts = [[0, 60, 'rgba(255,240,210,%)', 0.22], [0.35, 10, 'rgba(120,200,255,%)', 0.16], [0.6, 22, 'rgba(255,160,90,%)', 0.1], [0.85, 6, 'rgba(170,255,200,%)', 0.18], [1.25, 34, 'rgba(90,140,255,%)', 0.08], [1.6, 14, 'rgba(255,120,200,%)', 0.1]];
+        for (const [tpos, r, c, a] of ghosts) {
+          const gx = q.x + dx * tpos, gy = q.y + dy * tpos, rr = r * s;
+          const gr = ctx.createRadialGradient(gx, gy, 0, gx, gy, rr);
+          gr.addColorStop(0, c.replace('%', (a * k).toFixed(3)));
+          gr.addColorStop(tpos === 0 ? 1 : 0.7, c.replace('%', (a * k * 0.5).toFixed(3)));
+          gr.addColorStop(1, c.replace('%', '0'));
+          ctx.fillStyle = gr;
+          ctx.beginPath(); ctx.arc(gx, gy, rr, 0, 6.283); ctx.fill();
+        }
+        // anamorphic streak
+        const sg = ctx.createLinearGradient(q.x - w * 0.4, 0, q.x + w * 0.4, 0);
+        sg.addColorStop(0, 'rgba(150,200,255,0)'); sg.addColorStop(0.5, `rgba(200,230,255,${0.18 * k})`); sg.addColorStop(1, 'rgba(150,200,255,0)');
+        ctx.fillStyle = sg; ctx.fillRect(q.x - w * 0.4, q.y - 1.2 * s, w * 0.8, 2.4 * s);
+        ctx.restore();
+      }
+    }
+  }
+
   // --- world markers ---
   for (const o of g.ships) {
     if (!o.alive || o === p || o === P.target) continue;
@@ -133,6 +163,22 @@ export function drawHud(ctx, g, P) {
     } else if (!P.target) {
       arrow(ctx, P, nav, C.warn, s);
     }
+  }
+
+  // mines within sensor range
+  let nearestMine = null, nmd = 400;
+  for (const mn of g.mines || []) { if (mn.alive) { const d = p.pos.distanceTo(mn.pos); if (d < nmd) { nmd = d; nearestMine = mn; } } }
+  for (const mn of g.mines || []) {
+    if (!mn.alive) continue;
+    const d = p.pos.distanceTo(mn.pos);
+    if (d > 1100) continue;
+    const q = project(P, mn.pos);
+    if (q.behind || q.x < 0 || q.x > w || q.y < 0 || q.y > h) continue;
+    const r = 5 * s;
+    ctx.strokeStyle = '#ff7a3a'; ctx.lineWidth = 1.4 * s; ctx.globalAlpha = Math.max(0.35, 1 - d / 1100);
+    ctx.beginPath(); ctx.moveTo(q.x - r, q.y - r); ctx.lineTo(q.x + r, q.y + r); ctx.moveTo(q.x + r, q.y - r); ctx.lineTo(q.x - r, q.y + r); ctx.stroke();
+    if (mn === nearestMine) { ctx.fillStyle = '#ff7a3a'; ctx.font = `700 ${8 * s}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText('MINE', q.x, q.y + r + 2 * s); }
+    ctx.globalAlpha = 1;
   }
 
   // objective markers (pickups, scan zone, intercept target, docking)
@@ -275,6 +321,7 @@ export function drawHud(ctx, g, P) {
     blip(o.pos, o === tg ? '#ffffff' : o.isPlayer ? o.pilot.color : o.team === 3 ? '#9fe8ff' : (o.team === 0 ? C.ok : C.foe), (o.def.capital ? 5 : 3) * s);
   }
   for (const m of g.missiles) if (m.team === 1) blip(m.pos, C.warn, 2.5 * s);
+  for (const mn of g.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < 2500) blip(mn.pos, '#ff7a3a', 2 * s);
   if (nav) blip(nav, C.warn, 4 * s);
   for (const mk of g.markers()) blip(mk.pos, mk.color, 3.5 * s);
 

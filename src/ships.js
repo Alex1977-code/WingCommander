@@ -17,6 +17,9 @@ export const SHIPS = {
   gate: { name: 'Sprungtor', team: 3, capital: true, ghost: true, invulnerable: true, hp: 1e9, speed: 0, radius: 340, box: [1, 1, 1], turrets: [] },
   prison: { name: 'Ketten', team: 3, capital: true, invulnerable: true, hp: 1e9, speed: 22, radius: 55, box: [15, 13, 48], turrets: [] },
   valkyrie: { name: 'TUS Valkyrie', team: 3, capital: true, invulnerable: true, wreck: true, hp: 1e9, speed: 0, radius: 215, box: [34, 30, 205], turrets: [] },
+  tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [15, 13, 48], dmg: 5, turrets: [[0, 14, 0]] },
+  habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
+  relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
   aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 215, box: [34, 30, 205], dmg: 7, turrets: [[30, 20, 120], [-30, 20, 120], [30, 20, -60], [-30, 20, -60], [0, 34, 0], [0, -26, 60]] },
   transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [15, 13, 48], dmg: 6, turrets: [[0, 14, 0]] },
   zerstoerer: { name: 'Zerstörer', team: 1, capital: true, hp: 2100, speed: 18, radius: 135, box: [24, 20, 125], dmg: 8, score: 2000, turrets: [[20, 14, 70], [-20, 14, 70], [0, 22, -20], [0, -18, 20], [0, 18, -90]] },
@@ -235,10 +238,11 @@ function capital(type) {
       const burn = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.9, 0.2) });
       for (let i = 0; i < 6; i++) B(2, 2, 2, burn, (Math.random() - 0.5) * 50, 18 + Math.random() * 6, (Math.random() - 0.5) * 300);
     }
-  } else if (type === 'transport' || type === 'prison') {
+  } else if (type === 'transport' || type === 'prison' || type === 'tanker') {
     B(22, 20, 70, hull, 0, 0, 5);
     const bow = B(22, 20, 22, hull, 0, 0, 48); bow.scale.set(0.6, 0.6, 1);
-    B(26, 6, 40, accent, 0, 0, 5);
+    if (type === 'tanker') { for (const sx of [-1, 1]) mk(g, new THREE.CylinderGeometry(7, 7, 52, 14), hull, sx * 9, 11, 2).rotation.x = Math.PI / 2; }
+    else B(26, 6, 40, accent, 0, 0, 5);
     for (const sx of [-1, 1]) B(8, 12, 50, dark, sx * 15, 0, -5);
     B(10, 6, 14, dark, 0, 13, 30);
     B(24, 22, 14, dark, 0, 0, -36);
@@ -255,7 +259,16 @@ function capital(type) {
     B(14.4, 1.2, 30, strip, 0, 22, -36);
     B(36, 30, 36, dark, 0, 0, -118);
     for (const [ex, ey] of [[-10, 0], [10, 0], [0, 9]]) engine(g, engines, ex, ey, -136, 7, glow, dark, pal.glow);
-  } else if (type === 'station' || type === 'gate') {
+  } else if (type === 'relay') {
+    B(22, 104, 22, hull, 0, 0, 0);
+    B(30, 8, 30, dark, 0, -50, 0);
+    const dish = mk(g, new THREE.ConeGeometry(30, 14, 16, 1, true), dark, 0, 60, 0);
+    dish.rotation.x = Math.PI;
+    mk(g, new THREE.TorusGeometry(26, 1.4, 6, 40), strip, 0, 20, 0).rotation.x = Math.PI / 2;
+    mk(g, new THREE.TorusGeometry(26, 1.4, 6, 40), strip, 0, -20, 0).rotation.x = Math.PI / 2;
+    mk(g, new THREE.SphereGeometry(6, 12, 8), glow, 0, 70, 0);
+    for (const a of [0, 2.1, 4.2]) mk(g, new THREE.BoxGeometry(4, 4, 46), dark, Math.cos(a) * 16, 0, Math.sin(a) * 16).rotation.y = -a;
+  } else if (type === 'station' || type === 'gate' || type === 'habitat') {
     const gate = type === 'gate';
     const R = gate ? 300 : 150;
     mk(g, new THREE.TorusGeometry(R, gate ? 24 : 16, 14, 72), dark);
@@ -272,7 +285,10 @@ function capital(type) {
         spoke.rotation.z = a - Math.PI / 2;
       }
     }
-    if (gate) {
+    if (type === 'habitat') {
+      mk(g, new THREE.CylinderGeometry(30, 30, 90, 20), hull);
+      for (const sy of [-1, 1]) mk(g, new THREE.CylinderGeometry(46, 46, 10, 24), dark, 0, sy * 50, 0);
+    } else if (gate) {
       const field = new THREE.Mesh(new THREE.CircleGeometry(R - 24, 64), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.2, 2.4), transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
       g.add(field);
     } else {

@@ -78,6 +78,7 @@ export const ENDINGS = {
 
 export const CUTSCENES = {
   prolog: {
+    music: 'menu',
     sky: SKY.keth,
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 12 },
@@ -99,6 +100,7 @@ export const CUTSCENES = {
   },
 
   samariter: {
+    music: 'victory',
     sky: SKY.korridor,
     cast: [
       { id: 'sam', type: 'transport', pos: A(0, 0, 0), dir: A(0.3, 0, 1), speed: 38 },
@@ -115,6 +117,7 @@ export const CUTSCENES = {
   },
 
   veyl: {
+    music: 'tension',
     sky: SKY.tessa,
     rocks: { at: A(0, 0, 200), n: 40, spread: 900 },
     cast: [
@@ -134,6 +137,7 @@ export const CUTSCENES = {
   },
 
   ambush: {
+    music: 'tension',
     sky: SKY.alarm,
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
@@ -155,6 +159,7 @@ export const CUTSCENES = {
   },
 
   station: {
+    music: 'victory',
     sky: SKY.brut,
     cast: [
       { id: 's', type: 'station', pos: A(0, 0, 0), speed: 0 },
@@ -171,6 +176,7 @@ export const CUTSCENES = {
   },
 
   valkyrie: {
+    music: 'sad',
     sky: SKY.grab,
     rocks: { at: A(0, 0, 0), n: 24, spread: 900 },
     cast: [
@@ -187,6 +193,7 @@ export const CUTSCENES = {
   },
 
   sacrifice: {
+    music: 'sad',
     sky: SKY.sturm,
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
@@ -213,6 +220,7 @@ export const CUTSCENES = {
   },
 
   rescue: {
+    music: 'victory',
     sky: SKY.mahlstrom,
     cast: [
       { id: 'pr', type: 'prison', pos: A(0, 0, 0), speed: 22 },
@@ -231,6 +239,7 @@ export const CUTSCENES = {
   },
 
   gate: {
+    music: 'briefing',
     sky: SKY.orun,
     cast: [
       { id: 'g', type: 'gate', pos: A(0, 0, 0), speed: 0 },
@@ -251,6 +260,7 @@ export const CUTSCENES = {
   },
 
   apotheose: {
+    music: 'tension',
     sky: SKY.kern,
     cast: [
       { id: 'd', type: 'dreadnought', pos: A(0, 0, 0), speed: 9 },
@@ -268,6 +278,7 @@ export const CUTSCENES = {
   },
 
   finale: {
+    music: 'victory',
     sky: SKY.kern,
     cast: [
       { id: 'd', type: 'dreadnought', pos: A(0, 0, 0), speed: 9 },
@@ -295,7 +306,7 @@ export const CUTSCENES = {
 export const MISSIONS = [
   // ============================== AKT I ==============================
   {
-    id: 'm1', no: 1, act: 'I', title: 'Feuertaufe', sector: 'Keth-System · Äußerer Gürtel', ship: 'sperber', wingman: 'rook', sky: SKY.keth,
+    id: 'm1', act: 'I', title: 'Feuertaufe', sector: 'Keth-System · Äußerer Gürtel', ship: 'sperber', wingman: 'rook', sky: SKY.keth,
     briefing: [
       { who: 'brandt', text: 'Routinepatrouille. Unsere Langstreckensensoren melden Geisterkontakte an zwei Navigationspunkten im äußeren Gürtel.' },
       { who: 'brandt', text: 'Vermutlich Aufklärungsdrohnen der Aszendenz, Typ „Dorn“. Finden, identifizieren, vernichten.' },
@@ -314,10 +325,32 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Solide Arbeit, {cs}. Die Drohnen haben vor ihrer Zerstörung gesendet. Die Aszendenz weiß jetzt, wo wir sind.' },
       { who: 'rook', text: 'Dann wissen sie auch, dass wir zurückbeißen.' },
     ],
+    next: 'a1',
+  },
+  {
+    id: 'a1', act: 'I', title: 'Notruf von Halden-7', sector: 'Keth-System · Bergbaukolonie Halden-7', ship: 'sperber', wingman: 'rook',
+    sky: { a: '#2b6cb0', b: '#6b2fb3', seed: 3.3, planet: ['#3a3226', '#b89068'], planetDir: [0.5, -0.2, 0.8] },
+    briefing: [
+      { who: 'flug', text: 'Notruf von der Bergbaukolonie Halden-7: Die Station ist von Dorns zerschossen worden. Vier Rettungskapseln treiben im Asteroidengürtel.' },
+      { who: 'brandt', text: 'Die Lebenserhaltung der Kapseln reicht noch vier Minuten. Fliegen Sie dicht an jede Kapsel heran, Ihr Traktorstrahl übernimmt den Rest.' },
+      { who: 'rook', text: 'Retten geht vor Kämpfen, {cs}. Ich halte dir die Dorns vom Leib. Du sammelst.' },
+    ],
+    objectives: ['Vier Rettungskapseln bergen, bevor die Luft ausgeht', 'Die Angreifer abwehren', 'Zur TUS Aurora zurückkehren'],
+    navs: [
+      { name: 'Halden-7', pos: A(-3000, 300, 8000), type: 'pickup', pickups: 4, pickupLabel: 'RETTUNGSKAPSEL', limit: 240, limitFail: 'Die Lebenserhaltung der Kapseln ist erloschen.',
+        objective: 'Berge die Rettungskapseln', asteroids: 22, waves: [[['dorn', 3]], [['dorn', 2], ['klinge', 1]]],
+        onArrive: [{ who: 'rook', text: 'Kapseln auf dem Schirm! Grüne Markierungen. Los, {cs}, die Uhr läuft.' }],
+        onWave: [null, { who: 'rook', text: 'Eine Klinge! Die ist schneller als die Dorns. Lass dich nicht von den Kapseln weglocken.' }],
+        onClear: [{ who: 'flug', text: 'Alle Kapseln an Bord. Vierzehn Überlebende. Gute Arbeit, Nachtfalken.' }] },
+    ],
+    win: [
+      { who: 'brandt', text: 'Vierzehn Bergleute gerettet. Einer von ihnen sagt, die Dorns hätten die Station erst gescannt und dann angegriffen.' },
+      { who: 'rook', text: 'Sie suchen etwas. Oder jemanden. Mir gefällt das nicht, {cs}.' },
+    ],
     next: 'm2',
   },
   {
-    id: 'm2', no: 2, act: 'I', title: 'Der Samariter', sector: 'Keth-System · Sprungkorridor', ship: 'sperber', wingman: 'kolibri', sky: SKY.korridor,
+    id: 'm2', act: 'I', title: 'Der Samariter', sector: 'Keth-System · Sprungkorridor', ship: 'sperber', wingman: 'kolibri', sky: SKY.korridor,
     postCut: 'samariter',
     briefing: [
       { who: 'brandt', text: 'Das Lazarettschiff „Samariter“ evakuiert zweitausend Kolonisten von Keth IV. Langsam, unbewaffnet, unersetzlich.' },
@@ -348,7 +381,7 @@ export const MISSIONS = [
     next: 'm3',
   },
   {
-    id: 'm3', no: 3, act: 'I', title: 'Stille Signale', sector: 'Keth-Nebel', ship: 'falke', wingman: 'kolibri', sky: SKY.nebel,
+    id: 'm3', act: 'I', title: 'Stille Signale', sector: 'Keth-Nebel', ship: 'falke', wingman: 'kolibri', sky: SKY.nebel,
     scene: { place: 'Messe der Aurora', lines: [
       { who: 'erz', text: 'Nach dem Einsatz. In der Messe riecht es nach verbranntem Kaffee und Maschinenöl.' },
       { who: 'kolibri', text: 'Wir haben die Samariter da rausgeholt. Rook, du schuldest mir einen Drink.', ifNot: 'samariterLost' },
@@ -379,10 +412,35 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Die Aszendenz sammelt eine Flotte. Und sie kennt unsere Codes. Das bleibt vorerst unter uns.' },
       { who: 'holt', text: 'Vermutlich erbeutete Daten der Valkyrie. Kein Grund zur Panik, Kapitänin.' },
     ],
+    next: 'a2',
+  },
+  {
+    id: 'a2', act: 'I', title: 'Treibstoff', sector: 'Keth-Nebel · Depot Arne', ship: 'falke', wingman: 'kolibri',
+    sky: { a: '#1d7f8c', b: '#30289c', seed: 10.6, planet: ['#16303a', '#6cb0c0'], planetDir: [-0.5, 0.3, 0.8] },
+    briefing: [
+      { who: 'brandt', text: 'Die Aurora hat bei der Evakuierung mehr Treibstoff verbraucht als geplant. Zwei Tanker warten am Depot Arne.' },
+      { who: 'brandt', text: 'Die Aszendenz hat die Route vermint. Eskortieren Sie die Tanker zur Aurora. Mindestens einer muss durchkommen.' },
+      { who: 'kolibri', text: 'Minen jagen alles, was nach Union riecht, auch die Tanker. Schieß sie ab, bevor sie andocken. Rote Kreuze auf dem Schirm.' },
+    ],
+    objectives: ['Am Depot Arne zu den Tankern stoßen', 'Die Tanker zur Aurora eskortieren (mindestens einer)', 'Minen abschießen, bevor sie die Tanker erreichen'],
+    noReturn: true,
+    navs: [
+      { name: 'Depot Arne', pos: A(2600, 0, 9000), type: 'convoy', convoy: { types: ['tanker', 'tanker'], speed: 75 }, objective: 'Eskortiere die Tanker',
+        failText: 'Beide Tanker wurden zerstört.',
+        mines: { at: A(1300, -20, 4600), n: 28, spread: 900 },
+        waves: [[['dorn', 3]], [['hammer', 2], ['dorn', 1]], [['klinge', 2]], [['hammer', 2], ['dorn', 2]]],
+        onArrive: [{ who: 'kolibri', text: 'Tanker in Sicht, sie legen ab. Ab jetzt sind wir ihr Schutzengel, {cs}.' }],
+        onWave: [null, { who: 'kolibri', text: 'Bomber auf die Tanker! Die zuerst!' }, { who: 'flug', text: 'Die Aurora hat den Konvoi auf dem Schirm. Noch ein Stück!' }],
+        onClear: [{ who: 'flug', text: 'Tanker angedockt. Wir haben wieder Treibstoff. Danke, Nachtfalken.' }] },
+    ],
+    win: [
+      { who: 'kolibri', text: 'Wer hätte gedacht, dass Tanker so nervenaufreibend sein können. Ich brauch jetzt einen Kaffee. Einen großen.' },
+      { who: 'holt', text: 'Die Minen lagen genau auf unserer geplanten Route. Zufall, vermutlich.' },
+    ],
     next: 'm4',
   },
   {
-    id: 'm4', no: 4, act: 'I', title: 'Im Trümmerfeld', sector: 'Tessa-System · Zerbrochener Mond', ship: 'falke', wingman: 'rook', sky: SKY.tessa,
+    id: 'm4', act: 'I', title: 'Im Trümmerfeld', sector: 'Tessa-System · Zerbrochener Mond', ship: 'falke', wingman: 'rook', sky: SKY.tessa,
     preCut: 'veyl',
     briefing: [
       { who: 'brandt', text: 'Wir haben die Übertragung entschlüsselt. Veyl wartet im Trümmerfeld des zerbrochenen Mondes von Tessa. Mit einem Depot.' },
@@ -405,7 +463,7 @@ export const MISSIONS = [
     next: 'm5',
   },
   {
-    id: 'm5', no: 5, act: 'I', title: 'Alarmstart', sector: 'Tessa-System · Position der Aurora', ship: 'falke', wingman: 'kolibri', sky: SKY.alarm,
+    id: 'm5', act: 'I', title: 'Alarmstart', sector: 'Tessa-System · Position der Aurora', ship: 'falke', wingman: 'kolibri', sky: SKY.alarm,
     preCut: 'ambush',
     briefing: [
       { who: 'brandt', text: 'Drei Bomberwellen im Anflug auf die Aurora. Unsere Geschütze halten die Jäger auf Abstand, aber nicht die Torpedos.' },
@@ -427,7 +485,7 @@ export const MISSIONS = [
     next: 'm6',
   },
   {
-    id: 'm6', no: 6, act: 'I', title: 'Hammerschlag', sector: 'Brutstätte Keth', ship: 'greif', wingman: 'rook', sky: SKY.brut,
+    id: 'm6', act: 'I', title: 'Hammerschlag', sector: 'Brutstätte Keth', ship: 'greif', wingman: 'rook', sky: SKY.brut,
     postCut: 'station',
     scene: { place: 'Brücke der Aurora', lines: [
       { who: 'brandt', text: 'Fähnrich. Sie haben die Signale im Nebel als Erster gesehen. Ich will Ihre ehrliche Einschätzung.' },
@@ -464,7 +522,7 @@ export const MISSIONS = [
 
   // ============================== AKT II ==============================
   {
-    id: 'm7', no: 7, act: 'II', title: 'Grabstätte', sector: 'Tessa Prime · Wrackfeld', ship: 'falke', wingman: 'rook', sky: SKY.grab,
+    id: 'm7', act: 'II', title: 'Grabstätte', sector: 'Tessa Prime · Wrackfeld', ship: 'falke', wingman: 'rook', sky: SKY.grab,
     preCut: 'valkyrie',
     briefing: [
       { who: 'brandt', text: 'Das Wrack der TUS Valkyrie treibt seit zehn Jahren im Orbit von Tessa Prime. Vier Flugschreiber senden noch.' },
@@ -485,10 +543,34 @@ export const MISSIONS = [
       { who: 'rook', text: 'Veyl ist Aric, {cs}. Sie haben ihn genommen und daraus… das gemacht.' },
       { who: 'brandt', text: 'Und noch etwas: In den Daten steckt ein Sendeprotokoll. Jemand auf der Aurora funkt der Aszendenz unsere Position.' },
     ],
+    next: 'b1',
+  },
+  {
+    id: 'b1', act: 'II', title: 'Keth IV', sector: 'Keth IV · Orbitalhabitat', ship: 'greif', wingman: 'rook',
+    sky: { a: '#2f6fd0', b: '#28a28e', seed: 6.2, planet: ['#2f4a2c', '#9cc48a'], planetDir: [0.1, -0.4, 0.9] },
+    protect: 'habitat',
+    briefing: [
+      { who: 'brandt', text: 'Eine Angriffsflotte der Aszendenz hält auf Keth IV zu. Im Orbitalhabitat leben vierzigtausend Menschen, die sich geweigert haben zu gehen.' },
+      { who: 'brandt', text: 'Das Habitat hat eigene Geschütze, aber gegen Bomber ist es wehrlos. Halten Sie sie auf.' },
+      { who: 'rook', text: 'Wenn Aric bei ihnen ist… nein. Heute nicht. Heute fliege ich für die vierzigtausend da drin.' },
+    ],
+    objectives: ['Das Habitat Keth IV verteidigen', 'Alle Angriffswellen vernichten', 'Zur TUS Aurora zurückkehren'],
+    navs: [
+      { name: 'Habitat Keth IV', pos: A(1500, 200, 8500), anchor: true, objective: 'Verteidige das Habitat',
+        waves: [[['dorn', 4]], [['hammer', 3], ['klinge', 1]], [['hammer', 3], ['klinge', 2]], [['archon', 1], ['hammer', 2], ['dorn', 2]]],
+        onArrive: [{ who: 'flug', text: 'Erste Welle im Anflug auf das Habitat. Alle Maschinen: Abfangen!' }],
+        onWave: [null, { who: 'rook', text: 'Bomber! Wenn die das Habitat treffen, gibt es dort kein Entkommen.' }, { who: 'flug', text: 'Hüllenbruch im Ring drei! Sie dürfen nicht noch einmal treffen!' },
+          { who: 'veyl', text: 'Tobias. Vierzigtausend Seelen, die aufsteigen könnten. Und du stehst ihnen im Weg.' }],
+        onClear: [{ who: 'flug', text: 'Das Habitat hält! Die Kolonisten jubeln über alle Frequenzen!' }] },
+    ],
+    win: [
+      { who: 'brandt', text: 'Keth IV steht. Aber die Funkaufklärung zeigt: Der Angriff wurde von einer Union-Frequenz aus koordiniert. Von der Aurora.' },
+      { who: 'rook', text: 'Dann ist der Verräter einer von uns. Jemand, mit dem wir jeden Tag essen.' },
+    ],
     next: 'm8',
   },
   {
-    id: 'm8', no: 8, act: 'II', title: 'Der Verräter', sector: 'Tessa-System · Sprungpunkt Ost', ship: 'falke', wingman: 'kolibri', sky: SKY.asche,
+    id: 'm8', act: 'II', title: 'Der Verräter', sector: 'Tessa-System · Sprungpunkt Ost', ship: 'falke', wingman: 'kolibri', sky: SKY.asche,
     scene: { place: 'Hangardeck', lines: [
       { who: 'erz', text: 'Nachtschicht. Rook sitzt auf der Tragfläche seines Greifs und starrt in die Dunkelheit hinter dem Hangarschild.' },
       { who: 'rook', text: 'Zehn Jahre habe ich gedacht, er ist tot. Und jetzt wünschte ich, er wäre es.' },
@@ -531,7 +613,7 @@ export const MISSIONS = [
     next: 'm9',
   },
   {
-    id: 'm9', no: 9, act: 'II', title: 'Nebelwand', sector: 'Sturmnebel von Varn', ship: 'greif', wingman: 'rook', sky: SKY.sturm,
+    id: 'm9', act: 'II', title: 'Nebelwand', sector: 'Sturmnebel von Varn', ship: 'greif', wingman: 'rook', sky: SKY.sturm,
     postCut: 'sacrifice', set: { rookDead: true, kolibriCaptured: true },
     briefing: [
       { who: 'brandt', text: 'Sie haben uns im Sturmnebel gestellt. Ein Treffer hat den Sprungantrieb beschädigt. Die Techniker brauchen drei Minuten.' },
@@ -555,7 +637,7 @@ export const MISSIONS = [
     next: 'm10',
   },
   {
-    id: 'm10', no: 10, act: 'II', title: 'Fährte', sector: 'Der Mahlstrom', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
+    id: 'm10', act: 'II', title: 'Fährte', sector: 'Der Mahlstrom', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
     scene: { place: 'Hangardeck · Gedenkfeier', lines: [
       { who: 'erz', text: 'Die Besatzung steht stumm vor einem leeren Startplatz. Jemand hat Rooks Helm auf die Tragfläche eines Greifs gestellt.' },
       { who: 'brandt', text: 'Major Adeyemi hat einmal gesagt: „Bring den Vogel heil zurück.“ Er hat sich nicht daran gehalten. Dafür leben wir noch.' },
@@ -587,7 +669,7 @@ export const MISSIONS = [
 
   // ============================== AKT III ==============================
   {
-    id: 'm11', no: 11, act: 'III', title: 'Ketten', sector: 'Orun-Vorfeld', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
+    id: 'm11', act: 'III', title: 'Ketten', sector: 'Orun-Vorfeld', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
     postCut: 'rescue',
     scene: { place: 'Brücke der Aurora', lines: [
       { who: 'brandt', text: 'Die Admiralität hat entschieden. Der Angriff auf die Orun-Passage beginnt in sechs Stunden. Jeder Pilot wird dort gebraucht.' },
@@ -633,7 +715,7 @@ export const MISSIONS = [
     next: 'm12',
   },
   {
-    id: 'm12', no: 12, act: 'III', title: 'Speerspitze', sector: 'Orun-Passage · Sprungtor', ship: 'greif', wingman: 'kolibri', sky: SKY.orun,
+    id: 'm12', act: 'III', title: 'Speerspitze', sector: 'Orun-Passage · Sprungtor', ship: 'greif', wingman: 'kolibri', sky: SKY.orun,
     postCut: 'gate',
     briefing: [
       { who: 'brandt', text: 'Der Zerstörer „Dogma“ bewacht das Sprungtor der Orun-Passage. Solange er dort steht, kommt unsere Flotte nicht durch.' },
@@ -657,7 +739,7 @@ export const MISSIONS = [
     next: 'm13',
   },
   {
-    id: 'm13', no: 13, act: 'III', title: 'Torwächter', sector: 'Jenseits von Orun', ship: 'greif', wingman: 'kolibri', sky: SKY.orun,
+    id: 'm13', act: 'III', title: 'Torwächter', sector: 'Jenseits von Orun', ship: 'greif', wingman: 'kolibri', sky: SKY.orun,
     briefing: [
       { who: 'brandt', text: 'Wir sind durch. Aber eine Wächterstation versucht, das Tor hinter uns zu schließen. Dann sitzt die halbe Flotte fest.' },
       { who: 'brandt', text: 'Zerstören Sie die Station, bevor sie das Tor kollabieren lässt.' },
@@ -677,10 +759,57 @@ export const MISSIONS = [
     win: [
       { who: 'brandt', text: 'Unsere Langstreckensensoren sehen sie jetzt: die Apotheose. Und davor die gesamte Schattenflotte.' },
     ],
+    next: 'c1',
+  },
+  {
+    id: 'c1', act: 'III', title: 'Rettungsanker', sector: 'Jenseits von Orun · Wrack der Ares II', ship: 'greif', wingman: 'kolibri',
+    sky: { a: '#2a4d8f', b: '#1aa38f', seed: 31.5, planet: ['#1f2440', '#8fa4ff'], planetDir: [-0.2, 0.4, 0.9] },
+    briefing: [
+      { who: 'brandt', text: 'Der Kreuzer Ares II ist beim Kampf um das Tor auseinandergebrochen. Fünf Rettungskapseln treiben in einem Minenfeld der Aszendenz.' },
+      { who: 'juno', text: 'Die Ares II ist das Schwesterschiff meiner alten Ares. Ich kenne Leute auf diesem Schiff, {cs}. Bitte.' },
+      { who: 'brandt', text: 'Vier Minuten, dann ist ihr Sauerstoff aufgebraucht. Vorsicht mit den Minen: Sie folgen Ihnen.' },
+    ],
+    objectives: ['Fünf Rettungskapseln der Ares II bergen', 'Minen meiden oder abschießen', 'Zur TUS Aurora zurückkehren'],
+    navs: [
+      { name: 'Wrackfeld Ares II', pos: A(2200, -300, 8000), type: 'pickup', pickups: 5, pickupLabel: 'RETTUNGSKAPSEL', limit: 240, limitFail: 'Der Sauerstoff in den Kapseln ist aufgebraucht.',
+        objective: 'Berge die Rettungskapseln', mines: { n: 34, spread: 700 }, asteroids: 12,
+        waves: [[['klinge', 2], ['dorn', 2]], [['dorn', 3]]],
+        onArrive: [{ who: 'juno', text: 'Ich sehe die Kapseln! Und… verdammt, überall Minen. Langsam, {cs}.' }],
+        onClear: [{ who: 'juno', text: 'Alle fünf an Bord. Kapitän Olsen lebt. Danke, {cs}. Danke.' }] },
+    ],
+    win: [
+      { who: 'brandt', text: 'Einundzwanzig Überlebende der Ares II. Und ihr Kapitän hat etwas mitgebracht: die Position der Relaisstationen, über die die Schattenflotte kommuniziert.' },
+    ],
+    next: 'c2',
+  },
+  {
+    id: 'c2', act: 'III', title: 'Funkstille', sector: 'Orun-Kern · Relaisnetz', ship: 'greif', wingman: 'kolibri',
+    sky: { a: '#c0392b', b: '#8e44ad', seed: 33.7, planet: ['#3b1f2b', '#e0a0a0'], planetDir: [0.4, 0.2, 0.9] },
+    briefing: [
+      { who: 'brandt', text: 'Drei Relaisstationen verbinden die Schattenflotte mit der Apotheose. Zerstören Sie alle drei, und die Flotte kämpft blind.' },
+      { who: 'kolibri', text: 'Endlich mal ein Ziel, das nicht ausweicht. Drei Türme, drei Feuerwerke.', ifNot: 'kolibriLost' },
+      { who: 'juno', text: 'Drei Türme. Nach dem Wrackfeld fühlt sich das fast wie Urlaub an.', if: 'kolibriLost' },
+    ],
+    objectives: ['Relaisstation Alpha zerstören', 'Relaisstation Beta zerstören', 'Relaisstation Gamma zerstören'],
+    noReturn: true,
+    navs: [
+      { name: 'Relais Alpha', pos: A(-2200, 200, 7000), objective: 'Zerstöre Relais Alpha', waves: [[['relay', 1], ['klinge', 2]]],
+        onArrive: [{ who: 'flug', text: 'Relais Alpha voraus. Geschütztürme aktiv.' }],
+        onClear: [{ who: 'flug', text: 'Alpha ist still. Weiter zu Beta.' }] },
+      { name: 'Relais Beta', pos: A(1800, -300, 12500), objective: 'Zerstöre Relais Beta', mines: { n: 20, spread: 600 }, waves: [[['relay', 1], ['dorn', 3]]],
+        onArrive: [{ who: 'flug', text: 'Beta ist vermint. Vorsicht beim Anflug.' }],
+        onClear: [{ who: 'flug', text: 'Beta ist still. Noch eine.' }] },
+      { name: 'Relais Gamma', pos: A(-1000, 400, 18000), objective: 'Zerstöre Relais Gamma', waves: [[['relay', 1], ['hammer', 2], ['klinge', 1]], [['klinge', 2]]],
+        onArrive: [{ who: 'veyl', text: 'Ihr schneidet mir die Stimme ab? Dann höre ich euch eben beim Sterben zu.' }],
+        onClear: [{ who: 'brandt', text: 'Funkstille in der gesamten Schattenflotte! Jetzt oder nie.' }] },
+    ],
+    win: [
+      { who: 'brandt', text: 'Die Schattenflotte ist taub und blind. Wir greifen an, sobald alle Maschinen aufgetankt sind.' },
+    ],
     next: 'm14',
   },
   {
-    id: 'm14', no: 14, act: 'III', title: 'Schattenflotte', sector: 'Orun-Kern · Vorfeld', ship: 'greif', wingman: 'kolibri', sky: SKY.kern,
+    id: 'm14', act: 'III', title: 'Schattenflotte', sector: 'Orun-Kern · Vorfeld', ship: 'greif', wingman: 'kolibri', sky: SKY.kern,
     scene: { place: 'Hangardeck · Die Nacht vor der Schlacht', lines: [
       { who: 'kolibri', text: 'Kannst du auch nicht schlafen? Ich sehe immer noch ihre Gesichter. Die anderen Gefangenen auf der Ketten.', ifNot: 'kolibriLost' },
       { who: 'kolibri', text: 'Hey, {cs}. Wenn das morgen schiefgeht…', ifNot: 'kolibriLost', choices: [
@@ -714,7 +843,7 @@ export const MISSIONS = [
     next: 'm15',
   },
   {
-    id: 'm15', no: 15, act: 'III', title: 'Morgenröte', sector: 'Orun-Kern · Die Apotheose', ship: 'greif', wingman: 'kolibri', sky: SKY.kern,
+    id: 'm15', act: 'III', title: 'Morgenröte', sector: 'Orun-Kern · Die Apotheose', ship: 'greif', wingman: 'kolibri', sky: SKY.kern,
     preCut: 'apotheose', postCut: 'finale', final: true,
     briefing: [
       { who: 'brandt', text: 'Operation Morgenröte. Die Apotheose koordiniert jede Einheit der Aszendenz. Fällt sie, bricht ihr Netz zusammen.' },
@@ -745,3 +874,9 @@ export const MISSIONS = [
 ];
 
 export const MISSION_BY_ID = Object.fromEntries(MISSIONS.map((m) => [m.id, m]));
+// number missions along the story path
+{
+  let id = 'm1', n = 1;
+  const seen = new Set();
+  while (id && !seen.has(id)) { seen.add(id); MISSION_BY_ID[id].no = n++; id = MISSION_BY_ID[id].next; }
+}

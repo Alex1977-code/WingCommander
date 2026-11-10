@@ -1,7 +1,7 @@
 # Sternenfront – Der Perseus-Krieg
 
 Ein mobiles 3D-Weltraumkampfspiel im Stil klassischer Space-Combat-Sims: Trägerschiff, Flügelmann,
-Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 15 Missionen. Eigenes Universum, eigene Story,
+Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 20 Missionen. Eigenes Universum, eigene Story,
 eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt sich als App installieren
 („Zum Startbildschirm hinzufügen“); einmal geladen, funktioniert es auch offline.
 
@@ -9,17 +9,20 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
 
 - **3D-Grafik mit Three.js**: PBR-Materialien, Nebel-Skybox per Shader, Planeten mit Atmosphäre,
   Bloom, Partikel-Explosionen, Asteroidenfelder – alles prozedural, keine Asset-Downloads
-- **Kampagne in 3 Akten**: 15 Missionen mit eigener Story (Mentor, Verräter, Gefangennahme, Rettung, Finale)
+- **Kampagne in 3 Akten**: 20 Missionen mit eigener Story (Mentor, Verräter, Gefangennahme, Rettung, Finale)
   - 11 Zwischensequenzen in der 3D-Engine mit Kamerafahrten, Untertiteln und Titelkarten
   - Verzweigungen: Manche Niederlagen führen die Geschichte anders weiter statt zum Neustart
   - Bordszenen mit Entscheidungen, die Sympathie, Flügelmann-Können und den Verlauf beeinflussen
   - Zwei Enden („Morgenröte“ und „Asche und Sterne“)
-  - Missionstypen: Patrouille, Geleitschutz, Aufklärung, Bergung, Abfangen, Durchhalten, Flucht, Befreiung,
-    Angriff auf Zerstörer, Stationen und das Kommandoschiff
+  - Missionstypen: Patrouille, Geleitschutz, Konvoi-Eskorte, Rettung, Aufklärung, Bergung, Abfangen, Durchhalten,
+    Flucht, Befreiung, Minenfelder, Angriff auf Zerstörer, Stationen und das Kommandoschiff
 - **Kampf**: 3 fliegbare Jäger, 4 Feindtypen inkl. Ass-Pilot, Zerstörer und Kommandoschiff mit Geschütztürmen,
   Lenkraketen, Schilde, Nachbrenner, Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
 - **Touch-Steuerung**: virtueller Stick, Feuer/Rakete/Boost/Ziel, Schubregler – dazu Tastatur am Desktop
-- **Synthetischer Sound** über WebAudio
+- **Effekte**: Explosionen mit Lichtblitz, Feuerball, Rauch und Wrackteilen; Schutzschild-Blasen, Triebwerksspuren,
+  Raketenrauch, brennende Großkampfschiffe, Linsenreflexe der Sonne
+- **Musik und Sound**: eigener Synth-Score in d-Moll mit Hauptthema, der sich anpasst (Menü, Besprechung, Reise,
+  Kampf, Spannung, Trauer, Sieg); geschichtete Soundeffekte mit Hall – alles live per WebAudio erzeugt
 - **Sci-Fi-Präsentation**: Texte entschlüsseln sich aus Zufallszeichen, Hologramm-Porträts der Figuren,
   Glitch-Titel mit RGB-Versatz, Scanlines, CRT-Einblendungen, Kino-Einblendung zum Missionsstart
 - **Gamepads**: Xbox-, PlayStation- und Bluetooth-Controller im Flug und in allen Menüs

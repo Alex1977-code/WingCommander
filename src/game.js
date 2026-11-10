@@ -25,6 +25,7 @@ const COL = {
   shield: new THREE.Color(0.6, 1.6, 3), spark: new THREE.Color(3, 1.8, 0.6),
 };
 export const PILOT_COLORS = ['#7fd6ff', '#ffb347'];
+const TRAIL_ALLY = { r: 0.35, g: 0.9, b: 2.2 }, TRAIL_FOE = { r: 2.2, g: 0.25, b: 0.7 };
 
 /** Free GPU resources of a removed object (geometries + materials; textures are shared caches). */
 function disposeObj(o) {
@@ -34,7 +35,7 @@ function disposeObj(o) {
     if (m && !m.userData?.shared) (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
   });
 }
-let MISSILE = null;
+let MISSILE = null, MINE = null;
 function missileRes() {
   if (MISSILE) return MISSILE;
   const mk = (len) => { const g = new THREE.CylinderGeometry(0.35, 0.35, len, 6); g.rotateX(Math.PI / 2); g.userData.shared = true; return g; };
@@ -138,8 +139,8 @@ export class Game {
     this.pilots = [];
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
-    this.fx = new Fx(this.scene);
-    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = []; this.boltPool = [];
+    this.fx = new Fx(this.scene, this.quality);
+    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = [];
     this.composer = this.makeComposer(this.camera);
     this.resize();
   }
@@ -197,9 +198,10 @@ export class Game {
       if (n.asteroids) this.asteroids.push(...createAsteroids(this.scene, n._pos, n.asteroids));
       if (n.field) this.asteroids.push(...createAsteroids(this.scene, new THREE.Vector3(...n.field.at), n.field.n, n.field.spread));
       if (n.wreck) this.spawn('valkyrie', n._pos.clone(), new THREE.Vector3(0.25, -0.12, 1).normalize());
-      if (def.protect === 'transport' && n.anchor) {
-        this.protect = this.spawn('transport', n._pos.clone(), new THREE.Vector3(0.3, 0, 1).normalize());
+      if ((def.protect === 'transport' || def.protect === 'habitat') && n.anchor) {
+        this.protect = this.spawn(def.protect, n._pos.clone(), new THREE.Vector3(0.3, 0, 1).normalize());
       }
+      if (n.mines) this.layMines(n.mines.at ? new THREE.Vector3(...n.mines.at) : n._pos, n.mines.n, n.mines.spread);
     }
     this.mission = { navIdx: 0, phase: 'travel', wave: 0, waveT: null, timer: null, prog: 0 };
     this.pickups = []; this.failReason = null; this.failT = 0;
@@ -306,10 +308,11 @@ export class Game {
     if (hadShield) {
       s.shield -= dmg;
       if (s.shield < 0) { s.hp += s.shield; s.shield = 0; }
-      this.fx.flash(point, 14, COL.shield, 0.2);
+      this.fx.flash(point, 10, COL.shield, 0.15);
+      if (!s.isPlayer) this.fx.shield(s, point);
     } else {
       s.hp -= dmg;
-      this.fx.sparks(point, COL.spark, 7);
+      this.fx.hullHit(point, COL.spark);
       this.fx.flash(point, 9, COL.spark, 0.15);
     }
     if (!s.def.capital) { s.ai.evadeT = 0.9; s.ai.evade.randomDirection(); }
@@ -541,6 +544,20 @@ export class Game {
   }
 
   updateCapital(s, dt) {
+    if (s.dest) {
+      t1.copy(s.dest).sub(s.pos);
+      const d = t1.length();
+      if (d > 250) {
+        t1.divideScalar(d);
+        for (const c of this.ships) {
+          if (c === s || !c.alive || !c.def.capital || c.def.ghost) continue;
+          t3.copy(s.pos).sub(c.pos); const dc = t3.length();
+          if (dc < c.radius + s.radius + 80) t1.addScaledVector(t3.divideScalar(dc), 1.5).normalize();
+        }
+        this.steer(s, t1, dt, 0.35);
+        s.speed = s.cruise;
+      } else s.speed = Math.max(0, s.speed - dt * 30);
+    }
     const tur = s.def.turrets;
     for (let i = 0; i < tur.length; i++) {
       s.turretCool[i] -= dt;
@@ -568,12 +585,14 @@ export class Game {
     c.update?.(dt);
     if (c.throttleSet != null) { P.throttle = c.throttleSet; c.throttleSet = null; }
     P.throttle = Math.min(1, Math.max(0, P.throttle + c.throttleRate * dt * 0.8));
-    const sy = c.y * (this.invert ? 1 : -1);
-    const rate = def.turn * (P.boosting ? 0.7 : 1);
+    // small dead zone + expo curve: precise near the centre, full authority at the edge
+    const shape = (v) => { const a = Math.max(0, (Math.abs(v) - 0.05) / 0.95); return Math.sign(v) * a * (0.45 + 0.55 * a * a); };
+    const sx = shape(c.x), sy = shape(c.y) * (this.invert ? 1 : -1);
+    const rate = def.turn * (P.boosting ? 0.7 : 1) * (this.sens || 1);
     q1.setFromAxisAngle(AX, -sy * rate * dt);
-    q2.setFromAxisAngle(AY, -c.x * rate * dt);
+    q2.setFromAxisAngle(AY, -sx * rate * dt);
     p.quat.multiply(q1).multiply(q2).normalize();
-    p.bank += (c.x * 0.75 - p.bank) * Math.min(1, dt * 5);
+    p.bank += (sx * 0.75 - p.bank) * Math.min(1, dt * 5);
     p.mesh.userData.body.rotation.z = p.bank;
     p.mesh.userData.body.rotation.x = -sy * 0.12;
 
@@ -680,6 +699,11 @@ export class Game {
     else if (n.type === 'scan') txt = `${n.objective || 'Scanne den Sektor'} · ${Math.floor(Math.min(1, m.prog / n.scan) * 100)} %`;
     else if (n.type === 'pickup') txt = `${n.objective || 'Bergung'} · ${this.pickups.filter((p) => p.got).length}/${this.pickups.length}`;
     else if (n.type === 'survive') txt = `${n.objective || 'Halte durch'} · ${fmt(m.surv)}`;
+    else if (n.type === 'convoy') {
+      const alive = (m.convoy || []).filter((c) => c.alive);
+      const dist = alive.length ? Math.min(...alive.map((c) => c.pos.distanceTo(c.dest))) : 0;
+      txt = `${n.objective || 'Eskortiere den Konvoi'} · ${alive.length}/${(m.convoy || []).length} · ${(dist / 1000).toFixed(1)} km`;
+    }
     else if (n.type === 'dock' && m.docking) txt = `Andocken · ${Math.floor(Math.min(1, m.prog / n.dock) * 100)} %`;
     else txt = n.objective || 'Vernichte alle Feinde';
     if (m.timer != null) txt += ` · ⏱ ${fmt(m.timer)}`;
@@ -691,7 +715,8 @@ export class Game {
     const m = this.mission, out = [];
     if (!m || m.phase !== 'fight') return out;
     const n = this.nav();
-    if (n.type === 'pickup') for (const p of this.pickups) if (!p.got) out.push({ pos: p.pos, color: '#6dffb0', label: 'FLUGSCHREIBER' });
+    if (n.type === 'pickup') for (const p of this.pickups) if (!p.got) out.push({ pos: p.pos, color: '#6dffb0', label: n.pickupLabel || 'FLUGSCHREIBER' });
+    if (n.type === 'convoy') for (const c of m.convoy || []) if (c.alive) out.push({ pos: c.pos, color: '#6dffb0', label: c.name.toUpperCase(), main: true });
     if (n.type === 'scan' && m.prog < n.scan) out.push({ pos: n._pos, color: '#ffc857', label: 'SCANZONE', main: true });
     if (n.type === 'intercept' && m.courier?.alive) out.push({ pos: m.courier.pos, color: '#ff4d6d', label: 'KURIER', main: true });
     if (n.type === 'dock' && m.docking && m.prison?.alive) out.push({ pos: m.prison.pos, color: '#6dffb0', label: 'ANDOCKEN', main: true });
@@ -777,13 +802,13 @@ export class Game {
         const dir = cap ? new THREE.Vector3(1, 0, 0.2).normalize() : new THREE.Vector3().copy(center).sub(pos).normalize();
         const s = this.spawn(type, pos, dir);
         if (cap && type === 'zerstoerer') s.name = 'Dogma';
-        if (type === 'station' && nav.name) s.name = nav.name;
+        if ((type === 'station' || type === 'relay') && nav.name) s.name = nav.name;
         if (!cap) this.fx.flash(pos, 90, new THREE.Color(3, 1, 2.5), 0.5);
         if (this.coop && !cap) s.hp = s.maxHp = s.maxHp * 1.25;
       }
     }
     if (idx > 0) { this.audio.warn(); this.setBanner('NEUE FEINDWELLE'); }
-    if (nav.type !== 'survive' || this.mission.wave < nav.waves.length) this.say([nav.onWave?.[idx]]);
+    if ((nav.type !== 'survive' && nav.type !== 'convoy') || this.mission.wave < nav.waves.length) this.say([nav.onWave?.[idx]]);
   }
 
   spawnPickups(nav) {
@@ -891,6 +916,14 @@ export class Game {
         if (nav.limit) m.timer = nav.limit;
         if (nav.type === 'survive') m.surv = nav.survive;
         if (nav.type === 'pickup') this.spawnPickups(nav);
+        if (nav.type === 'convoy') {
+          const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 320));
+          m.convoy = nav.convoy.types.map((type, i) => {
+            const c = this.spawn(type, nav._pos.clone().add(new THREE.Vector3(i * 90 - 45, i * 20, i * 60)), to.clone().sub(nav._pos).normalize());
+            c.dest = to; c.cruise = nav.convoy.speed || c.def.speed; c.speed = 0; c.name = `${SHIPS[type].name} ${i + 1}`;
+            return c;
+          });
+        }
         if (nav.type === 'intercept') {
           const to = new THREE.Vector3(...nav.intercept.to);
           const c = this.spawn('kurier', nav._pos.clone(), to.clone().sub(nav._pos).normalize());
@@ -912,12 +945,13 @@ export class Game {
     const hostiles = this.hostileCount() - (m.courier?.alive ? 1 : 0);
     const lastWave = m.wave >= nav.waves.length - 1;
     // wave progression
-    if (hostiles === 0 && (!lastWave || nav.type === 'survive')) {
+    const cycle = nav.type === 'survive' || nav.type === 'convoy';
+    if (hostiles === 0 && (!lastWave || cycle)) {
       if (m.waveT === null) m.waveT = 3;
       m.waveT -= dt;
       if (m.waveT <= 0) {
         m.waveT = null; m.wave++;
-        this.spawnWave(nav, nav.type === 'survive' ? m.wave % nav.waves.length : m.wave);
+        this.spawnWave(nav, cycle ? m.wave % nav.waves.length : m.wave);
       }
     }
     let done = false;
@@ -934,7 +968,7 @@ export class Game {
             p.got = true; this.scene.remove(p.mesh);
             this.fx.flash(p.pos, 50, new THREE.Color(0.6, 3, 1.4), 0.4);
             this.audio.beep(1600, 0.15);
-            this.setBanner(`FLUGSCHREIBER ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
+            this.setBanner(`${nav.pickupLabel || 'FLUGSCHREIBER'} ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
           }
         }
         done = this.pickups.every((p) => p.got);
@@ -943,6 +977,14 @@ export class Game {
         if (m.courier.escaped) return this.fail('Das Kurierschiff hat den Sprungpunkt erreicht.');
         done = !m.courier.alive;
         break;
+      case 'convoy': {
+        const alive = m.convoy.filter((c) => c.alive);
+        if (!alive.length) return this.fail(nav.failText || 'Der Konvoi wurde vernichtet.');
+        if (alive.length < (m.convoyAlive ?? m.convoy.length)) { this.setBanner('KONVOISCHIFF VERLOREN'); this.audio.warn(); }
+        m.convoyAlive = alive.length;
+        done = alive.every((c) => c.pos.distanceTo(c.dest) < 300);
+        break;
+      }
       case 'survive':
         m.surv -= dt;
         done = m.surv <= 0;
@@ -1053,12 +1095,15 @@ export class Game {
       const boost = s.isPlayer && s.pilot.boosting;
       const k = (0.55 + Math.min(1.2, s.speed / s.def.speed) * 0.6) * (boost ? 1.7 : 1) * (0.92 + Math.random() * 0.16);
       for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * k);
+      this.shipFx(s, dt, boost);
       if (!s.def.capital && s.hp < s.maxHp * 0.4 && Math.random() < dt * 14) {
         this.fx.particle(s.pos.x, s.pos.y, s.pos.z, rnd(-6, 6), rnd(-6, 6), rnd(-6, 6), 1.6, 0.7, 0.3, 4, 0.7, 0.5);
+        if (Math.random() < 0.5) this.fx.smoke(s.pos, 2.5, 1.6, null, 0.14, 0.5);
       }
     }
 
     this.updateBolts(dt);
+    this.updateMines(dt);
     this.updateMissiles(dt);
 
     this.updateDying(dt);
@@ -1105,6 +1150,88 @@ export class Game {
         P.camera.position.y += rnd(-1, 1) * P.shake * 1.6;
       }
       P.invQ.copy(p.quat).invert();
+    }
+  }
+
+  /** Exhaust trails for fighters and fires on damaged capital ships. */
+  shipFx(s, dt, boost = false) {
+    if (!s.alive || !s.mesh.visible) return;
+    const near = this.mode === 'cut' || this.ear(s.pos) < 1800;
+    if (!near) return;
+    if (s.def.capital) {
+      if (s.hp < s.maxHp * 0.6 && Math.random() < dt * (s.hp < s.maxHp * 0.3 ? 9 : 4)) {
+        const b = s.def.box;
+        t5.set(rnd(-b[0], b[0]), rnd(-b[1], b[1]) * 0.6 + b[1] * 0.4, rnd(-b[2], b[2])).applyQuaternion(s.quat).add(s.pos);
+        this.fx.particle(t5.x, t5.y, t5.z, rnd(-4, 4), rnd(2, 8), rnd(-4, 4), 2.6, 1.1, 0.3, rnd(6, 14), rnd(0.5, 1), 0.8);
+        this.fx.smoke(t5, rnd(6, 10), rnd(2, 3.5), null, 0.12, 0.5);
+      }
+      return;
+    }
+    const col = s.team === 0 ? TRAIL_ALLY : TRAIL_FOE;
+    for (const e of s.mesh.userData.engines) {
+      e.getWorldPosition(t5);
+      this.fx.trail(t5, col, (boost ? 3.2 : 2.2) * (e.userData.base / 4), boost ? 0.5 : 0.28);
+    }
+  }
+
+  // ---------- mines ----------
+  layMines(center, n, spread) {
+    if (!MINE) {
+      const geo = new THREE.IcosahedronGeometry(3, 0); geo.userData.shared = true;
+      const mat = new THREE.MeshStandardMaterial({ color: 0x2a1a22, metalness: 0.8, roughness: 0.35, emissive: new THREE.Color(0.5, 0.05, 0.1) }); mat.userData.shared = true;
+      const spike = new THREE.ConeGeometry(0.8, 4, 5); spike.userData.shared = true;
+      const glow = new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(4, 0.4, 0.3), blending: THREE.AdditiveBlending, depthWrite: false }); glow.userData.shared = true;
+      MINE = { geo, mat, spike, glow };
+    }
+    for (let i = 0; i < n; i++) {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(MINE.geo, MINE.mat));
+      for (const d of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+        const sp = new THREE.Mesh(MINE.spike, MINE.mat);
+        sp.position.set(d[0] * 3, d[1] * 3, d[2] * 3);
+        sp.lookAt(d[0] * 10, d[1] * 10, d[2] * 10); sp.rotateX(Math.PI / 2);
+        g.add(sp);
+      }
+      const light = new THREE.Sprite(MINE.glow); light.scale.setScalar(12); g.add(light);
+      g.position.copy(center).add(t1.randomDirection().multiplyScalar(Math.cbrt(Math.random()) * spread).multiply(t2.set(1, 0.35, 1)));
+      g.quaternion.random();
+      this.scene.add(g);
+      this.mines.push({ mesh: g, pos: g.position, light, alive: true, phase: Math.random() * 6, target: null });
+    }
+  }
+
+  updateMines(dt) {
+    const now = performance.now() / 1000;
+    for (const mn of this.mines) {
+      if (!mn.alive) continue;
+      // home in on the nearest Union ship in range
+      let best = null, bd = 170;
+      for (const s of this.ships) {
+        if (!s.alive || s.team !== 0 || s.def.ghost) continue;
+        const d = s.pos.distanceTo(mn.pos) - (s.def.capital ? s.radius * 0.6 : 0);
+        if (d < bd) { bd = d; best = s; }
+      }
+      const blink = best ? 10 : 2;
+      mn.light.material = MINE.glow;
+      mn.light.scale.setScalar(Math.sin(now * blink + mn.phase) > 0.2 ? 14 : 6);
+      mn.mesh.rotateY(dt * 0.4);
+      if (!best) continue;
+      const trigger = best.def.capital ? this.hullDist(best, mn.pos, t3) < 18 : bd < 20;
+      if (trigger) { this.detonate(mn, null); continue; }
+      t1.copy(best.pos).sub(mn.pos).normalize();
+      mn.pos.addScaledVector(t1, 38 * dt);
+    }
+  }
+
+  detonate(mn, by) {
+    mn.alive = false;
+    this.scene.remove(mn.mesh);
+    this.fx.explode(mn.pos, 1.1, new THREE.Color(3.4, 1.8, 1.2));
+    this.audio.explosion(Math.max(0.1, 0.7 - this.ear(mn.pos) / 2500));
+    for (const s of this.ships) {
+      if (!s.alive || s.def.ghost) continue;
+      const d = s.def.capital ? Math.max(0, this.hullDist(s, mn.pos, t3)) : s.pos.distanceTo(mn.pos);
+      if (d < 75) this.damage(s, (s.def.capital ? 90 : 55) * (1 - d / 75) + 10, by, mn.pos);
     }
   }
 
@@ -1164,6 +1291,15 @@ export class Game {
           if (pos.distanceToSquared(a.pos) < a.radius * a.radius) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
         }
       }
+      if (!hit && b.team === 0) {
+        for (const mn of this.mines) {
+          if (!mn.alive) continue;
+          t1.copy(pos).sub(b.prev);
+          const k = THREE.MathUtils.clamp(t2.copy(mn.pos).sub(b.prev).dot(t1) / (t1.lengthSq() || 1), 0, 1);
+          t2.copy(b.prev).addScaledVector(t1, k);
+          if (t2.distanceToSquared(mn.pos) < 49) { this.detonate(mn, b.owner); hit = true; break; }
+        }
+      }
       if (hit) {
         this.scene.remove(b.mesh);
         this.bolts.splice(i, 1);
@@ -1190,6 +1326,7 @@ export class Game {
       t1.copy(FWD).applyQuaternion(m.quat);
       m.pos.addScaledVector(t1, m.speed * dt);
       this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-3, 3), rnd(-3, 3), rnd(-3, 3), 1.8, 1.2, 0.7, m.torpedo ? 5 : 3, 0.6, 0.4);
+      if ((m.smokeT = (m.smokeT || 0) - dt) <= 0) { m.smokeT = 0.03; this.fx.smoke(m.pos, 1.6, 1.4, null, 0.55, 0.35); }
       let boom = m.life <= 0;
       if (!boom) {
         for (const s of this.ships) {

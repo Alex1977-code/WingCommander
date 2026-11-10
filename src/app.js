@@ -23,11 +23,12 @@ let save = load(SAVE_KEY, NEW_SAVE());
 if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
 if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
 save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
-const settings = load(SET_KEY, { sound: true, invert: true, quality: 'high', coop: false, callsign2: 'Orion' });
+const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, quality: 'high', coop: false, callsign2: 'Orion' });
 
 const hub = new InputHub();
 const audio = new Audio();
 audio.enabled = settings.sound;
+audio.musicOn = settings.music;
 
 const fill = (t) => t.replaceAll('{cs}', save.callsign);
 const coopActive = () => settings.coop && hub.devices.length >= 1;
@@ -54,10 +55,27 @@ function setFocus(i, sound = true) {
   focusIdx = (i + list.length) % list.length;
   const b = list[focusIdx];
   if (navMode) { b.classList.add('focus'); scramble(b); b.scrollIntoView?.({ block: 'nearest' }); }
-  if (sound) audio.beep(1400, 0.04);
+  if (sound) audio.ui('move');
 }
 
 let shownAt = 0, cineT1 = 0, cineT2 = 0;
+const MENU_MOOD = { 's-title': 'menu', 's-name': 'menu', 's-help': 'menu', 's-settings': 'menu', 's-multi': 'menu', 's-brief': 'briefing' };
+
+/** First mission: Rook explains the controls for the device in use. */
+function tutorial() {
+  const pad = hub.devices.some((d) => d.kind === 'gamepad'), touch = document.body.classList.contains('touch');
+  const steer = pad ? 'Linker Stick' : touch ? 'Linke Bildschirmhälfte' : 'W, A, S, D oder Pfeiltasten';
+  const fire = pad ? 'RT' : touch ? 'FEUER' : 'Leertaste';
+  const msl = pad ? 'X' : touch ? 'RAKETE' : 'M';
+  const boost = pad ? 'LT' : touch ? 'BOOST' : 'Shift';
+  const tips = [
+    `Kurze Auffrischung, {cs}: ${steer} steuert. ${settings.invert ? 'Ziehen hebt die Nase, wie im Flugzeug.' : 'Nach oben drücken hebt die Nase.'}`,
+    `${fire} feuert die Kanonen. Zielst du auf den Kreis vor dem Gegner, wird dein Fadenkreuz grün und du triffst.`,
+    `${msl} schickt eine Lenkrakete, ${boost} zündet den Nachbrenner. Und wenn der Navpunkt weit weg ist: Autopilot.`,
+  ];
+  tips.forEach((t) => ui.comm('rook', t));
+  save.tutorialDone = true; store(SAVE_KEY, save);
+}
 function show(id) {
   const prev = current;
   current = id;
@@ -76,7 +94,8 @@ function show(id) {
       const txt = el.id ? el.textContent : (el.dataset.label ||= el.textContent);
       el._dec = decode(el, txt, { cps: 70, delay: 120 + i * 60 });
     });
-    audio.tone?.('sine', 300, 1200, 0.18, 0.05);
+    audio.ui('open');
+    if (MENU_MOOD[id]) audio.mood(MENU_MOOD[id]);
     const list = visibleButtons();
     const primary = list.findIndex((b) => b.classList.contains('primary'));
     setFocus(id === 's-title' ? 0 : Math.max(0, primary), false);
@@ -103,7 +122,7 @@ function menuEvent(e) {
   const list = visibleButtons();
   if (e === 'up' || e === 'left') setFocus(focusIdx - 1);
   else if (e === 'down' || e === 'right') setFocus(focusIdx + 1);
-  else if (e === 'ok') { const b = list[focusIdx]; if (b) { audio.beep(900, 0.08); b.click(); } }
+  else if (e === 'ok') { const b = list[focusIdx]; if (b) { audio.ui('ok'); b.click(); } }
   else if (e === 'back' || e === 'start') {
     const sc = $(current);
     if (current === 's-pause') return resume();
@@ -142,14 +161,14 @@ function nextComm() {
   const text = fill(c.text);
   commDec = decode(el.querySelector('.txt'), text, { cps: 75, window: 5 });
   commDec.done.then(() => { commHolo.talk = 0; });
-  audio.beep(660, 0.1); setTimeout(() => audio.beep(990, 0.07), 90);
+  audio.radio();
   commT = setTimeout(nextComm, 2400 + c.text.length * 45);
 }
 function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; commFrozen = false; commHold = 0; commDec?.cancel(); commHolo.on = false; $('comm').classList.add('hidden'); }
 
 // ---------- UI bridge used by the game ----------
 const ui = {
-  comm(who, text) { if (commQ.length < 4) commQ.push({ who, text }); if (!commT) nextComm(); },
+  comm(who, text) { if (commQ.length < 6) commQ.push({ who, text }); if (!commT) nextComm(); },
   setAuto(on) { $('btn-auto').classList.toggle('on', on); },
   setThrottle(v) { $('throttle-fill').style.height = v * 100 + '%'; },
   fade(cb) {
@@ -199,6 +218,7 @@ const ui = {
     $('cut-sub').classList.add('hidden'); $('cut-title').classList.add('hidden');
   },
   frame(dt) {
+    if (game.mode === 'flight' && !game.paused && !game.ended && current === null) audio.mood(game.hostileCount() > 0 ? 'combat' : 'travel');
     hub.local.update(dt);
     hub.poll(dt);
     const ev = hub.takeMenu();
@@ -228,6 +248,7 @@ document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('bu
 
 const game = new Game($('view'), $('hud'), audio, ui);
 game.invert = settings.invert;
+game.sens = settings.sens;
 game.setQuality(settings.quality);
 game.startAttract();
 
@@ -237,7 +258,8 @@ const wave = new Waveform($('d-wave'));
 let dlg = null, dlgGoto = null;
 const lineVisible = (l) => passes(l, save.flags) && (!Array.isArray(l.aff) || (save.aff[l.aff[0]] || 0) >= l.aff[1]);
 
-function runDialog(lines, kicker, title, done) {
+function runDialog(lines, kicker, title, done, mood = 'briefing') {
+  audio.mood(mood);
   dlg = { lines: lines.filter(lineVisible), i: -1, done, dec: null, choosing: false, effects: [], answered: -1 };
   setLabel($('d-kicker'), kicker);
   $('d-choices').innerHTML = '';
@@ -413,6 +435,7 @@ function playCut(id, done) {
   clearComm();
   fadeDark(() => {
     show('cut');
+    audio.mood(def.music || 'tension');
     game.startCutscene(def, save.flags, () => {
       fadeDark(() => { game.startAttract(); done(); });
     });
@@ -483,6 +506,8 @@ function launch() {
     const wingSkill = Math.min(0.92, 0.7 + 0.06 * (save.aff[w] || 0));
     game.startMission(def, ctrls, [save.callsign, settings.callsign2 || 'Orion'], { flags: save.flags, wingman: w, wingSkill });
     cinematic(def);
+    audio.mood('travel');
+    if (def.id === 'm1' && !save.tutorialDone) tutorial();
     syncPads();
   });
 }
@@ -496,14 +521,14 @@ function onMissionEnd(win, reason, stats, cause) {
     save.kills += stats.kills; save.score += stats.score;
     if (def.next) save.mission = def.next; else { save.done = true; save.finished = true; }
     store(SAVE_KEY, save);
-    const after = () => runDialog(def.win, `Nachbesprechung · ${def.title}`, 'Zurück an Bord', () => debrief('win', reason, stats, def, oldRank));
+    const after = () => runDialog(def.win, `Nachbesprechung · ${def.title}`, 'Zurück an Bord', () => debrief('win', reason, stats, def, oldRank), def.id === 'm9' ? 'sad' : 'victory');
     if (def.postCut) playCut(def.postCut, after); else after();
   } else if (def.lose && cause === 'objective') {
     Object.assign(save.flags, def.lose.set || {});
     save.kills += stats.kills; save.score += stats.score;
     save.mission = def.lose.next;
     store(SAVE_KEY, save);
-    runDialog(def.lose.lines, `Nachbesprechung · ${def.title}`, def.lose.title, () => debrief('branch', reason, stats, def, oldRank));
+    runDialog(def.lose.lines, `Nachbesprechung · ${def.title}`, def.lose.title, () => debrief('branch', reason, stats, def, oldRank), 'sad');
   } else {
     debrief('lose', reason, stats, def, oldRank);
   }
@@ -528,6 +553,7 @@ function debrief(result, reason, stats, def, oldRank) {
   $('r-reason').className = result === 'win' ? 'medal' : '';
   setLabel($('r-next'), result === 'lose' ? 'Erneut versuchen' : 'Weiter');
   show('s-debrief');
+  audio.mood(result === 'win' ? 'victory' : result === 'branch' ? 'sad' : 'briefing');
   glitchTitle($('r-title'), result === 'win' ? 'Mission erfolgreich' : result === 'branch' ? 'Mission verloren' : 'Mission gescheitert');
   countUp($('st-k'), stats.kills); countUp($('st-a'), acc, '%'); countUp($('st-s'), stats.score, '', 1300);
 }
@@ -535,7 +561,7 @@ function debrief(result, reason, stats, def, oldRank) {
 function playEnding() {
   save.finished = false; store(SAVE_KEY, save);
   const bitter = !!save.flags.kolibriLost;
-  runDialog(bitter ? ENDINGS.bitter : ENDINGS.good, 'Epilog', bitter ? 'Asche und Sterne' : 'Morgenröte', () => title());
+  runDialog(bitter ? ENDINGS.bitter : ENDINGS.good, 'Epilog', bitter ? 'Asche und Sterne' : 'Morgenröte', () => title(), bitter ? 'sad' : 'victory');
 }
 
 $('r-next').onclick = () => {
@@ -578,11 +604,15 @@ $('name-ok').onclick = () => {
 };
 
 function refreshSettings() {
+  setLabel($('set-music'), `Musik: ${settings.music ? 'An' : 'Aus'}`);
+  setLabel($('set-sens'), `Empfindlichkeit: ${settings.sens < 1 ? 'Niedrig' : settings.sens > 1 ? 'Hoch' : 'Normal'}`);
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
   setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Flugzeug (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
   setLabel($('set-quality'), `Grafik: ${settings.quality === 'high' ? 'Hoch (Bloom)' : 'Leistung'}`);
   store(SET_KEY, settings);
 }
+$('set-music').onclick = () => { settings.music = !settings.music; audio.setMusic(settings.music); refreshSettings(); };
+$('set-sens').onclick = () => { settings.sens = settings.sens < 1 ? 1 : settings.sens === 1 ? 1.25 : 0.8; game.sens = settings.sens; refreshSettings(); };
 $('set-sound').onclick = () => { settings.sound = !settings.sound; audio.setEnabled(settings.sound); refreshSettings(); };
 $('set-invert').onclick = () => { settings.invert = !settings.invert; game.invert = settings.invert; refreshSettings(); };
 $('set-quality').onclick = () => { settings.quality = settings.quality === 'high' ? 'low' : 'high'; game.setQuality(settings.quality); refreshSettings(); };

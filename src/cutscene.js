@@ -187,6 +187,7 @@ export function installCutscenes(Game) {
         }
         const kk = (0.55 + Math.min(1.4, s.speed / Math.max(1, s.def.speed)) * 0.6) * (0.92 + Math.random() * 0.16);
         for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * kk);
+        this.shipFx(s, dt);
       }
       this.updateBolts(dt);
       this.updateMissiles(dt);
