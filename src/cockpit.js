@@ -18,6 +18,8 @@ import { gripHandGeometry, throttleHandGeometry } from './hand.js';
 const v = new THREE.Vector3(), v2 = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEG = Math.PI / 180;
 const UP = new THREE.Vector3(0, 1, 0);
+// forearm direction in hand space: along the back of the hand, drooping a little
+const GRIP_ARM = new THREE.Vector3(0.1, -0.55, 1).normalize(), THR_ARM = new THREE.Vector3(-0.12, -0.5, 1).normalize();
 const rnd = (a, b) => a + Math.random() * (b - a);
 const FONT = "'Rajdhani', system-ui, sans-serif";
 
@@ -341,7 +343,7 @@ export class Cockpit {
     this.nail = new THREE.MeshStandardMaterial({ color: 0xd8a898, roughness: 0.3, metalness: 0, envMapIntensity: 0.5, side: THREE.DoubleSide });
     this.cuffMat = new THREE.MeshStandardMaterial({ color: 0x23271f, roughness: 0.9, metalness: 0 });
     const ws = wornTexture('#3b3a2e', { rivets: false, grime: 1.2 });
-    this.sleeve = new THREE.MeshStandardMaterial({ color: 0xffffff, map: ws.map, roughnessMap: ws.rough, roughness: 0.95, metalness: 0, envMapIntensity: 0.2 });
+    this.sleeve = new THREE.MeshStandardMaterial({ color: 0x9a968a, map: ws.map, roughnessMap: ws.rough, roughness: 0.95, metalness: 0, envMapIntensity: 0.2 });
     // stainless retrofit hardware, cables and conduit
     const bt = brushedTexture();
     this.steel = new THREE.MeshStandardMaterial({ color: 0xffffff, map: bt, metalness: 0.75, roughness: 0.34 });
@@ -536,7 +538,7 @@ export class Cockpit {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.06, 0.012), this.chrome); arm.position.y = 0.03; lever.add(arm);
     const knob = new THREE.Mesh(roundedRect(0.066, 0.034, 0.008, 0.028, 0.003), this.rubber); knob.rotation.x = -Math.PI / 2; knob.position.set(0, 0.068 + 0.015, 0); lever.add(knob);
     const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.006, 10), this.trim); btn.rotation.z = Math.PI / 2; btn.position.set(0.034, 0.07, -0.01); lever.add(btn);
-    this.thrHand = this.throttleHand(); this.thrHand.position.y = 0.068; lever.add(this.thrHand);
+    this.thrHand = this.throttleHand(); this.thrHand.position.y = 0.068; this.thrHand.rotation.x = 0.22; lever.add(this.thrHand);
     thr.add(lever);
     thr.position.copy(S(-0.5, -1.48, 0.32));
     thr.rotation.y = 0.25;
@@ -550,7 +552,6 @@ export class Cockpit {
       const c = new THREE.Mesh(cuffGeo, this.cuffMat); m.userData.cuff = c; this.rig.add(c);
       this.arms[k] = m;
     }
-    this.elbows = { stick: S(1.5, -2.3, 0.2), thr: S(-1.6, -2.2, 0.2), yokeL: S(-1.4, -2.4, 0.22), yokeR: S(1.4, -2.4, 0.22) };
     this.applyStyle();
   }
 
@@ -724,10 +725,14 @@ export class Cockpit {
     }
   }
 
-  /** point a forearm from the wrist marker to its elbow */
-  aimArm(arm, wrist, elbow) {
-    wrist.getWorldPosition(v); this.rig.worldToLocal(v);
-    v2.copy(elbow).sub(v);
+  /**
+   * Point a forearm out of the wrist. The forearm continues the line of the hand (with a slight
+   * natural droop) instead of heading for a fixed elbow, so the wrist never looks broken;
+   * it leaves the field of view below the camera.
+   */
+  aimArm(arm, hand, dirLocal) {
+    hand.userData.wrist.getWorldPosition(v); this.rig.worldToLocal(v);
+    v2.copy(dirLocal).transformDirection(hand.matrixWorld).multiplyScalar(0.42);
     const len = v2.length();
     arm.position.copy(v);
     arm.quaternion.setFromUnitVectors(UP, v2.multiplyScalar(1 / len));
@@ -770,9 +775,8 @@ export class Cockpit {
     const squeeze = P.ctrl.firing ? 0.95 : 1;
     this.stickHand.scale.set(squeeze, 1, squeeze);
     this.rig.updateMatrixWorld(true);
-    if (this.stick.visible) this.aimArm(this.arms.stick, this.stickHand.userData.wrist, this.elbows.stick);
-    else { this.aimArm(this.arms.yokeL, this.yoke.userData.handL.userData.wrist, this.elbows.yokeL); this.aimArm(this.arms.yokeR, this.yoke.userData.handR.userData.wrist, this.elbows.yokeR); }
-    this.aimArm(this.arms.thr, this.thrHand.userData.wrist, this.elbows.thr);
+    if (this.stick.visible) { this.aimArm(this.arms.stick, this.stickHand, GRIP_ARM); this.aimArm(this.arms.thr, this.thrHand, THR_ARM); }
+    else { this.aimArm(this.arms.yokeL, this.yoke.userData.handL, GRIP_ARM); this.aimArm(this.arms.yokeR, this.yoke.userData.handR, GRIP_ARM); }
     this.updateSparks(dt);
 
     // ---- status lamps: '!' slow blink, '!!' fast blink ----
