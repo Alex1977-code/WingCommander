@@ -28,11 +28,12 @@ canvas#hud { pointer-events: none; }
 .screen.dim { background: rgba(3, 6, 12, .7); backdrop-filter: blur(6px); }
 
 /* CRT power-on: the panel unfolds from a bright line */
+/* the clipped phase is kept short because clip-path also limits where taps land */
 @keyframes holo-in {
   0% { clip-path: inset(49.5% 0 49.5% 0); filter: brightness(3) saturate(0); opacity: .2; transform: scaleX(1.06); }
-  35% { clip-path: inset(49% 0 49% 0); filter: brightness(2.4); opacity: 1; transform: scaleX(1); }
-  60% { clip-path: inset(0 0 0 0); filter: brightness(1.5); }
-  68% { opacity: .55; } 74% { opacity: 1; } 80% { opacity: .75; }
+  12% { clip-path: inset(49% 0 49% 0); filter: brightness(2.4); opacity: 1; transform: scaleX(1); }
+  28% { clip-path: inset(0 0 0 0); filter: brightness(1.6); }
+  45% { opacity: .55; } 55% { opacity: 1; } 65% { opacity: .75; }
   100% { clip-path: inset(0 0 0 0); filter: none; opacity: 1; }
 }
 .holo-in { animation: holo-in .62s cubic-bezier(.2, .8, .2, 1) both; }
@@ -58,7 +59,8 @@ canvas#hud { pointer-events: none; }
 .title-rings i:nth-child(2) { inset: 9%; border-style: dashed; animation-duration: 30s; animation-direction: reverse; border-top-color: rgba(255, 138, 42, .5); }
 .title-rings i:nth-child(3) { inset: 22%; border-width: 2px; border-color: transparent; border-left-color: rgba(127, 214, 255, .45); animation-duration: 9s; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.menu { display: flex; flex-direction: column; gap: 9px; margin-top: clamp(14px, 5vh, 40px); width: min(330px, 48vw); position: relative; }
+.menu .btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu { display: flex; flex-direction: column; gap: 9px; margin-top: clamp(14px, 5vh, 40px); width: min(390px, 54vw); position: relative; }
 #pilot-line { margin-top: 16px; font: 600 13px var(--text); color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
 #tv-badge { position: absolute; right: calc(18px + var(--sar)); bottom: calc(18px + var(--sab)); display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); font: 600 13px var(--text); }
 #tv-badge canvas { width: 92px; height: 92px; image-rendering: pixelated; }
@@ -174,7 +176,7 @@ input:focus { border-color: var(--c2); box-shadow: 0 0 14px rgba(255, 138, 42, .
 /* ---------- dialog (incoming transmission) ---------- */
 #s-dialog { justify-content: flex-end; }
 .dialog { width: min(860px, 100%); margin-bottom: 1vh; }
-.dhead { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.dhead { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-right: 30px; }
 .rx { color: var(--foe) !important; }
 .rx .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--foe); box-shadow: 0 0 8px var(--foe); animation: blink 1s steps(2) infinite; vertical-align: 1px; }
 @keyframes blink { 50% { opacity: .15; } }
@@ -221,6 +223,9 @@ input:focus { border-color: var(--c2); box-shadow: 0 0 14px rgba(255, 138, 42, .
 .choices:empty { display: none; }
 .btn.choice { font: 700 clamp(13px, 2vw, 17px) var(--text); letter-spacing: .02em; text-transform: none; padding: 10px 18px 10px 26px; border-color: rgba(255, 200, 87, .45); }
 .btn.choice:hover, .btn.choice.focus { border-color: var(--warn); }
+.btn.choice { animation: choice-in .35s ease-out both; }
+@keyframes choice-in { from { opacity: 0; transform: translateX(-10px); } }
+.choices.arming { pointer-events: none; }
 
 /* ---------- mission cinematic ---------- */
 #cine { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 20; text-align: center; padding: 0 20px; }
@@ -270,7 +275,7 @@ body.coop #stick-zone, body.coop #stick-base, body.coop .rbtn, body.coop #thrott
 @keyframes pulse { 50% { box-shadow: 0 0 18px rgba(255, 200, 87, .7); } }
 
 #comm {
-  position: absolute; left: 50%; transform: translateX(-50%); top: 56px; width: min(540px, 58vw); display: flex; gap: 10px; align-items: center;
+  position: absolute; left: 50%; transform: translateX(-50%); top: 56px; width: min(540px, 58vw, calc(100vw - 330px)); min-width: 240px; display: flex; gap: 10px; align-items: center;
   background: rgba(6, 14, 24, .74); border: 1px solid var(--line); padding: 6px 14px 6px 6px; pointer-events: none;
   clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
   background-image: repeating-linear-gradient(0deg, rgba(127, 214, 255, .05) 0 1px, transparent 1px 3px);
@@ -295,6 +300,10 @@ body.coop #comm { top: calc(50% - 32px); }
 @media (orientation: portrait) and (max-width: 700px) { body:not(.pad-mode) #rotate { display: grid; } }
 
 @media (max-height: 420px) {
+  .logo h1 { font-size: min(8vw, 13vh); }
+  .menu { margin-top: 3vh; gap: 6px; }
+  .menu .btn { padding: 7px 18px; }
+  #pilot-line { margin-top: 8px; }
   .cols { gap: 12px; }
   .stats div { padding: 6px; }
   #b-map { max-height: 46vh; width: auto; max-width: 100%; }

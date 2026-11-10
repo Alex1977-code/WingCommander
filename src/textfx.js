@@ -1,6 +1,6 @@
 /** Sci-fi text effects: decode/scramble reveal, glitch titles, hologram portraits, signal waveforms. */
 
-const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@$<>/\\|=+*ΣΔΞΨΩ';
+const GLYPHS = 'ABCDEFGHKLNOPRSTUVXYZ0123456789#%&$<>/+=*';
 export const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const glyph = () => GLYPHS[(Math.random() * GLYPHS.length) | 0];
 
@@ -16,6 +16,9 @@ export function decode(el, text, opts = {}) {
   let raf = 0, last = -1, resolve;
   const done = new Promise((r) => (resolve = r));
   const h = { done, running: true };
+  // one running decode per element: a newer one replaces the older
+  el._dec?.cancel();
+  el._dec = h;
   const render = (now) => {
     const n = Math.max(0, (now - start) / 1000 * cps);
     const shown = Math.floor(n);
@@ -45,9 +48,9 @@ export function scramble(el, text = el.dataset.label || el.textContent, ms = 380
   if (!el.dataset.label) el.dataset.label = text;
   if (el._scr) el._scr.cancel();
   // keep the element's size fixed while glyphs of varying width cycle through it
-  if (!el._lockW) { const r = el.getBoundingClientRect(); if (r.width) { el._lockW = true; el.style.width = r.width + 'px'; } }
+  if (!el._lockW) { const r = el.getBoundingClientRect(); if (r.width) { el._lockW = true; el.style.width = r.width + 'px'; el.style.height = r.height + 'px'; } }
   const h = el._scr = decode(el, text, { cps: Math.max(12, text.length / (ms / 1000)), window: 4, pad: true });
-  h.done.then(() => { if (el._scr === h && el._lockW) { el._lockW = false; el.style.width = ''; } });
+  h.done.then(() => { if (el._scr === h && el._lockW) { el._lockW = false; el.style.width = ''; el.style.height = ''; } });
   return h;
 }
 
@@ -93,11 +96,12 @@ export class Hologram {
     this.c = canvas;
     this.g = canvas.getContext('2d');
     this.who = 'erz'; this.color = '#7fd6ff';
-    this.talk = 0; this.glitchT = 0; this.alive = true; this.on = false;
+    this.talk = 0; this.glitchT = 0; this._on = false;
     this.t0 = performance.now();
-    const loop = (now) => { if (!this.alive) return; if (this.on) this.draw(now); requestAnimationFrame(loop); };
-    requestAnimationFrame(loop);
+    this.loop = (now) => { if (!this._on) return; this.draw(now); requestAnimationFrame(this.loop); };
   }
+  get on() { return this._on; }
+  set on(v) { if (v && !this._on) { this._on = true; requestAnimationFrame(this.loop); } else if (!v) this._on = false; }
   set(who, color) {
     if (who !== this.who) this.glitchT = 0.35;
     this.who = who; this.color = color;
@@ -189,10 +193,10 @@ export class Hologram {
     g.fillStyle = band; g.fillRect(0, by - H * 0.08, W, H * 0.16);
     // noise
     g.fillStyle = hexA(col, 0.5);
-    for (let i = 0; i < 30; i++) g.fillRect(Math.random() * W, Math.random() * H, 1.5, 1.5);
+    if (!reduced) for (let i = 0; i < 30; i++) g.fillRect(Math.random() * W, Math.random() * H, 1.5, 1.5);
     // glitch slices
     this.glitchT -= 1 / 60;
-    if (this.glitchT > 0 || Math.random() < 0.012) {
+    if (!reduced && (this.glitchT > 0 || Math.random() < 0.012)) {
       for (let i = 0; i < 3; i++) {
         const y = Math.random() * H, h = 3 + Math.random() * H * 0.08, dx = (Math.random() - 0.5) * W * 0.18;
         g.drawImage(c, 0, y, W, h, dx, y, W, h);
@@ -213,10 +217,12 @@ export class Hologram {
 /** Audio-style signal bars that react while text is "transmitting". */
 export class Waveform {
   constructor(canvas) {
-    this.c = canvas; this.g = canvas.getContext('2d'); this.level = 0; this.color = '#7fd6ff'; this.on = false;
+    this.c = canvas; this.g = canvas.getContext('2d'); this.level = 0; this.color = '#7fd6ff'; this._on = false;
     this.vals = new Float32Array(32);
-    const loop = () => { if (this.on) this.draw(); requestAnimationFrame(loop); };
-    requestAnimationFrame(loop);
+    this.loop = () => { if (!this._on) return; this.draw(); requestAnimationFrame(this.loop); };
+  }
+  get on() { return this._on; }
+  set on(v) { if (v && !this._on) { this._on = true; requestAnimationFrame(this.loop); } else if (!v) this._on = false;
   }
   draw() {
     const { c, g, vals } = this, W = c.width, H = c.height, n = vals.length;

@@ -57,11 +57,12 @@ function setFocus(i, sound = true) {
   if (sound) audio.beep(1400, 0.04);
 }
 
-let shownAt = 0;
+let shownAt = 0, cineT1 = 0, cineT2 = 0;
 function show(id) {
   const prev = current;
   current = id;
   if (id !== prev) shownAt = performance.now();
+  if (id !== null) { clearTimeout(cineT1); clearTimeout(cineT2); $('cine').classList.add('hidden'); }
   for (const s of screens) s.classList.toggle('hidden', s.id !== id);
   $('cut').classList.toggle('hidden', id !== 'cut');
   $('flight').classList.toggle('hidden', !(id === null || id === 's-pause'));
@@ -70,7 +71,7 @@ function show(id) {
     const panel = sc.querySelector('.panel, .dialog') || sc;
     panel.classList.remove('holo-in'); void panel.offsetWidth; panel.classList.add('holo-in');
     if (!reduced) { const f = $('scanfx'); f.classList.remove('run'); void f.offsetWidth; f.classList.add('run'); }
-    sc.querySelectorAll('header h2:not(.glitch), header > span, .panel h3').forEach((el, i) => {
+    sc.querySelectorAll('header h2:not(.glitch), header > span:not(.rx), .panel h3').forEach((el, i) => {
       el._dec?.cancel();
       const txt = el.id ? el.textContent : (el.dataset.label ||= el.textContent);
       el._dec = decode(el, txt, { cps: 70, delay: 120 + i * 60 });
@@ -117,7 +118,7 @@ document.addEventListener('pointermove', () => {
 }, { passive: true });
 document.addEventListener('pointerover', (e) => {
   const b = e.target.closest?.('.btn');
-  if (b && !b._hovered) { b._hovered = true; scramble(b); setTimeout(() => (b._hovered = false), 400); }
+  if (b && !b._hovered && !b.classList.contains('choice')) { b._hovered = true; scramble(b); setTimeout(() => (b._hovered = false), 400); }
 });
 
 function setAvatarColor(el, who) { el.style.setProperty('--ac', (CHARS[who] || CHARS.erz).color); }
@@ -238,7 +239,7 @@ const lineVisible = (l) => passes(l, save.flags) && (!Array.isArray(l.aff) || (s
 
 function runDialog(lines, kicker, title, done) {
   dlg = { lines: lines.filter(lineVisible), i: -1, done, dec: null, choosing: false, effects: [], answered: -1 };
-  $('d-kicker').textContent = kicker;
+  setLabel($('d-kicker'), kicker);
   $('d-choices').innerHTML = '';
   setDialogButtons(true);
   show('s-dialog');
@@ -293,8 +294,11 @@ function showChoices(l) {
     b.dataset.label = b.textContent;
     b.onclick = () => choose(c);
     wrap.appendChild(b);
-    decode(b, b.textContent, { cps: 80, delay: i * 120, pad: true });
+    b.style.animationDelay = `${i * 90}ms`;
   });
+  // ignore taps for a moment so a double tap on "Weiter" can't select an answer
+  wrap.classList.add('arming');
+  setTimeout(() => wrap.classList.remove('arming'), 400);
   audio.tone?.('sine', 500, 900, 0.2, 0.06);
   setFocus(0, false);
 }
@@ -437,7 +441,7 @@ function briefingFor(def) {
 
 function fillBriefing() {
   const def = cur();
-  $('b-kicker').textContent = kickerFor(def);
+  setLabel($('b-kicker'), kickerFor(def));
   $('b-obj').innerHTML = def.objectives.map((o) => `<li>${o}</li>`).join('');
   const s = SHIPS[def.ship];
   $('b-ship').textContent = `${s.name} – ${s.guns.length} Kanonen · ${s.missiles} Raketen · Schild ${s.shield} · Hülle ${s.hp}`;
@@ -459,8 +463,9 @@ function cinematic(def) {
   decode($('cine-sub'), def.objectives[0], { cps: 50, delay: 700 });
   audio.tone?.('sawtooth', 80, 40, 1.4, 0.08);
   commHold = performance.now() + 3700;
-  setTimeout(() => el.classList.add('out'), 3300);
-  setTimeout(() => el.classList.add('hidden'), 3900);
+  clearTimeout(cineT1); clearTimeout(cineT2);
+  cineT1 = setTimeout(() => el.classList.add('out'), 3300);
+  cineT2 = setTimeout(() => el.classList.add('hidden'), 3900);
 }
 
 function launch() {
@@ -507,7 +512,7 @@ function onMissionEnd(win, reason, stats, cause) {
 function debrief(result, reason, stats, def, oldRank) {
   lastResult = result;
   const acc = stats.shots ? Math.round(Math.min(1, stats.hits / stats.shots) * 100) : 0;
-  $('r-kicker').textContent = `Nachbesprechung · ${def.title}`;
+  setLabel($('r-kicker'), `Nachbesprechung · ${def.title}`);
   $('r-title').style.color = result === 'win' ? 'var(--ok)' : result === 'branch' ? 'var(--warn)' : 'var(--foe)';
   const mm = Math.floor(stats.time / 60), ss = String(Math.floor(stats.time % 60)).padStart(2, '0');
   $('r-stats').innerHTML = `<div><b id="st-k">0</b><span>Abschüsse</span></div><div><b id="st-a">0%</b><span>Trefferquote</span></div><div><b>${mm}:${ss}</b><span>Flugzeit</span></div><div><b id="st-s">0</b><span>Punkte</span></div>`;
@@ -710,6 +715,8 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { ui.pause(); audio.ctx?.suspend(); } else audio.ctx?.resume();
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
+// turning a phone to portrait covers the game with a hint, so pause the flight
+matchMedia('(orientation: portrait) and (max-width: 700px)').addEventListener?.('change', (e) => { if (e.matches) ui.pause(); });
 
 title();
 if (import.meta.env?.DEV || query.has('debug')) window.__game = { game, save: () => save, hub, MISSIONS, CUTSCENES, settings, show, launch, startMissionFlow, playCut, setSave: (s) => { save = s; } };
