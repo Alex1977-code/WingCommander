@@ -1,5 +1,5 @@
 /**
- * Campaign "Sternenfront – Der Perseus-Krieg". Original story, three acts, 15 missions.
+ * Campaign "Sternenfront – Der Perseus-Krieg". Original story, three acts, 20 missions.
  * {cs} = player's callsign. Lines may carry conditions: if / ifNot (flag names), aff: ['kolibri', 2].
  * Lines with `choices` pause the dialog for a decision. Choices may set flags, change affinity,
  * insert reply lines and redirect the campaign (goto).
@@ -466,7 +466,7 @@ export const MISSIONS = [
     id: 'm5', act: 'I', title: 'Alarmstart', sector: 'Tessa-System · Position der Aurora', ship: 'falke', wingman: 'kolibri', sky: SKY.alarm,
     preCut: 'ambush',
     briefing: [
-      { who: 'brandt', text: 'Drei Bomberwellen im Anflug auf die Aurora. Unsere Geschütze halten die Jäger auf Abstand, aber nicht die Torpedos.' },
+      { who: 'brandt', text: 'Bomberwellen im Anflug auf die Aurora. Unsere Geschütze halten die Jäger auf Abstand, aber nicht die Torpedos.' },
       { who: 'kolibri', text: 'Wenn die Aurora fällt, haben wir kein Zuhause mehr. Bomber zuerst, {cs}. Alles andere ist Dekoration.' },
     ],
     objectives: ['Die TUS Aurora verteidigen', 'Alle Bomberwellen vernichten'],
@@ -643,7 +643,7 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Major Adeyemi hat einmal gesagt: „Bring den Vogel heil zurück.“ Er hat sich nicht daran gehalten. Dafür leben wir noch.' },
       { who: 'juno', text: 'Leutnant Ada Kerimov, Rufzeichen Juno. Ich bin von der Ares versetzt worden. Ich… es tut mir leid, dass wir uns so kennenlernen.' },
       { who: 'juno', text: 'Sie sagen, du warst sein Schüler. Willst du etwas sagen?', choices: [
-        { label: '„Schieß nur auf das, was du triffst.“ Für Rook.', aff: { kolibri: 1 }, reply: [{ who: 'juno', text: 'Für Rook.' }, { who: 'erz', text: 'Hundert Stimmen wiederholen es leise. Für Rook.' }] },
+        { label: '„Schieß nur auf das, was du triffst.“ Für Rook.', aff: { juno: 1 }, reply: [{ who: 'juno', text: 'Für Rook.' }, { who: 'erz', text: 'Hundert Stimmen wiederholen es leise. Für Rook.' }] },
         { label: 'Wir holen Kolibri zurück. Das ist alles, was zählt.', set: { vowRescue: true }, reply: [{ who: 'juno', text: 'Dann bin ich dabei. Egal, was der Befehl sagt.' }] },
       ] },
     ] },

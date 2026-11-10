@@ -6,7 +6,7 @@
  * finger blends into the palm with a narrow one (so fingers stay separate), and the result
  * is meshed with surface nets. Normals come from the field gradient, vertex colours add
  * ambient occlusion between the fingers, reddish knuckles, pale nails and fine mottling.
- * Geometries are cached per pose and warmed up while the menus are idle, so they are built once per session.
+ * Geometries are cached per pose and built in small slices while the menus are idle, once per session.
  */
 import * as THREE from 'three';
 
@@ -47,6 +47,9 @@ function smin(a, b, k) {
 // ---------------------------------------------------------------------------
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const cone = (a, b, r1, r2) => [a.x, a.y, a.z, b.x, b.y, b.z, r1, r2];
+// finger thickness: slim enough that neighbouring fingers keep a gap wider than one grid cell
+const FT = 0.92;
+const fingerBones = (K, A, B, C, s) => [cone(K, A, 0.0102 * s * FT, 0.009 * s * FT), cone(A, B, 0.0088 * s * FT, 0.0079 * s * FT), cone(B, C, 0.0077 * s * FT, 0.0066 * s * FT)];
 
 /** builds the distance field from a pose */
 function makeField(pose) {
@@ -84,7 +87,7 @@ function gripPose(r) {
     const fr = 0.0087 * s, ring = r + fr * 0.92;
     const a0 = -0.32, a1 = a0 + (0.043 * ls) / ring, a2 = a1 + (0.026 * ls) / ring, a3 = Math.min(3.3, a2 + (0.019 * ls) / ring);
     const K = P(a0, ring + 0.012, y + 0.002), A = P(a1, ring, y), B = P(a2, ring, y - 0.002), C = P(a3, ring * 0.97, y - 0.004);
-    fingers.push([cone(K, A, 0.0102 * s, 0.009 * s), cone(A, B, 0.0088 * s, 0.0079 * s), cone(B, C, 0.0077 * s, 0.0066 * s)]);
+    fingers.push(fingerBones(K, A, B, C, s));
     // metacarpal back to the wrist: together they form the back of the hand
     const M = V(r + 0.008, y * 0.42 - 0.004, 0.074);
     palm.push(cone(K, M, 0.0105 * s, 0.0118));
@@ -112,7 +115,7 @@ function throttlePose() {
   [[0.0205, 0.96, 1.0], [0.0068, 1.0, 1.06], [-0.0072, 0.95, 1.0], [-0.0205, 0.82, 0.82]].forEach(([x, s, ls]) => {
     const K = V(x, 0.032, 0.012);
     const A = K.clone().add(V(0, -0.004, -0.034 * ls)), B = A.clone().add(V(0, -0.021 * ls, -0.011 * ls)), C = B.clone().add(V(0, -0.015 * ls, 0.007 * ls));
-    fingers.push([cone(K, A, 0.0102 * s, 0.009 * s), cone(A, B, 0.0088 * s, 0.0079 * s), cone(B, C, 0.0077 * s, 0.0066 * s)]);
+    fingers.push(fingerBones(K, A, B, C, s));
     palm.push(cone(K, V(x * 0.42, 0.046, 0.074), 0.0105 * s, 0.0118));
     knuckles.push(K, A, B);
     nails.push({ a: B, b: C, r: 0.0072 * s, out: V(0, -0.35, -1).normalize() });
@@ -140,7 +143,7 @@ function bounds(pose) {
   return bb.expandByScalar(0.005);
 }
 
-function mesh(pose, h = 0.0016) {
+function* mesh(pose, h = 0.0016) {
   const F = makeField(pose);
   const bb = bounds(pose);
   const nx = Math.ceil((bb.max.x - bb.min.x) / h) + 1, ny = Math.ceil((bb.max.y - bb.min.y) / h) + 1, nz = Math.ceil((bb.max.z - bb.min.z) / h) + 1;
@@ -149,11 +152,14 @@ function mesh(pose, h = 0.0016) {
   const id = (i, j, k) => i + nx * (j + ny * k);
   // evaluate block-wise and skip blocks far from the surface
   const B = 4, reach = B * h * 0.9 + h;
-  for (let bk = 0; bk < nz; bk += B) for (let bj = 0; bj < ny; bj += B) for (let bi = 0; bi < nx; bi += B) {
+  for (let bk = 0; bk < nz; bk += B) for (let bj = 0; bj < ny; bj += B) {
+    yield;
+    for (let bi = 0; bi < nx; bi += B) {
     const dc = F(ox + (bi + B / 2) * h, oy + (bj + B / 2) * h, oz + (bk + B / 2) * h);
     const far = Math.abs(dc) > reach;
     for (let k = bk; k < Math.min(nz, bk + B); k++) for (let j = bj; j < Math.min(ny, bj + B); j++) for (let i = bi; i < Math.min(nx, bi + B); i++) {
       val[id(i, j, k)] = far ? dc : F(ox + i * h, oy + j * h, oz + k * h);
+    }
     }
   }
   // one vertex per cell that the surface passes through
@@ -163,7 +169,9 @@ function mesh(pose, h = 0.0016) {
   const corners = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
   const edges = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
   const cv = new Float32Array(8);
-  for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+  for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) {
+    if (!(j & 7)) yield;
+    for (let i = 0; i < nx - 1; i++) {
     let mask = 0;
     for (let c = 0; c < 8; c++) { const [a, b, d] = corners[c]; cv[c] = val[id(i + a, j + b, k + d)]; if (cv[c] < 0) mask |= 1 << c; }
     if (mask === 0 || mask === 255) continue;
@@ -176,6 +184,7 @@ function mesh(pose, h = 0.0016) {
     }
     cell[cid(i, j, k)] = pos.length / 3;
     pos.push(ox + (i + sx / n) * h, oy + (j + sy / n) * h, oz + (k + sz / n) * h);
+    }
   }
   // one quad per grid edge crossing the surface, wound so the face points outwards
   const idx = [];
@@ -200,11 +209,12 @@ function mesh(pose, h = 0.0016) {
 // ---------------------------------------------------------------------------
 const SKIN = new THREE.Color('#a8714f'), FLUSH = new THREE.Color('#9a4f44'), NAIL = new THREE.Color('#d9b2a6'), PALE = new THREE.Color('#bd8a6c');
 
-function build(pose) {
-  const { F, pos, idx } = mesh(pose);
+function* build(pose) {
+  const { F, pos, idx } = yield* mesh(pose);
   const n = pos.length / 3, nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
   const e = 0.0004, c = new THREE.Color(), p = new THREE.Vector3(), nv = new THREE.Vector3(), tmp = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
+    if (!(i % 1500)) yield;
     const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
     nv.set(F(x + e, y, z) - F(x - e, y, z), F(x, y + e, z) - F(x, y - e, z), F(x, y, z + e) - F(x, y, z - e)).normalize();
     nor[i * 3] = nv.x; nor[i * 3 + 1] = nv.y; nor[i * 3 + 2] = nv.z;
@@ -241,17 +251,31 @@ function build(pose) {
   return { geometry: g, wrist: pose.wrist };
 }
 
-const CACHE = {};
-/** smooth hand geometry for a grip of radius r (right hand; mirror with scale.x = -1) */
-export function gripHandGeometry() {
-  return CACHE.grip || (CACHE.grip = build(gripPose(0.017)));
-}
+/**
+ * Builds run as generators so they can be sliced into small chunks while the menus idle;
+ * a cockpit that needs a hand before warm-up finished simply completes the remaining work at once.
+ */
+const JOBS = {};
+const job = (key, pose) => JOBS[key] || (JOBS[key] = { it: build(pose()), done: null });
+function finish(j) { while (!j.done) { const r = j.it.next(); if (r.done) j.done = r.value; } return j.done; }
+
+/** smooth right hand round a 17 mm grip (mirror with a negative scale.x for the left hand) */
+export function gripHandGeometry() { return finish(job('grip', () => gripPose(0.017))); }
 /** smooth left hand for the throttle knob */
-export function throttleHandGeometry() {
-  return CACHE.thr || (CACHE.thr = build(throttlePose()));
-}
-/** build both hands ahead of time (called while the menus are idle) */
+export function throttleHandGeometry() { return finish(job('thr', throttlePose)); }
+
+/** build both hands ahead of time in ~6 ms slices so the title screen keeps animating */
 export function warmHands() {
-  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200));
-  idle(() => { gripHandGeometry(); idle(() => throttleHandGeometry()); });
+  const queue = [job('grip', () => gripPose(0.017)), job('thr', throttlePose)];
+  const step = () => {
+    const t0 = performance.now();
+    while (queue.length && performance.now() - t0 < 6) {
+      const j = queue[0];
+      if (j.done) { queue.shift(); continue; }
+      const r = j.it.next();
+      if (r.done) { j.done = r.value; queue.shift(); }
+    }
+    if (queue.length) setTimeout(step, 16);
+  };
+  setTimeout(step, 0);
 }

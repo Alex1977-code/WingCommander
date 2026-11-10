@@ -31,7 +31,7 @@ const audio = new Audio();
 audio.enabled = settings.sound;
 audio.musicOn = settings.music;
 
-const fill = (t) => t.replaceAll('{cs}', save.callsign);
+const fill = (t) => t.replaceAll('{cs}', () => save.callsign); // function: '$' in a callsign is not a replacement pattern
 const coopActive = () => settings.coop && hub.devices.length >= 1;
 
 // touch UI only where it makes sense
@@ -242,12 +242,17 @@ const ui = {
 let cutArmed = false, cutSubDec = null, cutSubT = 0, cutTitleT = 0, commFrozen = false;
 
 /** Fade to black, run cb, fade back. Input is ignored while the screen is black. */
-let busy = false;
+let busy = false, fadeGen = 0;
 function fadeDark(cb) {
   const f = $('fade');
   busy = true;
   f.classList.add('dark', 'on');
-  setTimeout(() => { busy = false; cb(); f.classList.remove('on'); }, 550);
+  const gen = ++fadeGen;
+  setTimeout(() => {
+    busy = false;
+    // never stay black if cb throws; a fade started inside cb (e.g. a cutscene) keeps the screen dark itself
+    try { cb(); } finally { if (gen === fadeGen) f.classList.remove('on'); }
+  }, 550);
 }
 // swallow clicks during transitions so nothing starts twice
 document.addEventListener('click', (e) => { if (busy) { e.stopPropagation(); e.preventDefault(); } }, true);
@@ -332,6 +337,8 @@ function showChoices(l) {
   // ignore taps for a moment so a double tap on "Weiter" can't select an answer
   wrap.classList.add('arming');
   setTimeout(() => wrap.classList.remove('arming'), 400);
+  // the same 400 ms for keyboard / gamepad: confirm presses are ignored until shownAt + 300 ms
+  shownAt = performance.now() + 100;
   audio.tone?.('sine', 500, 900, 0.2, 0.06);
   setFocus(0, false);
 }
@@ -608,6 +615,7 @@ $('m-multi').onclick = () => { audio.unlock(); openMulti(); };
 document.querySelectorAll('[data-back]').forEach((b) => (b.onclick = () => { store(SET_KEY, settings); title(); }));
 $('callsign').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('name-ok').click(); });
 $('name-ok').onclick = () => {
+  $('callsign').blur(); // a focused hidden input would swallow the keys that advance the prolog
   const cs = $('callsign').value.trim().replace(/[<>{}]/g, '') || 'Nova';
   save = { ...NEW_SAVE(), started: true, callsign: cs };
   store(SAVE_KEY, save);
@@ -749,13 +757,13 @@ function resume() {
   game.paused = false;
   game.pilots.forEach((P) => { P.ctrl.take(); });
   show(null);
-  if (commFrozen) { commFrozen = false; commT = setTimeout(nextComm, 1200); }
+  if (commFrozen) { commFrozen = false; clearTimeout(commT); commT = setTimeout(nextComm, 1200); }
 }
 $('p-resume').onclick = resume;
 $('p-restart').onclick = () => { if (game.ended) return; game.stop(); launch(); };
 $('p-quit').onclick = () => { if (game.ended) return; hub.activeP2 = undefined; game.stop(); clearComm(); document.body.classList.remove('coop'); fadeDark(() => { game.startAttract(); title(); }); };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { ui.pause(); audio.ctx?.suspend(); } else audio.ctx?.resume();
+  if (document.hidden) { ui.pause(); audio.ctx?.suspend().catch(() => {}); } else audio.ctx?.resume().catch(() => {});
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 // turning a phone to portrait covers the game with a hint, so pause the flight

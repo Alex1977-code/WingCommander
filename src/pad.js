@@ -150,6 +150,10 @@ export function startPadPage(code, existingTransport) {
     dirty = false; keep = 0;
   }, 33);
 
+  // leaving the page (screen lock, app switch) lets go of everything instead of leaving fire held
+  const letGo = () => { state.x = state.y = 0; state.f = state.b = false; sid = null; knob.style.transform = ''; tr?.send({ t: 's', x: 0, y: 0, f: false, b: false, th: +state.th.toFixed(3) }); };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
+  window.addEventListener('pagehide', letGo);
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   // keep screen on while controlling
   try { navigator.wakeLock?.request('screen').catch(() => {}); } catch { /* ignore */ }

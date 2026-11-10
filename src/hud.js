@@ -297,7 +297,7 @@ export function drawHud(ctx, g, P) {
 
   // --- radar (bottom-center; in the cockpit the radar lives on the right MFD) ---
   if (P.view !== 'cockpit') {
-  const R = (solo ? 40 : 34) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s;
+  const R = (solo ? 40 : 34) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
   ctx.fillStyle = 'rgba(6,14,24,.6)';
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.fill();
   // sweep
@@ -333,7 +333,7 @@ export function drawHud(ctx, g, P) {
   // warnings
   if (P.missileWarn && Math.sin(t * 16) > 0) {
     ctx.font = `800 ${14 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    glowText(ctx, '⚠ RAKETENWARNUNG', w / 2, h * 0.28, C.foe, 14);
+    glowText(ctx, '⚠ RAKETENWARNUNG', w / 2, P.view === 'cockpit' ? h * 0.47 + 78 * s : h * 0.28, C.foe, 14); // below the reticle in the cockpit, clear of the roll scale
   }
   if (g.banner && g.bannerT > 0) {
     const a = Math.min(1, g.bannerT);
@@ -397,6 +397,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
   const yb = cy - (def.boost - spd) * ppm;
   ctx.fillStyle = 'rgba(127,214,255,.35)'; ctx.fillRect(x0 + 2 * s, yb - 3 * s, 4 * s, 6 * s);
   ctx.restore();
+  ctx.textBaseline = 'middle'; // the restore above dropped it; the readouts below are centred
   ctx.beginPath(); ctx.moveTo(x0, cy - th / 2); ctx.lineTo(x0, cy + th / 2); ctx.stroke();
   // set-speed caret from the throttle
   const want = P.boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);

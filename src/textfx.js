@@ -100,10 +100,12 @@ export class Hologram {
     this.who = 'erz'; this.color = '#7fd6ff';
     this.talk = 0; this.glitchT = 0; this._on = false;
     this.t0 = performance.now();
-    this.loop = (now) => { if (!this._on) return; this.draw(now); requestAnimationFrame(this.loop); };
+    this.gen = 0;
+    this.loop = (now, gen) => { if (!this._on || gen !== this.gen) return; this.draw(now); requestAnimationFrame((n) => this.loop(n, gen)); };
   }
   get on() { return this._on; }
-  set on(v) { if (v && !this._on) { this._on = true; requestAnimationFrame(this.loop); } else if (!v) this._on = false; }
+  // a generation counter makes sure switching off and on within one frame never leaves two loops running
+  set on(v) { if (v && !this._on) { this._on = true; const gen = ++this.gen; requestAnimationFrame((n) => this.loop(n, gen)); } else if (!v) this._on = false; }
   set(who, color) {
     if (who !== this.who) this.glitchT = 0.35;
     this.who = who; this.color = color;
@@ -267,10 +269,11 @@ export class Waveform {
   constructor(canvas) {
     this.c = canvas; this.g = canvas.getContext('2d'); this.level = 0; this.color = '#7fd6ff'; this._on = false;
     this.vals = new Float32Array(32);
-    this.loop = () => { if (!this._on) return; this.draw(); requestAnimationFrame(this.loop); };
+    this.gen = 0;
+    this.loop = (gen) => { if (!this._on || gen !== this.gen) return; this.draw(); requestAnimationFrame(() => this.loop(gen)); };
   }
   get on() { return this._on; }
-  set on(v) { if (v && !this._on) { this._on = true; requestAnimationFrame(this.loop); } else if (!v) this._on = false;
+  set on(v) { if (v && !this._on) { this._on = true; const gen = ++this.gen; requestAnimationFrame(() => this.loop(gen)); } else if (!v) this._on = false;
   }
   draw() {
     const { c, g, vals } = this, W = c.width, H = c.height, n = vals.length;

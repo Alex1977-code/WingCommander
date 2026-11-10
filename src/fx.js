@@ -132,6 +132,12 @@ function shieldMaterial() {
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
 
 /** Particle, flash, debris, light and shockwave effects. */
+/** gl_PointSize is in framebuffer pixels: scale with the viewport so particles look the same at any resolution / pixel ratio (600 at 1080 px) */
+export function setParticleScale(fx, viewportPx) {
+  const k = Math.max(200, viewportPx * 0.555);
+  for (const p of [fx?.fire, fx?.smokeP]) if (p) p.points.material.uniforms.uScale.value = k;
+}
+
 export class Fx {
   constructor(scene, quality = 'high') {
     this.scene = scene;

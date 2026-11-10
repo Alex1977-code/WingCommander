@@ -171,6 +171,8 @@ function fighter(o) {
     const pod = new THREE.CylinderGeometry(0.32, 0.4, o.root * 0.9, 8);
     pod.rotateX(Math.PI / 2);
     mk(g, pod, m.dark, tipX, tipY, o.wingZ - o.sweep + o.root * 0.2);
+    // muzzle at the front of the wing-tip pod: wing guns in SHIPS are snapped here in buildShip()
+    (g.userData.pods ||= []).push([tipX, tipY, o.wingZ - o.sweep + o.root * 0.65]);
     const st = mk(g, new THREE.BoxGeometry(o.span * 0.5, 0.06, o.root * 0.16), o.pal === PAL.union ? m.accent : m.line,
       sgn * (wx + o.span * 0.45), (o.wingY || 0) + 0.2 + o.span * 0.45 * Math.sin(o.dihedral || 0), o.wingZ - o.sweep * 0.45);
     st.rotation.z = sgn * (o.dihedral || 0);
@@ -450,10 +452,42 @@ function mergeByMaterial(group) {
   }
 }
 
+/**
+ * Align the stats with the generated model (once per type):
+ *  - wing guns fire from the wing-tip pods instead of empty space beside the hull
+ *  - capital ships get extra hit boxes for parts sticking out of their main box (blades, towers, prows)
+ *  - modelR = farthest point of the model, used for hit tests
+ */
+function fitStats(type, t) {
+  const def = SHIPS[type], body = t.getObjectByName('body');
+  t.updateMatrixWorld(true);
+  const pods = body.userData.pods;
+  if (pods && def.guns) def.guns = def.guns.map((gun) => {
+    if (Math.abs(gun[0]) < 3) return gun;
+    const pod = pods.find((p) => Math.sign(p[0]) === Math.sign(gun[0]));
+    return pod ? [pod[0], pod[1], pod[2]] : gun;
+  });
+  const bb = new THREE.Box3(), all = new THREE.Box3(), extra = [];
+  const b = def.box, v = new THREE.Vector3();
+  body.traverse((o) => {
+    if (!o.isMesh || !o.geometry) return;
+    o.geometry.computeBoundingBox();
+    bb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+    all.union(bb);
+    if (def.capital && b && (bb.max.x > b[0] + 4 || bb.min.x < -b[0] - 4 || bb.max.y > b[1] + 4 || bb.min.y < -b[1] - 4 || bb.max.z > b[2] + 4 || bb.min.z < -b[2] - 4)) {
+      const c = bb.getCenter(v.set(0, 0, 0)), h = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+      if (h.x * h.y * h.z > 8) extra.push([c.x, c.y, c.z, h.x, h.y, h.z]);
+    }
+  });
+  if (extra.length && !def.torus) def.boxes = extra.sort((p, q) => q[3] * q[4] * q[5] - p[3] * p[4] * p[5]).slice(0, 16);
+  def.modelR = Math.max(Math.abs(all.min.x), all.max.x, Math.abs(all.min.y), all.max.y, Math.abs(all.min.z), all.max.z);
+}
+
 const TEMPLATES = {};
 export function buildShip(type) {
   if (!TEMPLATES[type]) {
     const t = makeShip(type);
+    if (SHIPS[type]) fitStats(type, t);
     mergeByMaterial(t.getObjectByName('body'));
     t.traverse((o) => {
       if (o.geometry) o.geometry.userData.shared = true;

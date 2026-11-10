@@ -54,8 +54,10 @@ export class TouchKeys {
 
     const hold = (id, prop) => {
       const el = $(id);
-      const on = (e) => { this[prop] = true; el.classList.add('down'); el.setPointerCapture(e.pointerId); e.preventDefault(); };
-      const off = () => { this[prop] = false; el.classList.remove('down'); };
+      // track every finger on the button: lifting one of two fingers must not release it
+      const ids = new Set();
+      const on = (e) => { ids.add(e.pointerId); this[prop] = true; el.classList.add('down'); el.setPointerCapture(e.pointerId); e.preventDefault(); };
+      const off = (e) => { ids.delete(e.pointerId); if (ids.size) return; this[prop] = false; el.classList.remove('down'); };
       el.addEventListener('pointerdown', on);
       el.addEventListener('pointerup', off);
       el.addEventListener('pointercancel', off);
@@ -166,22 +168,24 @@ export class RemoteDevice {
   }
   onMessage(m) {
     if (!m || typeof m !== 'object') return;
+    this.lastMsg = performance.now();
     if (m.t === 's') {
       this.x = Number.isFinite(m.x) ? clamp(m.x) : 0; this.y = Number.isFinite(m.y) ? clamp(m.y) : 0;
       this.firing = !!m.f; this.boosting = !!m.b;
       if (Number.isFinite(m.th) && Math.abs(m.th - (this.lastTh ?? -1)) > 0.002) { this.lastTh = m.th; this.throttleSet = Math.max(0, Math.min(1, m.th)); }
     } else if (m.t === 'e') {
-      if (['missile', 'target', 'auto', 'pause', 'view'].includes(m.e)) this.events.push(m.e);
+      if (['missile', 'target', 'auto', 'pause', 'view'].includes(m.e) && this.events.length < 16) this.events.push(m.e);
     } else if (m.t === 'm') {
       if (['up', 'down', 'left', 'right', 'ok', 'back', 'start'].includes(m.e)) this.hub.menu(m.e);
     } else if (m.t === 'hello' && typeof m.name === 'string') {
-      this.name = m.name.slice(0, 24);
-      this.hub.changed();
+      const name = m.name.trim().slice(0, 24) || 'Handy-Controller';
+      if (name !== this.name) { this.name = name; this.hub.changed(); }
     }
   }
   send(m) { try { this.transport.send(m); } catch { /* closed */ } }
   take() { const e = this.events; this.events = []; return e; }
-  reset() { this.events = []; }
+  // forget the last throttle so the phone's slider position is applied again on the next keep-alive
+  reset() { this.events = []; this.lastTh = undefined; }
   release() { this.x = this.y = 0; this.firing = this.boosting = false; this.throttleRate = 0; this.throttleSet = null; this.events = []; }
   buzz(ms) { this.send({ t: 'buzz', ms }); }
 }
@@ -233,15 +237,20 @@ export class InputHub {
     for (const p of pads) {
       if (!p || p.mapping === undefined) continue;
       if (!this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index)) {
-        this.devices.push(new GamepadDevice(this, p.index, p.id)); dirty = true;
+        const d = new GamepadDevice(this, p.index, p.id);
+        this.adopt(d); this.devices.push(d); dirty = true;
       }
     }
     const before = this.devices.length;
     this.devices = this.devices.filter((d) => { const keep = d.kind !== 'gamepad' || pads[d.index]; if (!keep) d.release(); return keep; });
     if (dirty || before !== this.devices.length) this.changed();
   }
+  /** a device that joins while player 2's controller is gone takes over player 2 */
+  adopt(d) { if (this.activeP2 && !this.devices.includes(this.activeP2)) this.activeP2 = d; }
   addRemote(transport, name) {
     const d = new RemoteDevice(this, transport, name);
+    d.lastMsg = performance.now();
+    this.adopt(d);
     this.devices.push(d);
     transport.onClose(() => { d.release(); this.devices = this.devices.filter((x) => x !== d); this.changed(); });
     this.changed();
@@ -252,17 +261,21 @@ export class InputHub {
   poll(dt) {
     const pads = this.pads();
     if (pads.some((p) => p && !this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index))) this.scanPads();
-    for (const d of this.devices) if (d.kind === 'gamepad') d.poll(dt, pads);
+    const now = performance.now();
+    for (const d of this.devices) {
+      if (d.kind === 'gamepad') d.poll(dt, pads);
+      // a phone that went silent (screen locked, Wi-Fi lost) must not keep firing or steering
+      else if (d.kind === 'remote' && now - (d.lastMsg || 0) > 1200) { d.x = d.y = 0; d.firing = d.boosting = false; }
+    }
   }
 
   /** Returns one controller per pilot. In co-op the most recently joined device flies player 2. */
   assign(coop) {
     const devs = this.devices;
     if (coop && devs.length >= 1) {
-      const p2 = devs[devs.length - 1];
-      this.activeP2 = p2;
-      // P1 follows the live device list, so a controller that reconnects mid-flight steers again
-      return [new Merged(() => [this.local, ...this.devices.filter((d) => d !== p2)]), new Merged(() => (this.devices.includes(p2) ? [p2] : []))];
+      this.activeP2 = devs[devs.length - 1];
+      // both pilots follow the live device list: a reconnecting player-2 controller is adopted by adopt()
+      return [new Merged(() => [this.local, ...this.devices.filter((d) => d !== this.activeP2)]), new Merged(() => (this.devices.includes(this.activeP2) ? [this.activeP2] : []))];
     }
     this.activeP2 = null;
     return [new Merged(() => [this.local, ...this.devices])];

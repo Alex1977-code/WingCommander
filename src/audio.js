@@ -110,6 +110,8 @@ class Music {
       this.out.gain.setTargetAtTime(1, ctx.currentTime, 0.6);
     }
     if (!this.mood) return;
+    // after a main-thread stall (scene load, GC) or while music is off, skip ahead instead of firing every missed note at once
+    if (this.time < ctx.currentTime || !this.a.musicOn) { this.time = ctx.currentTime + 0.05; if (!this.a.musicOn) return; }
     const sd = 60 / this.mood.bpm / 4;
     while (this.time < ctx.currentTime + 0.15) {
       this.schedule(this.step, this.time, sd);
@@ -257,7 +259,7 @@ export class Audio {
   constructor() { this.ctx = null; this.enabled = true; this.musicOn = true; this.engine = null; this.music = null; this.voices = 0; this.wantMood = 'menu'; }
 
   unlock() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    if (this.ctx) { if (this.ctx.state !== 'running' && !document.hidden) this.ctx.resume().catch(() => {}); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const ctx = (this.ctx = new AC());
@@ -277,6 +279,9 @@ export class Audio {
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.music = new Music(this);
     this.music.setMood(this.wantMood);
+    // iOS reports 'interrupted' after calls/Siri: any later touch or key brings the sound back, also mid-flight
+    const kick = () => { if (ctx.state !== 'running' && !document.hidden) ctx.resume().catch(() => {}); };
+    window.addEventListener('pointerdown', kick, true); window.addEventListener('keydown', kick, true);
   }
 
   setEnabled(v) {
@@ -296,7 +301,7 @@ export class Audio {
   release(ms) { setTimeout(() => this.voices--, ms); }
 
   tone(type, f0, f1, dur, vol, wet = 0.15) {
-    if (!this.live || vol < 0.005 || !this.grab()) return;
+    if (!this.live || !(vol >= 0.005) || !Number.isFinite(f0 + f1 + dur) || !this.grab()) return;
     const ctx = this.ctx, t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type;
     o.frequency.setValueAtTime(f0, t);
@@ -321,7 +326,7 @@ export class Audio {
     s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.02);
   }
   noise(dur, vol, f0, f1, q = 0.8, type = 'lowpass', wet = 0.3) {
-    if (!this.live || vol < 0.005 || !this.grab()) return;
+    if (!this.live || !(vol >= 0.005) || !Number.isFinite(f0 + f1 + dur) || !this.grab()) return;
     this.noiseAt(this.ctx.currentTime, dur, vol, type, f0, f1, this.sfx, wet ? this.sfxWet : null);
     this.release(dur * 1000 + 50);
   }

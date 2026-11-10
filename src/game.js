@@ -5,14 +5,21 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildShip, SHIPS } from './ships.js';
 import { createEnvironment, createAsteroids } from './env.js';
-import { Fx, glowTexture } from './fx.js';
+import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
 import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
-const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3();
+const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3(), tBox = new THREE.Vector3(), tBump = new THREE.Vector3(), tSeg = new THREE.Vector3();
+/** squared distance from point c to the segment a-b */
+function segDist2(a, b, c) {
+  tSeg.subVectors(b, a);
+  const l2 = tSeg.lengthSq();
+  const k = l2 > 0 ? THREE.MathUtils.clamp(tSeg.dot(tBox.subVectors(c, a)) / l2, 0, 1) : 0;
+  return tBox.copy(a).addScaledVector(tSeg, k).distanceToSquared(c);
+}
 const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), q3 = new THREE.Quaternion();
 const t5 = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
@@ -121,6 +128,7 @@ export class Game {
     const cs = getComputedStyle(document.documentElement);
     this.safeL = parseFloat(cs.getPropertyValue('--sal')) || 0;
     this.safeR = parseFloat(cs.getPropertyValue('--sar')) || 0;
+    this.safeB = parseFloat(cs.getPropertyValue('--sab')) || 0;
   }
 
   setQuality(q) {
@@ -331,7 +339,7 @@ export class Game {
         P.marks.push({ x: t5.x, z: t5.z, t: performance.now() });
         if (P.marks.length > 14) P.marks.shift();
         P.cockpit?.log(`TREFFER ${sideTxt} · HÜLLE ${Math.max(0, Math.round(s.hp / s.maxHp * 100))}%`, '#ff4d6d');
-        if (s.hp > 0 && P.cockpit?.hit(dmg, s.hp / s.maxHp)) this.audio.hit(false);
+        if (s.hp > 0) P.cockpit?.hit(dmg, s.hp / s.maxHp);
       } else if (Math.random() < 0.35) P.cockpit?.log(`SCHILD ${sideTxt} ABSORBIERT`, '#7fd6ff');
       P.shake = Math.min(1.2, P.shake + dmg * 0.035);
       P.hurt = Math.min(0.7, P.hurt + dmg * 0.02);
@@ -386,7 +394,7 @@ export class Game {
         this.stats.per[by.pilot.idx]++;
         by.pilot.cockpit?.log(`ZIEL ZERSTÖRT · ${s.name}`, '#ffc857');
         this.setBanner(`${s.name.toUpperCase()} ZERSTÖRT`);
-        if (this.wingman?.alive && Math.random() < 0.3) this.ui.comm(this.wingman.who, ['Guter Schuss, {cs}!', 'Abschuss bestätigt!', 'Den hast du sauber erwischt!'][Math.random() * 3 | 0].replace('{cs}', by.name));
+        if (this.wingman?.alive && Math.random() < 0.3) this.ui.comm(this.wingman.who, ['Guter Schuss, {cs}!', 'Abschuss bestätigt!', 'Den hast du sauber erwischt!'][Math.random() * 3 | 0].replace('{cs}', () => by.name));
       } else if (by?.wingman && Math.random() < 0.5) {
         this.ui.comm(by.who, ['Einer weniger!', 'Ziel zerstört!', 'Erwischt!'][Math.random() * 3 | 0]);
       }
@@ -528,7 +536,12 @@ export class Game {
 
   /** Distance to a capital ship's hull: its box, plus an optional ring (torus) such as the station's. */
   hullDist(c, p, out) {
-    const d = this.boxDist(c, p, out);
+    let d = this.boxDist(c, p, out);
+    // extra boxes for blades, towers and prows outside the main box (see fitStats in ships.js)
+    for (const e of c.def.boxes || []) {
+      const de = this.boxDist(c, p, tBox, e);
+      if (de < d) { d = de; out.copy(tBox); }
+    }
     const tor = c.def.torus;
     if (!tor) return d;
     const l = t5.copy(p).sub(c.pos).applyQuaternion(q3.copy(c.quat).invert());
@@ -543,9 +556,10 @@ export class Game {
   }
 
   /** Distance from point to a capital ship's oriented box; out = world-space push direction. */
-  boxDist(c, p, out) {
-    const b = c.def.box;
+  boxDist(c, p, out, e = null) {
+    const b = e ? [e[3], e[4], e[5]] : c.def.box;
     t4.copy(p).sub(c.pos).applyQuaternion(q2.copy(c.quat).invert());
+    if (e) t4.x -= e[0], t4.y -= e[1], t4.z -= e[2];
     const cx = THREE.MathUtils.clamp(t4.x, -b[0], b[0]), cy = THREE.MathUtils.clamp(t4.y, -b[1], b[1]), cz = THREE.MathUtils.clamp(t4.z, -b[2], b[2]);
     out.set(t4.x - cx, t4.y - cy, t4.z - cz);
     const d = out.length();
@@ -666,7 +680,7 @@ export class Game {
     }
     if (P.bumpT <= 0) {
       P.bumpT = 0.5;
-      this.damage(p, 12 + p.speed * 0.08, null, p.pos);
+      this.damage(p, 12 + p.speed * 0.08, null, tBump.copy(p.pos).addScaledVector(normal, -p.radius * 0.8));
       p.speed *= 0.5;
     }
   }
@@ -744,7 +758,7 @@ export class Game {
 
   autoAvailable() {
     const m = this.mission;
-    if (!m || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
+    if (!m || this.ended || this.failReason || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
     if (m.phase === 'travel' && (this.nav().type === 'escape' || m.timer != null)) return false;
     const alive = this.alivePilots();
     if (!alive.length || alive.length < this.pilots.length) return false;
@@ -757,6 +771,7 @@ export class Game {
     this.frozen = true;
     this.audio.warp();
     this.ui.fade(() => {
+      if (this.ended || !this.pilots.length || this.mode !== 'flight') { this.frozen = false; return; }
       const lead = this.pilots[0].ship, np = this.navPos();
       t1.copy(lead.pos).sub(np).normalize();
       const base = np.clone().addScaledVector(t1, 2300);
@@ -872,7 +887,7 @@ export class Game {
       for (const s of this.ships) if (s.alive && s.team === 1) this.jumpOut(s);
       for (const mi of this.missiles) if (mi.team === 1) mi.life = 0;
     }
-    for (const p of this.pickups) if (!p.got) this.scene.remove(p.mesh);
+    for (const p of this.pickups) if (!p.got) { this.scene.remove(p.mesh); disposeObj(p.mesh); }
     this.pickups = []; m.dockWave = false; m.courier = null;
     m.timer = null; m.docking = false; m.prog = 0;
     m.navIdx++;
@@ -893,6 +908,7 @@ export class Game {
     if (this.ended) return;
     if (m.phase === 'done') {
       for (const P of this.pilots) if (P.ship.alive) { P.ship.hp = Math.max(P.ship.hp, 1); P.ship.shield = P.ship.maxShield; }
+      for (const P of this.pilots) if (!P.ship.alive) P.deadT = Math.max(0, P.deadT - dt); // keep the respawn countdown moving
       m.endT -= dt;
       if (m.endT <= 0) this.end(true);
       return;
@@ -902,15 +918,16 @@ export class Game {
       P.deadT -= dt;
       if (this.coop && P.deadT <= 0 && this.alivePilots().length) this.respawn(P);
     }
-    const alive = this.alivePilots();
-    if (!alive.length) {
-      if (this.pilots.every((P) => P.deadT <= 0)) this.end(false, this.coop ? 'Beide Jäger wurden zerstört. Die Rettungskapseln wurden geborgen.' : 'Dein Jäger wurde zerstört. Du konntest dich mit der Rettungskapsel retten.', 'death');
-      return;
-    }
-    if (this.protect && !this.protect.alive && !this.failReason) this.fail(`Die ${this.protect.name} wurde zerstört.`);
+    // a failed objective wins over a later death, so the story branch still follows (e.g. transport lost, then shot down)
+    if (this.protect && !this.protect.alive && !this.failReason) this.fail(`${/^Habitat|^Relais/.test(this.protect.name) ? 'Das' : 'Die'} ${this.protect.name} wurde zerstört.`);
     if (this.failReason) {
       this.failT -= dt;
       if (this.failT <= 0) this.end(false, this.failReason, 'objective');
+      return;
+    }
+    const alive = this.alivePilots();
+    if (!alive.length) {
+      if (this.pilots.every((P) => P.deadT <= 0)) this.end(false, this.coop ? 'Beide Jäger wurden zerstört. Die Rettungskapseln wurden geborgen.' : 'Dein Jäger wurde zerstört. Du konntest dich mit der Rettungskapsel retten.', 'death');
       return;
     }
     const near = (pos, r) => alive.some((P) => P.ship.pos.distanceTo(pos) < r);
@@ -984,7 +1001,7 @@ export class Game {
           if (p.got) { continue; }
           p.mesh.rotation.y += dt * 2;
           if (near(p.pos, 45)) {
-            p.got = true; this.scene.remove(p.mesh);
+            p.got = true; this.scene.remove(p.mesh); disposeObj(p.mesh);
             this.fx.flash(p.pos, 50, new THREE.Color(0.6, 3, 1.4), 0.4);
             this.audio.beep(1600, 0.15);
             this.setBanner(`${nav.pickupLabel || 'FLUGSCHREIBER'} ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
@@ -1033,7 +1050,7 @@ export class Game {
     if (this.ended) return;
     this.ended = true;
     this.audio.stopEngine();
-    this.ui.missionEnd(win, reason, this.stats, cause);
+    this.ui.missionEnd(win, reason, { ...this.stats }, cause); // a copy: bolts still in flight must not add kills afterwards
   }
 
   // ---------- frame ----------
@@ -1068,19 +1085,21 @@ export class Game {
       this.env.update(this.camera);
       r.setScissorTest(false);
       r.setViewport(0, 0, this.w, this.h);
+      setParticleScale(this.fx, this.h * r.getPixelRatio());
       if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
       return;
     }
     // while paused the picture is static: draw it once, then stop rendering
     if (this.paused) { if (this.pausedDrawn) return; this.pausedDrawn = true; } else this.pausedDrawn = false;
     if (!this.paused && !this.frozen) this.update(dt);
-    else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); P.ctrl.take(); }
+    else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); if (P.ctrl.throttleSet != null) P.throttle = P.ctrl.throttleSet; P.ctrl.take(); }
     const split = this.pilots.length > 1;
     r.setScissorTest(split);
     this.hud.clearRect(0, 0, this.w, this.h);
     for (const P of this.pilots) {
       const y = this.h - P.vy - P.vh; // WebGL origin is bottom-left
       r.setViewport(P.vx, y, P.vw, P.vh);
+      setParticleScale(this.fx, P.vh * r.getPixelRatio());
       if (split) r.setScissor(P.vx, y, P.vw, P.vh);
       this.env.update(P.camera);
       const inCockpit = P.view === 'cockpit' && P.ship.alive;
@@ -1143,7 +1162,7 @@ export class Game {
         if (best !== P.target) P.targetT = performance.now();
         P.target = best;
       }
-      P.missileWarn = this.missiles.some((m) => m.target === p && m.team === 1);
+      P.missileWarn = p.alive && this.missiles.some((m) => m.target === p && m.team === 1);
       if (P.missileWarn) { P.warnT -= dt; if (P.warnT <= 0) { P.warnT = 0.4; this.audio.warn(); } }
       P.hurt = Math.max(0, P.hurt - dt * 0.8);
     }
@@ -1318,7 +1337,7 @@ export class Game {
       if (!hit) {
         for (const s of this.ships) {
           if (!s.alive || s.team === b.team || s.def.ghost) continue;
-          const r = s.radius + 4;
+          const r = Math.max(s.radius, s.def.modelR || 0) + 4;
           if (s.def.capital) {
             if (pos.distanceToSquared(s.pos) > r * r) continue;
             let hp = null;
@@ -1332,7 +1351,7 @@ export class Game {
             const len2 = t1.lengthSq();
             const k = THREE.MathUtils.clamp(t2.copy(s.pos).sub(b.prev).dot(t1) / len2, 0, 1);
             t2.copy(b.prev).addScaledVector(t1, k);
-            const rr = s.radius * (s.isPlayer ? 0.85 : 1.15);
+            const rr = s.isPlayer ? s.radius * 0.85 : Math.max(s.radius * 1.15, (s.def.modelR || 0) * 0.92);
             if (t2.distanceToSquared(s.pos) < rr * rr) { this.damage(s, b.dmg, b.owner, t2); hit = true; break; }
           }
         }
@@ -1375,6 +1394,7 @@ export class Game {
         m.quat.rotateTowards(q1, m.turn * dt);
       }
       t1.copy(FWD).applyQuaternion(m.quat);
+      const mPrev = tBump.copy(m.pos);
       m.pos.addScaledVector(t1, m.speed * dt);
       this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-3, 3), rnd(-3, 3), rnd(-3, 3), 1.8, 1.2, 0.7, m.torpedo ? 5 : 3, 0.6, 0.4);
       if ((m.smokeT = (m.smokeT || 0) - dt) <= 0) { m.smokeT = 0.03; this.fx.smoke(m.pos, 1.6, 1.4, null, 0.55, 0.35); }
@@ -1385,7 +1405,7 @@ export class Game {
           if (s.def.capital) {
             if (m.pos.distanceToSquared(s.pos) > (s.radius + 10) ** 2) continue;
             if (this.hullDist(s, m.pos, t2) < 5) { this.damage(s, m.dmg * (m.torpedo ? 1 : 2.4), m.owner, m.pos); boom = true; break; }
-          } else if (m.pos.distanceToSquared(s.pos) < (s.radius + 7) ** 2) {
+          } else if (segDist2(mPrev, m.pos, s.pos) < (s.radius + 7) ** 2) { // swept: fast missiles must not tunnel through
             this.damage(s, m.dmg, m.owner, m.pos); boom = true; break;
           }
         }

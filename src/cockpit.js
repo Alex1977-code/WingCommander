@@ -388,7 +388,11 @@ export class Cockpit {
 
   /** Build geometry for the current screen shape (rebuilt when aspect or FOV changes). */
   build(aspect, fov) {
-    if (Math.abs(aspect - this.aspect) < 0.01 && fov === this.fov) return;
+    if (Math.abs(aspect - this.aspect) < 0.04 && fov === this.fov) return;
+    for (const m of this.buildMats || []) m.dispose();
+    this.bolts?.dispose();
+    this.buildMats = [];
+    const own = (m) => { this.buildMats.push(m); return m; };
     this.aspect = aspect; this.fov = fov;
     for (const c of [...this.rig.children]) { this.rig.remove(c); c.traverse((o) => { if (!o.geometry?.userData.shared) o.geometry?.dispose(); }); }
     const th = Math.tan((fov * Math.PI) / 360);
@@ -435,7 +439,7 @@ export class Cockpit {
     const bank = (deg, y, n, kinds) => {
       const step = 0.017, id = `bank${bankNo++}`;
       for (let k = 0; k < n; k++) {
-        const mat = new THREE.MeshStandardMaterial({ color: 0x1d1f22, emissive: 0x000000, roughness: 0.5 });
+        const mat = own(new THREE.MeshStandardMaterial({ color: 0x1d1f22, emissive: 0x000000, roughness: 0.5 }));
         const b = new THREE.Mesh(capGeo, mat);
         place(b, deg + (((k - (n - 1) / 2) * step) / R) / DEG, y, 0.012);
         if (k === (n >> 1)) this.elems[id] = b;
@@ -541,7 +545,7 @@ export class Cockpit {
     h.add(new THREE.Mesh(geometry, this.skin));
     const w = new THREE.Object3D(); w.position.copy(wrist); h.add(w);
     h.userData.wrist = w;
-    if (side < 0) h.scale.x = -1;
+    if (side < 0) h.scale.x *= -1;
     return h;
   }
 
@@ -554,8 +558,7 @@ export class Cockpit {
     const watch = new THREE.Group(); watch.position.copy(W1).add(new V(0, 0.001, -0.008));
     const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0225, 0.0045, 6, 24), this.cuffMat); strap.scale.set(1.05, 0.9, 2.2); watch.add(strap);
     const face = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.006, 24), this.steel); face.position.y = 0.021; watch.add(face);
-    const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.0015, 20), new THREE.MeshStandardMaterial({ color: 0x101214, emissive: 0x0c2a1c, roughness: 0.08, metalness: 0.2 })); glass.position.y = 0.0245; watch.add(glass);
-    this.watchMat = glass.material;
+    const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.0015, 20), this.own(new THREE.MeshStandardMaterial({ color: 0x101214, emissive: 0x0c2a1c, roughness: 0.08, metalness: 0.2 }))); glass.position.y = 0.0245; watch.add(glass);
     h.add(watch);
     const wrist = new THREE.Object3D(); wrist.position.copy(W1); h.add(wrist);
     h.userData.wrist = wrist;
@@ -584,12 +587,18 @@ export class Cockpit {
     return y;
   }
 
+  /** materials created during build() are disposed on the next rebuild and in dispose() */
+  own(m) { (this.buildMats ||= []).push(m); return m; }
+
   setStyle(style) { this.style = style; this.applyStyle(); }
   applyStyle() {
     const st = this.style === 'stick';
     if (this.yoke) this.yoke.visible = !st;
     if (this.stick) this.stick.visible = st;
-    if (this.arms) { this.arms.stick.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st; }
+    if (this.arms) {
+      this.arms.stick.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st;
+      for (const a of Object.values(this.arms)) a.userData.cuff.visible = a.visible;
+    }
   }
 
   /**
@@ -639,7 +648,7 @@ export class Cockpit {
     this.elems.bar = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.06), this.barPanel.mat); this.elems.bar.position.set(-0.042, 0, 0.0065); pr.add(this.elems.bar);
     this.keys = [];
     for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) {
-      const mat = new THREE.MeshStandardMaterial({ color: 0x2a2c30, emissive: 0x000000, roughness: 0.6 });
+      const mat = this.own(new THREE.MeshStandardMaterial({ color: 0x2a2c30, emissive: 0x000000, roughness: 0.6 }));
       const k = new THREE.Mesh(roundedRect(0.016, 0.011, 0.002, 0.004, 0.0015), mat);
       k.position.set(0.02 + c * 0.021, 0.022 - r * 0.0145, 0.009); pr.add(k);
       this.keys.push({ mat, phase: Math.random() * 10 });
@@ -657,11 +666,11 @@ export class Cockpit {
       const tip = new THREE.Mesh(new THREE.SphereGeometry(0.0028, 8, 6), this.chrome); tip.position.y = 0.018; lever.add(tip);
       const hinge = new THREE.Group(); hinge.position.set(0, 0.002, -0.011); base.add(hinge);
       const cover = new THREE.Mesh(new THREE.BoxGeometry(0.013, 0.022, 0.02), this.redCover); cover.position.set(0, 0.011, 0.01); hinge.add(cover);
-      const led = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 6), new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0x000000 })); led.position.set(0.009, 0.001, 0.008); base.add(led);
+      const led = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 6), this.own(new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0x000000 }))); led.position.set(0.009, 0.001, 0.008); base.add(led);
       this.toggles.push({ key, lever, hinge, led: led.material });
     });
     const bg = new THREE.CylinderGeometry(0.0035, 0.0035, 0.003, 6);
-    const im = new THREE.InstancedMesh(bg, this.steel, bolts.length);
+    const im = (this.bolts = new THREE.InstancedMesh(bg, this.steel, bolts.length));
     bolts.forEach((m, i) => im.setMatrixAt(i, m));
     panel.add(im);
   }
@@ -713,7 +722,7 @@ export class Cockpit {
   // ---------------------------------------------------------------------------
   update(P, game, dt, camera) {
     this.camera.fov = camera.fov; this.camera.aspect = camera.aspect; this.camera.updateProjectionMatrix();
-    this.build(camera.aspect, Math.round(camera.fov / 4) * 4);
+    this.build(camera.aspect, Math.round((P.baseFov || 60) + 10));
     const p = P.ship;
     v.copy(game.env.sunDir).applyQuaternion(q.copy(camera.quaternion).invert());
     this.sun.position.copy(v); this.sun.target.position.set(0, 0, 0);
@@ -753,7 +762,7 @@ export class Cockpit {
     L.comm = game.ui?.commActive?.() ? 'green!' : 'off';
     L.target = P.target?.alive ? 'green' : 'off';
     L.lock = P.aimLocked ? 'green!!' : 'off';
-    L.guns = p.missiles <= 0 ? 'amber' : P.ctrl.firing ? 'green!' : 'green';
+    L.guns = P.ctrl.firing ? 'green!' : 'green';
     let mineNear = false;
     for (const mn of game.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < 380) { mineNear = true; break; }
     L.mine = mineNear ? 'amber!' : 'off';
@@ -770,7 +779,9 @@ export class Cockpit {
 
     this.mfdT -= dt;
     this.radarAng += dt * 2.2;
-    this.drawAnnunciator(t, this.fail.annun);
+    this.slowT = (this.slowT || 0) - dt;
+    const slow = this.slowT <= 0;
+    if (slow) { this.slowT = 0.05; this.drawAnnunciator(t, this.fail.annun); }
     if (this.mfdT <= 0) {
       this.mfdT = 0.1;
       this.mfds.forEach((m, i) => {
@@ -784,6 +795,7 @@ export class Cockpit {
     this.updateRetrofit(P, game, t, dt);
     for (const L of this.logs) {
       if (t > L.next) { L.next = t + rnd(0.6, 1.8); if (L.kind === 'LOG') this.log(IDLE_LINES[(Math.random() * IDLE_LINES.length) | 0], '#5fc79a', 0); else this.log(`CH ${String((Math.random() * 99) | 0).padStart(2, '0')} · ${(120 + Math.random() * 40).toFixed(2)} MHZ`, '#5fa8c7', 1); }
+      if (!slow) continue;
       const f = this.fail[`log${this.logs.indexOf(L)}`];
       if (f === 'dead' || (f === 'flicker' && Math.random() < 0.3)) this.drawStatic(L.g, L.c.width, L.c.height, f === 'dead');
       else this.drawLog(L, t);
@@ -796,7 +808,7 @@ export class Cockpit {
   /** seven-segment readouts, LED bars, toggle switches and keypad on the bolted-on pods */
   updateRetrofit(P, game, t, dt) {
     const p = P.ship;
-    this.missionT += dt;
+    this.missionT = game.stats?.time ?? this.missionT + dt;
     const fs = this.fail.seg, fb = this.fail.bar;
     if (this.mfdT >= 0.099 || this.mfdT <= 0) {
       // left pod: NAV distance (red), speed (green), mission clock (amber)
@@ -1193,8 +1205,8 @@ export class Cockpit {
 
   dispose() {
     this.scene.traverse((o) => { if (!o.geometry?.userData.shared) o.geometry?.dispose(); });
-    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.skin, this.nail, this.cuffMat, this.sleeve, this.crackMat, this.sparkMat, this.steel, this.steelDark, this.redCover, ...this.cableMats, this.conduit, ...(this.watchMat ? [this.watchMat] : []), ...this.keys.map((k) => k.mat), ...this.toggles.map((x) => x.led)]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
-    this.envRT?.dispose();
+    for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.skin, this.nail, this.cuffMat, this.sleeve, this.crackMat, this.sparkMat, this.steel, this.steelDark, this.redCover, ...this.cableMats, this.conduit, ...(this.buildMats || [])]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
+    this.envRT?.dispose(); this.bolts?.dispose();
     for (const m of [...this.mfds, ...this.logs, this.annun, this.segPanel, this.barPanel]) { m.tex.dispose(); m.mat.dispose(); }
     for (const b of this.buttons) b.mat.dispose();
   }
