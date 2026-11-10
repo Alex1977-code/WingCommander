@@ -55,12 +55,13 @@ export class TouchKeys {
     const hold = (id, prop) => {
       const el = $(id);
       // track every finger on the button: lifting one of two fingers must not release it
-      const ids = new Set();
+      const ids = new Set(); (this.holdIds ||= []).push(ids);
       const on = (e) => { ids.add(e.pointerId); this[prop] = true; el.classList.add('down'); el.setPointerCapture(e.pointerId); e.preventDefault(); };
       const off = (e) => { ids.delete(e.pointerId); if (ids.size) return; this[prop] = false; el.classList.remove('down'); };
       el.addEventListener('pointerdown', on);
       el.addEventListener('pointerup', off);
       el.addEventListener('pointercancel', off);
+      el.addEventListener('lostpointercapture', off);
     };
     hold('btn-fire', 'fireBtn');
     hold('btn-boost', 'boostBtn');
@@ -92,6 +93,15 @@ export class TouchKeys {
     });
     window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
     window.addEventListener('blur', () => { this.keys = {}; this.fireBtn = this.boostBtn = false; });
+    // safety net: when no finger is on the screen any more, nothing can still be held
+    const allUp = () => {
+      this.fireBtn = this.boostBtn = false; for (const ids of this.holdIds || []) ids.clear();
+      $('btn-fire').classList.remove('down'); $('btn-boost').classList.remove('down');
+      if (this.stick.id !== null) { this.stick.id = null; this.stick.x = this.stick.y = 0; base.classList.remove('on'); setKnob(); }
+    };
+    window.addEventListener('touchend', (e) => { if (!e.touches.length) allUp(); }, true);
+    window.addEventListener('touchcancel', (e) => { if (!e.touches.length) allUp(); }, true);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) allUp(); });
   }
 
   update(dt) {
@@ -124,14 +134,22 @@ export class GamepadDevice {
     const p = pads[this.index];
     if (!p) return;
     this.pad = p;
-    const b = (i) => !!(p.buttons[i] && (p.buttons[i].pressed || p.buttons[i].value > 0.5));
+    // Phones expose built-in sensors (fingerprint reader etc.) as "gamepads" whose buttons read as held
+    // and whose axes sit at the end stop. A button only counts once it has been seen released,
+    // an axis only once it has been seen near its centre - otherwise they would fire / steer forever.
+    const raw = (i) => !!(p.buttons[i] && (p.buttons[i].pressed || p.buttons[i].value > 0.5));
+    this.up ||= []; this.centred ||= [];
+    for (let i = 0; i < p.buttons.length; i++) if (!raw(i)) this.up[i] = true;
+    for (let i = 0; i < p.axes.length; i++) if (Math.abs(p.axes[i] || 0) < 0.2) this.centred[i] = true;
+    const b = (i) => !!this.up[i] && raw(i);
     if (!this.inited) { this.inited = true; for (let i = 0; i < p.buttons.length; i++) this.prev[i] = b(i); return; }
     const dz = (v) => (Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86);
-    const ax = dz(p.axes[0] || 0), ay = dz(p.axes[1] || 0);
+    const axis = (i) => (this.centred[i] ? dz(p.axes[i] || 0) : 0);
+    const ax = axis(0), ay = axis(1);
     this.x = ax; this.y = ay;
     this.firing = b(7) || b(0);
     this.boosting = b(6) || b(4);
-    const ry = dz(p.axes[3] || 0);
+    const ry = axis(3);
     this.throttleRate = clamp(-ry + (b(12) ? 1 : 0) - (b(13) ? 1 : 0));
     const edge = (i) => b(i) && !this.prev[i];
     if (edge(2) || edge(5)) this.events.push('missile');
@@ -235,7 +253,7 @@ export class InputHub {
     const pads = this.pads();
     let dirty = false;
     for (const p of pads) {
-      if (!p || p.mapping === undefined) continue;
+      if (!p || p.mapping !== 'standard') continue; // non-standard 'pads' on phones are sensors, not controllers
       if (!this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index)) {
         const d = new GamepadDevice(this, p.index, p.id);
         this.adopt(d); this.devices.push(d); dirty = true;

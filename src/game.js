@@ -61,6 +61,9 @@ function disposeComposer(c) {
   c.dispose();
 }
 
+const ENEMY_TOUGH = 1.7;
+const MSL_CONE = Math.cos((22 * Math.PI) / 180);
+
 export class Game {
   constructor(canvas, hudCanvas, audio, ui) {
     this.audio = audio; this.ui = ui;
@@ -71,7 +74,7 @@ export class Game {
     this.hudCanvas = hudCanvas;
     this.hud = hudCanvas.getContext('2d');
     this.quality = 'high';
-    this.invert = true;
+    this.invert = false;
     this.mode = 'idle';
     this.paused = false;
     this.pilots = [];
@@ -187,7 +190,7 @@ export class Game {
       const P = {
         idx: i, ship, ctrl, camera, camQ: ship.quat.clone(), invQ: new THREE.Quaternion(),
         target: null, energy: 1, boosting: false, throttle: 0.75,
-        aimPoint: new THREE.Vector3(), leadPoint: new THREE.Vector3(), aimLocked: false,
+        aimPoint: new THREE.Vector3(), leadPoint: new THREE.Vector3(), aimLocked: false, mslLock: 0, mslTgt: null, lockToneT: 0,
         shake: 0, hurt: 0, bumpT: 0, deadT: 0, missileWarn: false, warnT: 0,
         color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0, view: this.view || 'cockpit', cockpit: new Cockpit(), hitSide: {}, marks: [],
       };
@@ -253,6 +256,8 @@ export class Game {
       turretCool: (def.turrets || []).map(() => Math.random() * 2), bank: 0, torpCool: rnd(3, 6),
       ...opts,
     };
+    // longer dogfights: enemy fighters take more punishment
+    if (def.team === 1 && !def.capital) { s.hp = s.maxHp = def.hp * ENEMY_TOUGH; s.shield = s.maxShield = (def.shield || 0) * ENEMY_TOUGH; }
     this.ships.push(s);
     return s;
   }
@@ -277,9 +282,11 @@ export class Game {
     if (s.cool > 0) return;
     s.cool = s.def.rof;
     const key = s.team === 0 ? 'ally' : 'foe';
+    // AI wingmen and allied fighters support the player instead of winning the fight for them
+    const dmg = s.isPlayer || s.team !== 0 || s.def.capital ? s.def.dmg : s.def.dmg * (s.wingman ? 0.35 : 0.5);
     for (const g of s.def.guns) {
       t4.set(g[0], g[1], g[2]).applyQuaternion(s.quat).add(s.pos);
-      this.spawnBolt(t4, dir, s, s.def.dmg, key);
+      this.spawnBolt(t4, dir, s, dmg, key);
     }
     if (s.isPlayer) { this.audio.laser(s.pilot.idx === 0 ? 0.2 : 0.14); this.stats.shots += s.def.guns.length; return; }
     const d = this.ear(s.pos);
@@ -498,7 +505,7 @@ export class Game {
           ai.mode = 'break'; ai.t = rnd(1.4, 2.8);
           ai.dir.randomDirection().addScaledVector(dir, -0.4).normalize();
         } else if (dot > 0.993 && dist < 900) {
-          const spread = (1 - s.skill) * 0.045 + (tgt.def.capital ? 0.03 : 0.006);
+          const spread = (1 - s.skill) * 0.045 + (tgt.def.capital ? 0.03 : 0.006) + (s.team === 0 ? 0.018 : 0);
           t3.copy(t2).add(t4.randomDirection().multiplyScalar(spread)).normalize();
           this.fire(s, t3);
         }
@@ -646,6 +653,20 @@ export class Game {
       t3.copy(P.leadPoint).sub(p.pos).normalize();
       if (!tg.def.capital && dist < 1100 && t3.dot(t1) > 0.9975) P.aimLocked = true;
     }
+    // missile seeker: the target has to stay inside a 22° cone within 2.6 km for 1.4 s to lock
+    if (tg !== P.mslTgt) { P.mslTgt = tg; P.mslLock = 0; }
+    if (tg && tg.alive && p.missiles > 0) {
+      t2.copy(tg.pos).sub(p.pos);
+      const d = t2.length(), inCone = d < 2600 && t2.divideScalar(d || 1).dot(t1) > MSL_CONE;
+      const was = P.mslLock;
+      P.mslLock = inCone ? Math.min(1, P.mslLock + dt / 1.4) : Math.max(0, P.mslLock - dt * 1.5);
+      // seeker growl that speeds up while locking, then a steady lock tone
+      P.lockToneT -= dt;
+      if (P.mslLock > 0 && P.lockToneT <= 0 && P.idx === 0) {
+        if (P.mslLock >= 1) { this.audio.beep(1480, 0.07); P.lockToneT = 0.16; } else { this.audio.beep(600 + P.mslLock * 500, 0.05); P.lockToneT = 0.34 - P.mslLock * 0.22; }
+      }
+      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`RAKETE AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
+    } else P.mslLock = 0;
     if (c.firing) this.fire(p, P.aimLocked ? t3 : t1);
 
     for (const e of c.take()) {
@@ -689,8 +710,12 @@ export class Game {
     const p = P.ship;
     if (p.missiles <= 0 || !p.alive) { this.audio.beep(220); return; }
     p.missiles--;
-    this.launchMissile(p, P.target && P.target.alive ? P.target : null);
-    P.cockpit?.log(`RAKETE ${p.def.missiles - p.missiles} AB → ${P.target?.alive ? P.target.name : 'FREI'}`, '#ffc857');
+    // only a locked seeker guides the missile; without lock it flies straight ahead
+    const locked = P.target?.alive && P.mslLock >= 1;
+    this.launchMissile(p, locked ? P.target : null);
+    P.cockpit?.log(`RAKETE ${p.def.missiles - p.missiles} AB → ${locked ? P.target.name : 'UNGELENKT'}`, '#ffc857');
+    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – RAKETE UNGELENKT');
+    P.mslLock = 0;
   }
 
   cycleTarget(P) {
@@ -1139,6 +1164,7 @@ export class Game {
       const boost = s.isPlayer && s.pilot.boosting;
       const k = (0.55 + Math.min(1.2, s.speed / s.def.speed) * 0.6) * (boost ? 1.7 : 1) * (0.92 + Math.random() * 0.16);
       for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * k);
+      for (const b of s.mesh.userData.blinkers || []) { const bl = b.userData.blink; b.visible = ((performance.now() / 1000) * bl.rate + bl.phase) % 1 < 0.14; }
       this.shipFx(s, dt, boost);
       if (!s.def.capital) this.damageSmoke(s, dt);
     }

@@ -24,7 +24,9 @@ let save = load(SAVE_KEY, NEW_SAVE());
 if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
 if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
 save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
-const settings = load(SET_KEY, { sound: true, music: true, invert: true, sens: 1, view: 'cockpit', control: 'yoke', quality: 'high', coop: false, callsign2: 'Orion' });
+const settings = load(SET_KEY, { sound: true, music: true, invert: false, sens: 1, view: 'cockpit', control: 'yoke', quality: 'high', coop: false, callsign2: 'Orion' });
+// v2: touch players expect 'up = nose up', so the default changed; older saved settings are moved over once
+if (settings.v !== 2) { settings.invert = false; settings.v = 2; try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch { /* ignore */ } }
 
 const hub = new InputHub();
 const audio = new Audio();

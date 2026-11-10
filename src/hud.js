@@ -211,13 +211,50 @@ export function drawHud(ctx, g, P) {
       if (!tg.def.capital && d < 1400) {
         const l = project(P, P.leadPoint);
         if (!l.behind) {
+          // gun solution: lead pipper with a range arc that fills as the target comes into gun range
           const col = P.aimLocked ? C.ok : C.warn;
+          const inRange = Math.max(0, Math.min(1, 1 - (d - 300) / 1100));
           ctx.strokeStyle = col; ctx.lineWidth = 1.6 * s;
           ctx.shadowColor = col; ctx.shadowBlur = 6;
           ctx.beginPath(); ctx.arc(l.x, l.y, 7 * s, 0, 6.283); ctx.stroke();
           ctx.beginPath(); ctx.moveTo(l.x - 3 * s, l.y); ctx.lineTo(l.x + 3 * s, l.y); ctx.moveTo(l.x, l.y - 3 * s); ctx.lineTo(l.x, l.y + 3 * s); ctx.stroke();
+          ctx.lineWidth = 2.4 * s;
+          ctx.beginPath(); ctx.arc(l.x, l.y, 12 * s, -Math.PI / 2, -Math.PI / 2 + inRange * 6.283); ctx.stroke();
+          if (P.aimLocked) {
+            const k = 1 + Math.sin(t * 14) * 0.15;
+            ctx.beginPath();
+            for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + Math.PI / 4; ctx.moveTo(l.x + Math.cos(a) * 20 * s * k, l.y + Math.sin(a) * 20 * s * k); ctx.lineTo(l.x + Math.cos(a) * 14 * s, l.y + Math.sin(a) * 14 * s); }
+            ctx.stroke();
+            ctx.font = `800 ${8 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
+            ctx.fillText('KANONE ◆ TREFFERLÖSUNG', l.x, l.y + 22 * s);
+          }
           ctx.shadowBlur = 0;
         }
+      }
+      // missile seeker: a circle that travels from the reticle onto the target while locking
+      if (P.mslLock > 0 && p.missiles > 0) {
+        // project() returns a shared object: copy the coordinates before the next call
+        const tq = project(P, tg.pos), qx = tq.x, qy = tq.y;
+        const a = project(P, P.aimPoint), ax = a.x, ay = a.y;
+        const k = Math.pow(P.mslLock, 0.7), sx = ax + (qx - ax) * k, sy = ay + (qy - ay) * k;
+        const locked = P.mslLock >= 1;
+        const col = locked ? (Math.sin(t * 18) > -0.3 ? C.foe : '#ffffff') : C.warn;
+        ctx.strokeStyle = col; ctx.lineWidth = 2 * s; ctx.shadowColor = col; ctx.shadowBlur = 8;
+        const rr = (locked ? r + 10 * s : 26 * s - k * 8 * s);
+        if (locked) {
+          // rotating diamond around the locked target
+          ctx.save(); ctx.translate(qx, qy); ctx.rotate(t * 2);
+          ctx.beginPath(); ctx.moveTo(0, -rr); ctx.lineTo(rr, 0); ctx.lineTo(0, rr); ctx.lineTo(-rr, 0); ctx.closePath(); ctx.stroke();
+          ctx.restore();
+        } else {
+          ctx.setLineDash([5 * s, 4 * s]);
+          ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 6.283); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath(); ctx.arc(sx, sy, rr + 4 * s, -Math.PI / 2, -Math.PI / 2 + P.mslLock * 6.283); ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        ctx.font = `800 ${9 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
+        ctx.fillText(locked ? 'RAKETE ◆ AUFGESCHALTET' : `SUCHKOPF ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
       }
     } else arrow(ctx, P, tg.pos, C.foe, s);
   }
@@ -297,7 +334,7 @@ export function drawHud(ctx, g, P) {
 
   // --- radar (bottom-center; in the cockpit the radar lives on the right MFD) ---
   if (P.view !== 'cockpit') {
-  const R = (solo ? 40 : 34) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
+  const R = (solo ? 50 : 40) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
   ctx.fillStyle = 'rgba(6,14,24,.6)';
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.fill();
   // sweep
@@ -311,18 +348,29 @@ export function drawHud(ctx, g, P) {
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.moveTo(rx + R * 0.5, ry); ctx.arc(rx, ry, R * 0.5, 0, 6.283);
   ctx.moveTo(rx - R, ry); ctx.lineTo(rx + R, ry); ctx.moveTo(rx, ry - R); ctx.lineTo(rx, ry + R); ctx.stroke();
   const inv = P.invQ;
-  const blip = (pos, color, size) => {
+  // shape tells friend from foe even at a glance: foe = diamond, friend = triangle, capital = boxed
+  const blip = (pos, color, size, shape = 'sq') => {
     v.copy(pos).sub(p.pos).applyQuaternion(inv);
     const d = v.length() || 1;
     const ang = Math.acos(Math.max(-1, Math.min(1, v.z / d))) / Math.PI;
     const l = Math.hypot(v.x, v.y) || 1;
     const bx = rx - (v.x / l) * ang * R, by2 = ry - (v.y / l) * ang * R;
-    ctx.fillStyle = color;
-    ctx.fillRect(bx - size / 2, by2 - size / 2, size, size);
+    ctx.beginPath();
+    if (shape === 'foe') { ctx.moveTo(bx, by2 - size); ctx.lineTo(bx + size, by2); ctx.lineTo(bx, by2 + size); ctx.lineTo(bx - size, by2); }
+    else if (shape === 'friend') { ctx.moveTo(bx, by2 - size); ctx.lineTo(bx + size, by2 + size * 0.8); ctx.lineTo(bx - size, by2 + size * 0.8); }
+    else ctx.rect(bx - size / 2, by2 - size / 2, size, size);
+    ctx.closePath();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.stroke();
+    ctx.fillStyle = color; ctx.fill();
+    return [bx, by2];
   };
   for (const o of g.ships) {
     if (!o.alive || o === p) continue;
-    blip(o.pos, o === tg ? '#ffffff' : o.isPlayer ? o.pilot.color : o.team === 3 ? '#9fe8ff' : (o.team === 0 ? C.ok : C.foe), (o.def.capital ? 5 : 3) * s);
+    const foe = o.team === 1;
+    const col = o === tg ? '#ffffff' : o.isPlayer ? o.pilot.color : o.team === 3 ? '#9fe8ff' : (foe ? C.foe : C.ok);
+    const sz = (o.def.capital ? 6 : 4.2) * s;
+    const [bx, by2] = blip(o.pos, col, sz, o.team === 3 ? 'sq' : foe ? 'foe' : 'friend');
+    if (o.def.capital) { ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.strokeRect(bx - sz * 1.6, by2 - sz * 1.6, sz * 3.2, sz * 3.2); }
   }
   for (const m of g.missiles) if (m.team === 1) blip(m.pos, C.warn, 2.5 * s);
   for (const mn of g.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < 2500) blip(mn.pos, '#ff7a3a', 2 * s);

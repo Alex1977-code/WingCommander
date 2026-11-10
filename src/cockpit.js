@@ -248,6 +248,28 @@ function shipOutline(type) {
   return (OUTLINES[type] = { N, map, tint, halfW: ((maxX - minX) / 2) * k, halfL: ((maxZ - minZ) / 2) * k });
 }
 
+/** edge segments of a ship model, normalised to unit size (cached per type) for the target scan */
+const WIRES = {};
+function shipWire(type) {
+  if (WIRES[type]) return WIRES[type];
+  const root = buildShip(type); root.updateMatrixWorld(true);
+  const segs = [], p = new THREE.Vector3();
+  let maxR = 1e-3;
+  for (const thr of [28, 40, 55]) {
+    segs.length = 0;
+    root.traverse((o) => {
+      if (!o.isMesh || !o.geometry?.attributes?.position) return;
+      const eg = new THREE.EdgesGeometry(o.geometry, thr), ep = eg.attributes.position;
+      for (let i = 0; i < ep.count; i++) { p.fromBufferAttribute(ep, i).applyMatrix4(o.matrixWorld); segs.push(p.x, p.y, p.z); maxR = Math.max(maxR, p.length()); }
+      eg.dispose();
+    });
+    if (segs.length / 6 < 2500) break; // keep big ships light enough to redraw at 10 Hz
+  }
+  const pos = new Float32Array(segs.length);
+  for (let i = 0; i < segs.length; i++) pos[i] = segs[i] / maxR;
+  return (WIRES[type] = { pos });
+}
+
 /** canvas of radial glass cracks that accumulate on heavy hits */
 function crackCanvas() {
   const c = document.createElement('canvas'); c.width = 1024; c.height = 640;
@@ -595,8 +617,10 @@ export class Cockpit {
     const st = this.style === 'stick';
     if (this.yoke) this.yoke.visible = !st;
     if (this.stick) this.stick.visible = st;
+    // with the yoke both hands are on the horns: no third hand on the throttle
+    if (this.thrHand) this.thrHand.visible = st;
     if (this.arms) {
-      this.arms.stick.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st;
+      this.arms.stick.visible = this.arms.thr.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st;
       for (const a of Object.values(this.arms)) a.userData.cuff.visible = a.visible;
     }
   }
@@ -761,7 +785,7 @@ export class Cockpit {
     L.boost = P.boostLock ? 'red' : P.boosting ? 'green' : P.energy < 0.3 ? 'amber' : 'off';
     L.comm = game.ui?.commActive?.() ? 'green!' : 'off';
     L.target = P.target?.alive ? 'green' : 'off';
-    L.lock = P.aimLocked ? 'green!!' : 'off';
+    L.lock = P.aimLocked || P.mslLock >= 1 ? 'green!!' : P.mslLock > 0 ? 'amber!' : 'off';
     L.guns = P.ctrl.firing ? 'green!' : 'green';
     let mineNear = false;
     for (const mn of game.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < 380) { mineNear = true; break; }
@@ -1064,40 +1088,41 @@ export class Cockpit {
 
   /**
    * 3D radar scope: an inclined disc around the own ship, contacts stand on height stalks
-   * (above / below the flight plane). Friends = green triangles, foes = red diamonds,
-   * capital ships larger, mines orange, nav point cyan; the current target is bracketed.
+   * (above / below the flight plane). Big outlined symbols so friend and foe read at a glance:
+   * foes = red diamonds with distance, friends = green triangles, capital ships = large boxed
+   * symbols, mines orange, nav point cyan cross, target bracketed. The range zooms to the nearest foe.
    */
   drawRadar(g, W, H, P, game) {
-    const p = P.ship, G = '#6dffb0', R = '#ff4d6d';
-    const cx = W / 2, cy = H * 0.58, RX = W * 0.44, RY = RX * 0.42, range = 3000;
+    const p = P.ship, G = '#5dff9c', R = '#ff3d5e';
     const now = performance.now();
-    // disc, range rings, forward cone
-    g.fillStyle = 'rgba(30,120,80,.12)'; g.beginPath(); g.ellipse(cx, cy, RX, RY, 0, 0, 6.283); g.fill();
-    g.strokeStyle = 'rgba(109,255,176,.55)'; g.lineWidth = 1.5;
-    for (const k of [1, 0.66, 0.33]) { g.beginPath(); g.ellipse(cx, cy, RX * k, RY * k, 0, 0, 6.283); g.stroke(); }
-    g.strokeStyle = 'rgba(109,255,176,.3)'; g.lineWidth = 1;
+    const inv = q.copy(p.quat).invert();
+    // zoom so the nearest foe sits well inside the scope
+    let nearest = Infinity;
+    for (const o of game.ships) if (o.alive && o.team === 1) nearest = Math.min(nearest, o.pos.distanceTo(p.pos));
+    const range = nearest < 1200 ? 1500 : nearest < 2600 ? 3000 : 6000;
+    const cx = W / 2, cy = H * 0.57, RX = W * 0.47, RY = RX * 0.5;
+    g.fillStyle = 'rgba(20,110,70,.18)'; g.beginPath(); g.ellipse(cx, cy, RX, RY, 0, 0, 6.283); g.fill();
+    g.strokeStyle = 'rgba(109,255,176,.6)'; g.lineWidth = 1.5;
+    for (const k of [1, 0.5]) { g.beginPath(); g.ellipse(cx, cy, RX * k, RY * k, 0, 0, 6.283); g.stroke(); }
+    g.strokeStyle = 'rgba(109,255,176,.28)'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(cx - RX, cy); g.lineTo(cx + RX, cy); g.moveTo(cx, cy - RY); g.lineTo(cx, cy + RY);
-    g.moveTo(cx, cy); g.lineTo(cx - RX * 0.7, cy - RY * 0.7); g.moveTo(cx, cy); g.lineTo(cx + RX * 0.7, cy - RY * 0.7); g.stroke();
+    g.moveTo(cx, cy); g.lineTo(cx - RX * 0.62, cy - RY * 0.78); g.moveTo(cx, cy); g.lineTo(cx + RX * 0.62, cy - RY * 0.78); g.stroke();
     const sw = this.radarAng % 6.283;
-    for (let i = 0; i < 14; i++) {
-      const a0 = sw - i * 0.05;
-      g.strokeStyle = `rgba(109,255,176,${0.4 * (1 - i / 14)})`; g.lineWidth = 2;
+    for (let i = 0; i < 10; i++) {
+      const a0 = sw - i * 0.06;
+      g.strokeStyle = `rgba(109,255,176,${0.3 * (1 - i / 10)})`; g.lineWidth = 2;
       g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a0) * RX, cy + Math.sin(a0) * RY); g.stroke();
     }
     // own ship
-    g.fillStyle = '#ffffff'; g.beginPath(); g.moveTo(cx, cy - 7); g.lineTo(cx + 5, cy + 5); g.lineTo(cx - 5, cy + 5); g.closePath(); g.fill();
-    const inv = q.copy(p.quat).invert();
+    g.fillStyle = '#ffffff'; g.beginPath(); g.moveTo(cx, cy - 8); g.lineTo(cx + 6, cy + 6); g.lineTo(cx - 6, cy + 6); g.closePath(); g.fill();
     let friends = 0, foes = 0;
     const contacts = [];
     const add = (pos, kind, o) => {
       v2.copy(pos).sub(p.pos).applyQuaternion(inv);
       const d = v2.length();
-      let k = d / range, edge = false;
-      if (k > 1) { k = 1; edge = true; }
-      const hd = Math.hypot(v2.x, v2.z) || 1;
-      const X = cx - (v2.x / hd) * k * RX * (hd / d), Y = cy - (v2.z / hd) * k * RY * (hd / d);
-      const hgt = edge ? 0 : (v2.y / range) * RX * 0.7;
-      contacts.push({ X, Y, hgt, kind, o, edge, depth: Y });
+      let k = 1 / range, edge = false;
+      if (d > range) { k = 1 / d; edge = true; }
+      contacts.push({ X: cx - v2.x * k * RX, Y: cy - v2.z * k * RY, hgt: edge ? 0 : (v2.y / range) * RY * 1.1, kind, o, edge, d });
     };
     for (const o of game.ships) {
       if (!o.alive || o === p) continue;
@@ -1108,39 +1133,47 @@ export class Cockpit {
     for (const mn of game.mines || []) if (mn.alive && mn.pos.distanceTo(p.pos) < range) add(mn.pos, 'mine', null);
     const nav = game.navPos?.();
     if (nav) add(nav, 'nav', null);
-    contacts.sort((a, b) => a.depth - b.depth);
+    // draw far-to-near so nearer contacts overlap farther ones; label the three nearest foes
+    contacts.sort((a, b) => a.Y - b.Y);
+    const labelled = new Set(contacts.filter((c) => c.kind === 'foe' && !c.edge).sort((a, b) => a.d - b.d).slice(0, 3));
+    const sym = (c, x, y, sz, col) => {
+      g.beginPath();
+      if (c.kind === 'foe') { g.moveTo(x, y - sz); g.lineTo(x + sz, y); g.lineTo(x, y + sz); g.lineTo(x - sz, y); }
+      else if (c.kind === 'friend' || c.kind === 'neutral') { g.moveTo(x, y - sz); g.lineTo(x + sz, y + sz * 0.8); g.lineTo(x - sz, y + sz * 0.8); }
+      else if (c.kind === 'nav') { g.rect(x - 1.5, y - sz, 3, sz * 2); g.rect(x - sz, y - 1.5, sz * 2, 3); }
+      else g.arc(x, y, sz, 0, 6.283);
+      g.closePath();
+      g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,.85)'; g.stroke();
+      g.fillStyle = col; g.fill();
+    };
     for (const c of contacts) {
       const col = c.kind === 'foe' ? R : c.kind === 'friend' ? G : c.kind === 'mine' ? '#ff9a3a' : c.kind === 'nav' ? '#7fd6ff' : '#9fe8ff';
       const big = c.o?.def?.capital;
-      const sz = big ? 7 : c.kind === 'mine' ? 2.5 : 4.5;
+      const sz = big ? 11 : c.kind === 'mine' ? 3.5 : c.kind === 'nav' ? 8 : 8;
+      if (c.edge) { g.globalAlpha = 0.75; sym(c, c.X, c.Y, sz * 0.55, col); g.globalAlpha = 1; continue; }
       const bx = c.X, by = c.Y - c.hgt;
-      if (c.edge) {
-        g.fillStyle = col; g.globalAlpha = 0.7;
-        g.beginPath(); g.arc(c.X, c.Y, 2.5, 0, 6.283); g.fill(); g.globalAlpha = 1;
-        continue;
-      }
-      // stalk + foot
-      g.strokeStyle = col; g.globalAlpha = 0.6; g.lineWidth = 1;
+      g.strokeStyle = col; g.globalAlpha = 0.7; g.lineWidth = 2;
       g.beginPath(); g.moveTo(c.X, c.Y); g.lineTo(bx, by); g.stroke();
-      g.beginPath(); g.ellipse(c.X, c.Y, 3, 1.4, 0, 0, 6.283); g.stroke();
-      g.globalAlpha = 1; g.fillStyle = col;
-      g.beginPath();
-      if (c.kind === 'foe') { g.moveTo(bx, by - sz); g.lineTo(bx + sz, by); g.lineTo(bx, by + sz); g.lineTo(bx - sz, by); }
-      else if (c.kind === 'friend' || c.kind === 'neutral') { g.moveTo(bx, by - sz); g.lineTo(bx + sz, by + sz * 0.8); g.lineTo(bx - sz, by + sz * 0.8); }
-      else if (c.kind === 'nav') { g.rect(bx - 1, by - 6, 2, 12); g.rect(bx - 6, by - 1, 12, 2); }
-      else g.arc(bx, by, sz, 0, 6.283);
-      g.closePath(); g.fill();
-      if (big) { g.strokeStyle = col; g.lineWidth = 1.5; g.strokeRect(bx - sz - 3, by - sz - 3, (sz + 3) * 2, (sz + 3) * 2); }
+      g.beginPath(); g.ellipse(c.X, c.Y, 4, 2, 0, 0, 6.283); g.stroke();
+      g.globalAlpha = 1;
+      sym(c, bx, by, sz, col);
+      if (big) { g.strokeStyle = col; g.lineWidth = 2; g.strokeRect(bx - sz - 4, by - sz - 4, (sz + 4) * 2, (sz + 4) * 2); }
+      if (labelled.has(c) || (big && c.kind !== 'neutral')) {
+        g.font = `700 14px ${FONT}`; g.textBaseline = 'middle'; g.textAlign = bx > W - 60 ? 'right' : 'left';
+        g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,.85)';
+        const t = big ? c.o.name.toUpperCase().slice(0, 10) : `${(c.d / 1000).toFixed(1)}`;
+        const tx = bx + (g.textAlign === 'right' ? -sz - 4 : sz + 4);
+        g.strokeText(t, tx, by); g.fillStyle = col; g.fillText(t, tx, by);
+      }
       if (c.o && c.o === P.target) {
-        const r = 10 + Math.sin(now / 120) * 1.5;
-        g.strokeStyle = '#ffffff'; g.lineWidth = 1.5; g.beginPath();
+        const r = sz + 6 + Math.sin(now / 120) * 1.5;
+        g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath();
         for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { g.moveTo(bx + sx * r, by + sy * (r - 5)); g.lineTo(bx + sx * r, by + sy * r); g.lineTo(bx + sx * (r - 5), by + sy * r); }
         g.stroke();
-        g.font = `700 13px ${FONT}`; g.fillStyle = '#ffffff'; g.fillText(c.o.name.toUpperCase().slice(0, 12), Math.min(W - 70, bx + 12), by - 16);
       }
     }
-    g.font = `700 16px ${FONT}`; g.textBaseline = 'top';
-    g.fillStyle = G; g.textAlign = 'right'; g.fillText('3 KM', W - 10, 8);
+    g.font = `700 17px ${FONT}`; g.textBaseline = 'top';
+    g.fillStyle = G; g.textAlign = 'right'; g.fillText(`${range / 1000} KM`, W - 10, 8);
     g.textAlign = 'left';
     g.fillStyle = G; g.fillText(`▲ FREUND ${friends}`, 10, H - 24);
     g.fillStyle = R; g.textAlign = 'right'; g.fillText(`FEIND ${foes} ◆`, W - 10, H - 24);
@@ -1171,20 +1204,78 @@ export class Cockpit {
     } else if (m.kind === 'RAD') {
       this.drawRadar(g, W, H, P, game);
     } else {
-      const tg = P.target;
-      if (!tg || !tg.alive) { g.fillStyle = G; g.fillText('KEIN ZIEL', W / 2 - 40, H / 2 - 10); return; }
-      const d = Math.round(tg.pos.distanceTo(p.pos));
-      g.fillStyle = R; g.font = `700 22px ${FONT}`; g.fillText(tg.name.toUpperCase(), 10, 34);
-      g.font = `700 18px ${FONT}`; g.fillStyle = G; g.fillText(`${d} M`, 10, 62);
-      const a = performance.now() / 700, cx = W * 0.72, cy = H * 0.5, r = 42;
-      g.strokeStyle = R; g.lineWidth = 2; g.beginPath();
-      for (let i = 0; i < 4; i++) { const t0 = a + i * Math.PI / 2; g.moveTo(cx + Math.cos(t0) * r, cy + Math.sin(t0) * r * 0.4 - 18); g.lineTo(cx + Math.cos(t0 + Math.PI / 2) * r, cy + Math.sin(t0 + Math.PI / 2) * r * 0.4 - 18); g.moveTo(cx + Math.cos(t0) * r, cy + Math.sin(t0) * r * 0.4 - 18); g.lineTo(cx + Math.cos(t0) * r, cy + Math.sin(t0) * r * 0.4 + 30); }
-      g.stroke();
-      const bar = (y, label, k, col) => { g.fillStyle = G; g.fillText(label, 10, y); g.strokeStyle = G; g.strokeRect(10, y + 22, W * 0.42, 12); g.fillStyle = col; g.fillRect(12, y + 24, (W * 0.42 - 4) * Math.max(0, k), 8); };
-      if (tg.maxShield > 0) bar(98, 'SCHILD', tg.shield / tg.maxShield, G);
-      bar(146, 'HÜLLE', tg.hp / tg.maxHp, R);
-      if (P.aimLocked) { g.fillStyle = Math.sin(performance.now() / 90) > 0 ? G : '#04110b'; g.fillText('LOCK', W * 0.62, H - 34); }
+      this.drawScan(g, W, H, P);
     }
+  }
+
+  /**
+   * Target display: the target's real model as a slowly turning wireframe that is "scanned in"
+   * line by line when a new target is selected, with class, range, shield/hull and lock state.
+   */
+  drawScan(g, W, H, P) {
+    const p = P.ship, tg = P.target, now = performance.now();
+    const G = '#6dffb0', R = '#ff4d6d', A = '#ffc857';
+    if (!tg || !tg.alive) {
+      g.fillStyle = G; g.font = `700 20px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.globalAlpha = 0.5 + Math.sin(now / 300) * 0.3; g.fillText('KEIN ZIEL', W / 2, H / 2); g.globalAlpha = 1;
+      g.textAlign = 'left'; g.textBaseline = 'top';
+      return;
+    }
+    if (this.scanFor !== tg) { this.scanFor = tg; this.scanT0 = now; }
+    const scan = Math.min(1, (now - this.scanT0) / 1300);
+    const foe = tg.team === 1, col = foe ? R : tg.team === 3 ? '#9fe8ff' : G;
+    // wireframe, turning, seen from slightly above
+    const wire = shipWire(tg.type);
+    const yaw = now / 2600, pitch = 0.42;
+    const cy0 = Math.cos(yaw), sy0 = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const cx = W * 0.66, cyy = H * 0.5, sc = H * 0.36;
+    const top = 24, yScan = top + (H - top) * scan;
+    g.save(); g.beginPath(); g.rect(W * 0.3, top, W * 0.7, yScan - top); g.clip();
+    g.strokeStyle = col; g.lineWidth = 1; g.globalAlpha = 0.85;
+    g.beginPath();
+    const P3 = wire.pos;
+    for (let i = 0; i < P3.length; i += 6) {
+      for (let j = 0; j < 2; j++) {
+        const x = P3[i + j * 3], y = P3[i + j * 3 + 1], z = P3[i + j * 3 + 2];
+        const x1 = x * cy0 + z * sy0, z1 = -x * sy0 + z * cy0;
+        const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+        const persp = 1 / (1 + z2 * 0.25);
+        const X = cx + x1 * sc * persp, Y = cyy - y2 * sc * persp;
+        j ? g.lineTo(X, Y) : g.moveTo(X, Y);
+      }
+    }
+    g.stroke();
+    g.restore(); g.globalAlpha = 1;
+    // scan bar
+    if (scan < 1) {
+      const gr = g.createLinearGradient(0, yScan - 18, 0, yScan + 2);
+      gr.addColorStop(0, 'rgba(109,255,176,0)'); gr.addColorStop(1, 'rgba(160,255,210,.55)');
+      g.fillStyle = gr; g.fillRect(W * 0.3, yScan - 18, W * 0.7, 20);
+      g.fillStyle = '#d8ffe9'; g.fillRect(W * 0.3, yScan, W * 0.7, 1.5);
+    }
+    // corner brackets of the scan frame
+    g.strokeStyle = 'rgba(109,255,176,.5)'; g.lineWidth = 2; g.beginPath();
+    const fx0 = W * 0.32, fx1 = W - 8, fy0 = top + 4, fy1 = H - 8;
+    for (const [x, y, dx, dy] of [[fx0, fy0, 1, 1], [fx1, fy0, -1, 1], [fx0, fy1, 1, -1], [fx1, fy1, -1, -1]]) { g.moveTo(x, y + dy * 14); g.lineTo(x, y); g.lineTo(x + dx * 14, y); }
+    g.stroke();
+    // data column
+    const d = Math.round(tg.pos.distanceTo(p.pos));
+    g.textBaseline = 'top'; g.textAlign = 'left';
+    g.fillStyle = col; g.font = `700 19px ${FONT}`; g.fillText(tg.name.toUpperCase().slice(0, 12), 10, 30);
+    g.font = `600 14px ${FONT}`; g.fillStyle = G;
+    g.fillText(scan < 1 ? `SCAN ${Math.round(scan * 100)}%` : (foe ? 'FEINDLICH' : 'FREUNDLICH'), 10, 54);
+    g.fillText(`${d} M`, 10, 72);
+    const bar = (y, label, k, c) => { g.fillStyle = G; g.font = `600 13px ${FONT}`; g.fillText(label, 10, y); g.strokeStyle = G; g.lineWidth = 1; g.strokeRect(10, y + 16, W * 0.27, 10); g.fillStyle = c; g.fillRect(12, y + 18, (W * 0.27 - 4) * Math.max(0, Math.min(1, k)), 6); };
+    if (scan >= 0.5) {
+      if (tg.maxShield > 0) bar(96, 'SCHILD', tg.shield / tg.maxShield, '#7fd6ff');
+      bar(130, 'HÜLLE', tg.hp / tg.maxHp, tg.hp / tg.maxHp < 0.3 ? R : A);
+    }
+    // lock state
+    const blink = Math.sin(now / 90) > 0;
+    g.font = `700 14px ${FONT}`;
+    if (P.mslLock >= 1) { g.fillStyle = blink ? R : '#3a0a12'; g.fillText('RAK LOCK', 10, H - 46); }
+    else if (P.mslLock > 0) { g.fillStyle = A; g.fillText(`SUCHKOPF ${Math.round(P.mslLock * 100)}%`, 10, H - 46); }
+    if (P.aimLocked) { g.fillStyle = blink ? G : '#04110b'; g.fillText('KANONE LOCK', 10, H - 26); }
   }
 
   render(renderer) {

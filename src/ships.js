@@ -20,7 +20,7 @@ export const SHIPS = {
   tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [15, 13, 48], dmg: 5, turrets: [[0, 14, 0]] },
   habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
   relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
-  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 215, box: [34, 30, 205], dmg: 7, turrets: [[30, 20, 120], [-30, 20, 120], [30, 20, -60], [-30, 20, -60], [0, 34, 0], [0, -26, 60]] },
+  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 230, box: [40, 22, 205], dmg: 7, turrets: [[14, 13.6, 90], [-14, 13.6, 90], [14, 16.6, -60], [-14, 16.6, -60], [0, 23.5, -20], [0, -16.8, 60]] },
   transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [15, 13, 48], dmg: 6, turrets: [[0, 14, 0]] },
   zerstoerer: { name: 'Zerstörer', team: 1, capital: true, hp: 2100, speed: 18, radius: 135, box: [24, 20, 125], dmg: 8, score: 2000, turrets: [[20, 14, 70], [-20, 14, 70], [0, 22, -20], [0, -18, 20], [0, 18, -90]] },
   dreadnought: { name: 'Apotheose', team: 1, capital: true, hp: 5200, speed: 9, radius: 260, box: [50, 40, 245], dmg: 9, score: 5000, turrets: [[44, 20, 150], [-44, 20, 150], [44, 20, 0], [-44, 20, 0], [0, 44, 60], [0, -40, 60], [0, 44, -120], [0, -40, -120]] },
@@ -260,6 +260,129 @@ function uvBox(w, h, d, scale = 60) {
   return g;
 }
 
+// ---------------------------------------------------------------------------
+// TUS Aurora: a long, streamlined fleet carrier with a swept arrowhead prow, outboard engine
+// nacelles on pylons, a recessed flight deck, hundreds of lit windows, hull registry and
+// blinking navigation lights (sprites with userData.blink, animated by the game).
+// ---------------------------------------------------------------------------
+const AURORA_PROFILE = [[-205, 16], [-190, 25], [-150, 29], [-100, 30.5], [-20, 30.5], [40, 29], [90, 25.6], [130, 20], [158, 11], [172, 3]];
+function auroraR(z) {
+  const P = AURORA_PROFILE;
+  if (z <= P[0][0]) return P[0][1];
+  for (let i = 1; i < P.length; i++) if (z <= P[i][0]) { const [z0, r0] = P[i - 1], [z1, r1] = P[i]; return r0 + (r1 - r0) * ((z - z0) / (z1 - z0)); }
+  return P[P.length - 1][1];
+}
+const AW = 1.3, AH = 0.62; // hull cross-section: wide and flat
+
+function blinker(group, x, y, z, color, rate, phase, size = 5) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  s.position.set(x, y, z); s.scale.setScalar(size);
+  s.userData.blink = { rate, phase };
+  group.add(s);
+}
+
+function registryTexture() {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 160;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, 1024, 160);
+  g.fillStyle = 'rgba(232,236,240,.92)'; g.font = '800 92px Rajdhani, sans-serif'; g.textBaseline = 'middle';
+  g.fillText('TUS AURORA', 150, 70);
+  g.font = '700 44px Rajdhani, sans-serif'; g.fillStyle = 'rgba(232,120,40,.95)'; g.fillText('CV-07 · TERRANISCHE UNION', 152, 132);
+  // union emblem: ring with a stylised star
+  g.strokeStyle = 'rgba(232,120,40,.95)'; g.lineWidth = 9; g.beginPath(); g.arc(70, 80, 52, 0, 6.283); g.stroke();
+  g.fillStyle = 'rgba(232,236,240,.92)'; g.beginPath();
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 16 : 40; g.lineTo(70 + Math.cos(a) * r, 80 + Math.sin(a) * r); }
+  g.closePath(); g.fill();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+
+function carrier(g, engines, M) {
+  const { hull, dark, glow, strip, accent, pal } = M;
+  // main hull: smooth lathe profile, flattened into a wide elliptical cross-section
+  const prof = AURORA_PROFILE.map(([z, r]) => new THREE.Vector2(r, z));
+  prof.unshift(new THREE.Vector2(0.01, -205)); prof.push(new THREE.Vector2(0.01, 172));
+  const lathe = new THREE.LatheGeometry(prof, 40);
+  lathe.rotateX(Math.PI / 2); lathe.rotateZ(Math.PI / 2);
+  // lathe UVs: u around the hull, v along it; stretch so the panel texture keeps its scale
+  const uv = lathe.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 4, uv.getY(i) * 12);
+  const main = mk(g, lathe, hull, 0, 0, 0); main.scale.set(AW, AH, 1);
+  // swept arrowhead prow on top of the forward hull
+  const sh = new THREE.Shape();
+  sh.moveTo(0, 228); sh.lineTo(14, 176); sh.lineTo(27, 118); sh.lineTo(30, 74); sh.lineTo(20, 36); sh.lineTo(-20, 36); sh.lineTo(-30, 74); sh.lineTo(-27, 118); sh.lineTo(-14, 176); sh.closePath();
+  const prow = new THREE.ExtrudeGeometry(sh, { depth: 7, bevelEnabled: true, bevelThickness: 3, bevelSize: 3.5, bevelSegments: 3, curveSegments: 4 });
+  prow.rotateX(Math.PI / 2);
+  const puv = prow.attributes.uv; for (let i = 0; i < puv.count; i++) puv.setXY(i, puv.getX(i) / 60, puv.getY(i) / 60);
+  mk(g, prow, hull, 0, 9, 0);
+  // keel blade under the prow
+  const keel = mk(g, wingGeo(14, 120, 20, -60, 3), dark, 0, -6, 150); keel.rotation.z = -Math.PI / 2;
+  // registry on the prow top and both flanks, livery band
+  const regMat = new THREE.MeshStandardMaterial({ map: registryTexture(), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  const top = mk(g, new THREE.PlaneGeometry(56, 9), regMat, 0, 12.6, 120); top.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+  for (const sx of [-1, 1]) {
+    const side = mk(g, new THREE.PlaneGeometry(80, 12.5), regMat, sx * (auroraR(10) * AW + 0.4), 2, 10);
+    side.rotation.y = sx * Math.PI / 2;
+    mk(g, uvBox(1.2, 2.4, 260), accent, sx * (auroraR(-40) * AW - 0.2), -6, -30).rotation.z = sx * 0.1;
+  }
+  // dorsal spine with sensor fins, low bridge dome with a window band
+  mk(g, uvBox(5, 9, 170), dark, 0, 19, -60);
+  const fin = mk(g, wingGeo(22, 40, 14, 24, 1.4), dark, 0, 22, -120); fin.rotation.z = Math.PI / 2;
+  const dome = mk(g, new THREE.SphereGeometry(1, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2), hull, 0, 17.5, 40); dome.scale.set(15, 7.5, 24);
+  const band = mk(g, new THREE.TorusGeometry(1, 0.045, 6, 40), strip, 0, 20.5, 40); band.scale.set(13.6, 21.8, 1); band.rotation.x = Math.PI / 2;
+  mk(g, new THREE.CylinderGeometry(0.5, 0.8, 18, 6), dark, 0, 31, 30);
+  mk(g, new THREE.CylinderGeometry(0.4, 0.6, 12, 6), dark, 4, 28, 22);
+  // flight deck: recessed bay under the bow with a glowing mouth and deck lights
+  mk(g, uvBox(34, 7, 120), dark, 0, -15, 80);
+  const bayGlow = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.2, 1.6) });
+  mk(g, new THREE.PlaneGeometry(30, 5), bayGlow, 0, -15, 140.2);
+  for (let z = 30; z < 138; z += 9) for (const sx of [-1, 1]) mk(g, uvBox(1.4, 0.4, 3), strip, sx * 13, -18.7, z);
+  // outboard engine nacelles on swept pylons
+  const nacProf = [[-86, 0.01], [-86, 6], [-80, 9.5], [-40, 10.5], [40, 10.5], [70, 9], [86, 5], [90, 0.01]].map(([z, r]) => new THREE.Vector2(r, z));
+  const nac = new THREE.LatheGeometry(nacProf, 24); nac.rotateX(Math.PI / 2);
+  for (const sx of [-1, 1]) {
+    const nx = sx * 64, ny = -12, nz = -110;
+    const n = mk(g, nac, hull, nx, ny, nz); n.scale.set(1, 0.85, 1);
+    mk(g, uvBox(1.4, 3, 150), strip, nx - sx * 10.2, ny, nz + 4);            // inner glow strip
+    mk(g, uvBox(3, 1.2, 140), dark, nx, ny + 9.2, nz);                        // top rail
+    const ring = mk(g, new THREE.TorusGeometry(8.6, 1.3, 8, 28), glow, nx, ny, nz + 84); ring.scale.y = 0.85;
+    const pylon = mk(g, wingGeo(32, 52, 26, 30, 3), hull, sx * 30, -5, -92);
+    pylon.scale.x = sx; pylon.rotation.z = sx * -0.24;
+    engine(g, engines, nx, ny, nz - 90, 7.5, glow, dark, pal.glow);
+    // running lights: red port, green starboard on the nacelle tips
+    blinker(g, nx + sx * 9, ny, nz + 70, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 6);
+  }
+  // main engines in the stern
+  mk(g, uvBox(46, 22, 26), dark, 0, 0, -196);
+  for (const [ex, ey] of [[-13, 5], [13, 5], [-13, -6], [13, -6]]) engine(g, engines, ex, ey, -212, 7, glow, dark, pal.glow);
+  // white strobes on the prow tip, bridge mast and stern
+  blinker(g, 0, 11, 230, new THREE.Color(3, 3, 3), 1.1, 0.1, 7);
+  blinker(g, 0, 40.5, 30, new THREE.Color(3, 0.3, 0.25), 0.6, 0.3, 6);
+  blinker(g, 0, 12, -210, new THREE.Color(3, 3, 3), 1.1, 0.6, 7);
+  // lit windows: rows of small quads following the hull surface (one merged geometry)
+  const winPos = [], winCol = [], cA = new THREE.Color(2.4, 1.9, 1.15), cB = new THREE.Color(1.2, 1.9, 2.6);
+  const rows = [0.5, 0.72, 0.95, 1.18, -0.35, -0.6, 2.2, 2.42, 2.65, 2.85];
+  for (const th of rows) for (let z = -176; z < 150; z += 3.4) {
+    if (Math.random() < 0.28) continue;
+    if (Math.abs(Math.sin(th)) > 0.92 && z > 25 && z < 60) continue; // under the bridge dome
+    const r = auroraR(z) + 0.25;
+    const cx = Math.cos(th), cy = Math.sin(th);
+    const px = cx * r * AW, py = cy * r * AH;
+    const nrm = new THREE.Vector3(cx / AW, cy / AH, 0).normalize();
+    const tan = new THREE.Vector3(-nrm.y, nrm.x, 0); // around the hull
+    const w = 1.1, h = 0.55, c = Math.random() < 0.15 ? cB : cA, dim = 0.55 + Math.random() * 0.45;
+    const P0 = new THREE.Vector3(px, py, z);
+    const corner = (a, b) => P0.clone().addScaledVector(tan, a * h).add(new THREE.Vector3(0, 0, b * w)).addScaledVector(nrm, 0.15);
+    const q = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+    for (const i of [0, 1, 2, 0, 2, 3]) { winPos.push(q[i].x, q[i].y, q[i].z); winCol.push(c.r * dim, c.g * dim, c.b * dim); }
+  }
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.Float32BufferAttribute(winPos, 3));
+  wg.setAttribute('color', new THREE.Float32BufferAttribute(winCol, 3));
+  wg.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(winPos.length).fill(0).map((_, i) => (i % 3 === 2 ? 1 : 0)), 3));
+  wg.setAttribute('uv', new THREE.Float32BufferAttribute(new Array((winPos.length / 3) * 2).fill(0), 2));
+  mk(g, wg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), 0, 0, 0);
+}
+
 function capital(type) {
   const root = new THREE.Group();
   const g = new THREE.Group();
@@ -281,7 +404,9 @@ function capital(type) {
   const B = (w, h, d, mat, x, y, z) => mk(g, uvBox(w, h, d), mat, x, y, z);
   const turretGeo = new THREE.SphereGeometry(3.2, 10, 6, 0, 6.3, 0, 1.6);
 
-  if (type === 'aurora' || type === 'valkyrie') {
+  if (type === 'aurora') {
+    carrier(g, engines, { hull, dark, glow, strip, accent, pal });
+  } else if (type === 'valkyrie') {
     B(56, 36, 300, hull, 0, 0, -20);
     const bow = mk(g, uvBox(56, 36, 90), hull, 0, 0, 160); bow.scale.set(0.62, 0.7, 1);
     B(68, 10, 330, dark, 0, -20, -10);          // keel / flight deck
@@ -436,7 +561,8 @@ function mergeByMaterial(group) {
     if (!c.isMesh) continue;
     c.updateMatrix();
     const geo = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
-    for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    const keep = c.material.vertexColors ? ['position', 'normal', 'uv', 'color'] : ['position', 'normal', 'uv'];
+    for (const k of Object.keys(geo.attributes)) if (!keep.includes(k)) geo.deleteAttribute(k);
     if (!geo.attributes.uv || !geo.attributes.normal) continue;
     geo.applyMatrix4(c.matrix);
     if (c.matrix.determinant() < 0) flipWinding(geo);
@@ -496,8 +622,8 @@ export function buildShip(type) {
     TEMPLATES[type] = t;
   }
   const root = TEMPLATES[type].clone();
-  const engines = [];
-  root.traverse((o) => { if (o.userData.engine) engines.push(o); });
-  root.userData = { body: root.getObjectByName('body'), engines };
+  const engines = [], blinkers = [];
+  root.traverse((o) => { if (o.userData.engine) engines.push(o); if (o.userData.blink) blinkers.push(o); });
+  root.userData = { body: root.getObjectByName('body'), engines, blinkers };
   return root;
 }
