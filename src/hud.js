@@ -4,7 +4,7 @@ const v = new THREE.Vector3();
 const GL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@$<>/\\|=+*';
 const out = { x: 0, y: 0, behind: false };
 const FONT = "'Rajdhani', 'Segoe UI', system-ui, sans-serif";
-const DISPLAY = "'Orbitron', 'Rajdhani', system-ui, sans-serif";
+const DISPLAY = "'Orbitron Variable', 'Orbitron', 'Rajdhani', system-ui, sans-serif";
 
 function project(P, p) {
   v.copy(p).applyMatrix4(P.camera.matrixWorldInverse);

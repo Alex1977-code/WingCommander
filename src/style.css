@@ -3,7 +3,7 @@
   --c: #7fd6ff; --c2: #ff8a2a; --ok: #6dffb0; --foe: #ff4d6d; --warn: #ffc857;
   --bg: #05070d; --ink: #e6f4ff; --muted: #9fb4c8;
   --panel: rgba(6, 16, 30, .72); --line: rgba(127, 214, 255, .3);
-  --display: 'Orbitron', 'Rajdhani', system-ui, sans-serif;
+  --display: 'Orbitron Variable', 'Orbitron', 'Rajdhani', system-ui, sans-serif;
   --text: 'Rajdhani', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px); --sab: env(safe-area-inset-bottom, 0px);
   color-scheme: dark;

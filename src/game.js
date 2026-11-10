@@ -12,7 +12,8 @@ import { installCutscenes, passes } from './cutscene.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3();
-const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), q3 = new THREE.Quaternion();
+const t5 = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
 const ZERO = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, 1);
 const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0);
@@ -32,6 +33,16 @@ function disposeObj(o) {
     const m = c.material;
     if (m && !m.userData?.shared) (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
   });
+}
+let MISSILE = null;
+function missileRes() {
+  if (MISSILE) return MISSILE;
+  const mk = (len) => { const g = new THREE.CylinderGeometry(0.35, 0.35, len, 6); g.rotateX(Math.PI / 2); g.userData.shared = true; return g; };
+  const sprite = (c) => { const m = new THREE.SpriteMaterial({ map: glowTexture(), color: c, blending: THREE.AdditiveBlending, depthWrite: false }); m.userData.shared = true; return m; };
+  const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.4 });
+  mat.userData.shared = true;
+  MISSILE = { body: mk(4.5), torp: mk(7), mat, glowAlly: sprite(new THREE.Color(3, 2.4, 1.2)), glowFoe: sprite(new THREE.Color(4, 0.6, 0.6)) };
+  return MISSILE;
 }
 function disposeComposer(c) {
   if (!c) return;
@@ -79,6 +90,7 @@ export class Game {
   }
 
   resize() {
+    this.pausedDrawn = false;
     const w = window.innerWidth, h = window.innerHeight;
     const pr = Math.min(window.devicePixelRatio || 1, this.quality === 'high' ? 2 : 1.25) * (this.pilots.length > 1 ? 0.85 : 1);
     this.pr = pr;
@@ -262,11 +274,10 @@ export class Game {
   }
 
   launchMissile(s, target, torpedo = false) {
+    const R = missileRes();
     const mesh = new THREE.Group();
-    const body = new THREE.CylinderGeometry(0.35, 0.35, torpedo ? 7 : 4.5, 6);
-    body.rotateX(Math.PI / 2);
-    mesh.add(new THREE.Mesh(body, new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.4 })));
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: s.team === 0 ? new THREE.Color(3, 2.4, 1.2) : new THREE.Color(4, 0.6, 0.6), blending: THREE.AdditiveBlending, depthWrite: false }));
+    mesh.add(new THREE.Mesh(torpedo ? R.torp : R.body, R.mat));
+    const glow = new THREE.Sprite(s.team === 0 ? R.glowAlly : R.glowFoe);
     glow.scale.setScalar(torpedo ? 16 : 10); glow.position.z = -3;
     mesh.add(glow);
     mesh.position.set(0, -1.6, 2).applyQuaternion(s.quat).add(s.pos);
@@ -489,11 +500,27 @@ export class Game {
     for (const c of this.ships) {
       if (!c.def.capital || !c.alive || c === tgt || c.def.ghost) continue;
       if (s.pos.distanceToSquared(c.pos) > (c.radius + 120) ** 2) continue;
-      const d = this.boxDist(c, s.pos, t3);
+      const d = this.hullDist(c, s.pos, t3);
       if (d < 60) dir.addScaledVector(t3, 3).normalize();
     }
     this.steer(s, dir, dt, def.turn * (0.75 + s.skill * 0.25));
     s.speed += (want - s.speed) * Math.min(1, dt * 1.4);
+  }
+
+  /** Distance to a capital ship's hull: its box, plus an optional ring (torus) such as the station's. */
+  hullDist(c, p, out) {
+    const d = this.boxDist(c, p, out);
+    const tor = c.def.torus;
+    if (!tor) return d;
+    const l = t5.copy(p).sub(c.pos).applyQuaternion(q3.copy(c.quat).invert());
+    const radial = Math.hypot(l.x, l.y) || 1e-6;
+    const qx = radial - tor[0];
+    const dt = Math.hypot(qx, l.z) - tor[1];
+    if (dt >= d) return d;
+    out.set((l.x / radial) * qx, (l.y / radial) * qx, l.z);
+    if (out.lengthSq() < 1e-9) out.set(0, 0, 1);
+    out.normalize().applyQuaternion(c.quat);
+    return dt;
   }
 
   /** Distance from point to a capital ship's oriented box; out = world-space push direction. */
@@ -587,7 +614,7 @@ export class Game {
     for (const cap of this.ships) {
       if (!cap.def.capital || !cap.alive || cap.def.ghost) continue;
       if (p.pos.distanceToSquared(cap.pos) > (cap.radius + 40) ** 2) continue;
-      const d = this.boxDist(cap, p.pos, t2);
+      const d = this.hullDist(cap, p.pos, t2);
       if (d < 6) this.bump(P, t2, 6 - d);
     }
   }
@@ -769,7 +796,7 @@ export class Game {
         const r = rnd(250, 520 + tries * 15);
         pos = nav._pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rnd(-120, 120), Math.sin(a) * r));
         const clear = this.asteroids.every((ast) => ast.pos.distanceTo(pos) > ast.radius + 70)
-          && this.ships.every((c) => !c.def.capital || this.boxDist(c, pos, t3) > 60);
+          && this.ships.every((c) => !c.def.capital || this.hullDist(c, pos, t3) > 60);
         if (clear) break;
       }
       const g = new THREE.Group();
@@ -951,7 +978,7 @@ export class Game {
   // ---------- frame ----------
   loop(t) {
     requestAnimationFrame((tt) => this.loop(tt));
-    const dt = Math.min(0.05, (t - this.last) / 1000 || 0.016);
+    let dt = Math.min(0.05, (t - this.last) / 1000 || 0.016);
     this.last = t;
     this.ui.frame?.(dt);
     if (this.mode === 'idle' || !this.scene) return;
@@ -966,6 +993,10 @@ export class Game {
       return;
     }
     if (this.mode === 'attract') {
+      // the menu backdrop only needs 30 fps
+      this.attractAcc = (this.attractAcc || 0) + dt;
+      if (this.attractAcc < 1 / 31) return;
+      dt = Math.min(0.1, this.attractAcc); this.attractAcc = 0;
       this.attractT += dt;
       const a = this.attractT * 0.06 + 0.9;
       this.camera.position.set(Math.cos(a) * 330 + 60, 70 + Math.sin(a * 0.7) * 30, Math.sin(a) * 330 + 60);
@@ -978,6 +1009,8 @@ export class Game {
       if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
       return;
     }
+    // while paused the picture is static: draw it once, then stop rendering
+    if (this.paused) { if (this.pausedDrawn) return; this.pausedDrawn = true; } else this.pausedDrawn = false;
     if (!this.paused && !this.frozen) this.update(dt);
     else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); P.ctrl.take(); }
     const split = this.pilots.length > 1;
@@ -1113,7 +1146,7 @@ export class Game {
             let hp = null;
             for (const k of [0.25, 0.5, 0.75, 1]) {
               t2.copy(b.prev).lerp(pos, k);
-              if (this.boxDist(s, t2, t1) < 2.5) { hp = t2; break; }
+              if (this.hullDist(s, t2, t1) < 2.5) { hp = t2; break; }
             }
             if (hp) { this.damage(s, b.dmg, b.owner, hp); hit = true; break; }
           } else {
@@ -1163,7 +1196,7 @@ export class Game {
           if (!s.alive || s.team === m.team || s.def.ghost) continue;
           if (s.def.capital) {
             if (m.pos.distanceToSquared(s.pos) > (s.radius + 10) ** 2) continue;
-            if (this.boxDist(s, m.pos, t2) < 5) { this.damage(s, m.dmg * (m.torpedo ? 1 : 2.4), m.owner, m.pos); boom = true; break; }
+            if (this.hullDist(s, m.pos, t2) < 5) { this.damage(s, m.dmg * (m.torpedo ? 1 : 2.4), m.owner, m.pos); boom = true; break; }
           } else if (m.pos.distanceToSquared(s.pos) < (s.radius + 7) ** 2) {
             this.damage(s, m.dmg, m.owner, m.pos); boom = true; break;
           }

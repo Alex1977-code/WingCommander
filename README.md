@@ -2,7 +2,8 @@
 
 Ein mobiles 3D-Weltraumkampfspiel im Stil klassischer Space-Combat-Sims: Trägerschiff, Flügelmann,
 Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 15 Missionen. Eigenes Universum, eigene Story,
-eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt sich als PWA installieren.
+eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt sich als App installieren
+(„Zum Startbildschirm hinzufügen“); einmal geladen, funktioniert es auch offline.
 
 ## Features
 
@@ -51,7 +52,8 @@ npm run preview  # Build lokal testen
 
 Die Handy-Verbindung nutzt den öffentlichen PeerJS-Vermittlungsdienst (`0.peerjs.com`) für den Verbindungsaufbau.
 Danach laufen die Steuerdaten per WebRTC meist direkt zwischen den Geräten; je nach Netzwerk können sie auch über
-STUN/TURN-Server von Google bzw. PeerJS vermittelt werden. Schriften werden von Google Fonts geladen.
+STUN/TURN-Server von Google bzw. PeerJS vermittelt werden. Schriften und alle anderen Dateien werden mit dem Spiel
+ausgeliefert; ohne Handy-Controller nimmt das Spiel keinen Kontakt zu fremden Servern auf.
 Für einen eigenen Vermittlungsdienst: `npm run peer` starten und das Spiel mit `?peer=host:9000` öffnen. Das
 funktioniert nur, wenn das Spiel selbst per `http` läuft (z. B. `npm run dev:lan`); für die https-Version auf
 GitHub Pages braucht der eigene Dienst ein TLS-Zertifikat.

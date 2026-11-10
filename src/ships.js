@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { glowTexture } from './fx.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Gameplay stats. team 0 = Union, team 1 = Aszendenz. Forward axis of every model is +Z. */
 export const SHIPS = {
@@ -12,7 +13,7 @@ export const SHIPS = {
   archon: { name: 'Archon Veyl', team: 1, hp: 170, shield: 140, speed: 238, turn: 1.85, dmg: 10, rof: 0.22, radius: 9, skill: 0.9, score: 1500, missiles: 6, ace: true, guns: [[-4, 0, 6], [4, 0, 6]] },
   holt: { name: 'Holt', team: 1, hp: 150, shield: 120, speed: 232, turn: 1.75, dmg: 9, rof: 0.24, radius: 9, skill: 0.85, score: 1200, missiles: 4, guns: [[-4, 0, 6], [4, 0, 6]] },
   kurier: { name: 'Kurierschiff', team: 1, hp: 260, shield: 140, speed: 150, turn: 0.8, dmg: 0, rof: 99, radius: 11, skill: 0.2, score: 800, guns: [] },
-  station: { name: 'Brutstätte', team: 1, capital: true, hp: 3000, speed: 0, radius: 200, box: [46, 46, 46], dmg: 8, score: 3000, turrets: [[0, 50, 0], [0, -50, 0], [50, 0, 0], [-50, 0, 0], [0, 0, 50], [0, 0, -50], [150, 0, 0], [-150, 0, 0], [0, 150, 0], [0, -150, 0]] },
+  station: { name: 'Brutstätte', team: 1, capital: true, hp: 3000, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 8, score: 3000, turrets: [[0, 50, 0], [0, -50, 0], [50, 0, 0], [-50, 0, 0], [0, 0, 50], [0, 0, -50], [150, 0, 0], [-150, 0, 0], [0, 150, 0], [0, -150, 0]] },
   gate: { name: 'Sprungtor', team: 3, capital: true, ghost: true, invulnerable: true, hp: 1e9, speed: 0, radius: 340, box: [1, 1, 1], turrets: [] },
   prison: { name: 'Ketten', team: 3, capital: true, invulnerable: true, hp: 1e9, speed: 22, radius: 55, box: [15, 13, 48], turrets: [] },
   valkyrie: { name: 'TUS Valkyrie', team: 3, capital: true, invulnerable: true, wreck: true, hp: 1e9, speed: 0, radius: 215, box: [34, 30, 205], turrets: [] },
@@ -97,6 +98,7 @@ function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   s.position.set(x, y, z - r * 1.3);
   s.scale.setScalar(r * 4);
   s.userData.base = r * 4;
+  s.userData.engine = true;
   group.add(s);
   engines.push(s);
 }
@@ -169,7 +171,8 @@ function fighter(o) {
   if (o.pal !== PAL.union) {
     mk(g, new THREE.BoxGeometry(0.18, 0.18, L * 0.5), m.line, 0, o.bodyR * o.flat * 1.0, -L * 0.2);
   }
-  root.userData = { body: g, engines };
+  g.name = 'body';
+  root.userData = {};
   return root;
 }
 
@@ -302,11 +305,12 @@ function capital(type) {
     if (y < 0) tm.rotation.x = Math.PI;
     else if (Math.abs(x) > Math.abs(y)) tm.rotation.z = -Math.sign(x) * Math.PI / 2;
   }
-  root.userData = { body: g, engines };
+  g.name = 'body';
+  root.userData = {};
   return root;
 }
 
-export function buildShip(type) {
+function makeShip(type) {
   const U = PAL.union, A = PAL.asz;
   switch (type) {
     case 'sperber': return fighter({ pal: U, len: 15, noseR: 0.25, bodyR: 1.25, wide: 1.25, flat: 0.8, span: 5.2, root: 5.5, tip: 1.6, sweep: 3.2, wingZ: -2.2, dihedral: -0.06, fin: 2.6, fins: [Math.PI / 2 - 0.35, Math.PI / 2 + 0.35], engines: [[0, 0]], engR: 0.95 });
@@ -320,4 +324,62 @@ export function buildShip(type) {
     case 'hammer': return fighter({ pal: A, len: 18, noseR: 0.6, bodyR: 1.7, wide: 1.1, flat: 1, twin: 2.6, span: 4.5, root: 9, tip: 4, sweep: -1.5, wingZ: -2, dihedral: 0, fin: 3, fins: [Math.PI / 2, -Math.PI / 2], engines: [[-2.6, 0], [2.6, 0]], engR: 1.2 });
     default: return capital(type);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Templates: every ship type is built once, merged per material, then cloned.
+// Clones share geometry and materials, so spawning costs no GPU memory and a
+// fighter needs ~6 draw calls instead of ~20.
+// ---------------------------------------------------------------------------
+
+function flipWinding(geo) {
+  for (const attr of Object.values(geo.attributes)) {
+    const a = attr.array, n = attr.itemSize;
+    for (let t = 0; t < attr.count; t += 3) {
+      for (let k = 0; k < n; k++) {
+        const i1 = (t + 1) * n + k, i2 = (t + 2) * n + k;
+        const tmp = a[i1]; a[i1] = a[i2]; a[i2] = tmp;
+      }
+    }
+  }
+}
+
+function mergeByMaterial(group) {
+  const buckets = new Map();
+  for (const c of [...group.children]) {
+    if (!c.isMesh) continue;
+    c.updateMatrix();
+    const geo = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
+    for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    if (!geo.attributes.uv || !geo.attributes.normal) continue;
+    geo.applyMatrix4(c.matrix);
+    if (c.matrix.determinant() < 0) flipWinding(geo);
+    if (!buckets.has(c.material)) buckets.set(c.material, []);
+    buckets.get(c.material).push(geo);
+    group.remove(c);
+    c.geometry.dispose();
+  }
+  for (const [mat, geos] of buckets) {
+    const merged = mergeGeometries(geos, false);
+    geos.forEach((x) => x.dispose());
+    if (merged) group.add(new THREE.Mesh(merged, mat));
+  }
+}
+
+const TEMPLATES = {};
+export function buildShip(type) {
+  if (!TEMPLATES[type]) {
+    const t = makeShip(type);
+    mergeByMaterial(t.getObjectByName('body'));
+    t.traverse((o) => {
+      if (o.geometry) o.geometry.userData.shared = true;
+      if (o.material) o.material.userData.shared = true;
+    });
+    TEMPLATES[type] = t;
+  }
+  const root = TEMPLATES[type].clone();
+  const engines = [];
+  root.traverse((o) => { if (o.userData.engine) engines.push(o); });
+  root.userData = { body: root.getObjectByName('body'), engines };
+  return root;
 }
