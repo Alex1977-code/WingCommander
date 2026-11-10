@@ -11,6 +11,9 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800;900&family=Rajdhani:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="./src/style.css">
 </head>
 <body>
@@ -21,7 +24,13 @@
   <div id="flight" class="hidden">
     <div id="stick-zone"></div>
     <div id="stick-base"><div id="stick-knob"></div></div>
-    <div id="comm" class="hidden"><div class="avatar"></div><div><b class="who"></b><p class="txt"></p></div></div>
+    <div id="comm" class="hidden">
+      <canvas class="holo" width="96" height="96"></canvas>
+      <div class="ctext">
+        <div class="chead"><b class="who"></b><span class="sig"><i></i><i></i><i></i><i></i></span></div>
+        <p class="txt"></p>
+      </div>
+    </div>
     <button id="btn-pause" class="hbtn" aria-label="Pause">II</button>
     <div id="throttle" aria-label="Schub"><div id="throttle-fill"></div><span>SCHUB</span></div>
     <button id="btn-auto" class="hbtn">AUTOPILOT</button>
@@ -31,40 +40,96 @@
     <button id="btn-fire" class="rbtn">FEUER</button>
   </div>
 
+  <!-- mission start cinematic -->
+  <div id="cine" class="hidden">
+    <div class="cine-line top"></div>
+    <small id="cine-kicker"></small>
+    <h1 id="cine-title" class="glitch"></h1>
+    <p id="cine-sub"></p>
+    <div class="cine-line bottom"></div>
+  </div>
+
   <!-- screens -->
   <div id="ui">
     <section id="s-title" class="screen">
-      <div class="logo"><small>GESCHWADER NACHTFALKEN</small><h1>STERNENFRONT</h1><i>Der Perseus-Krieg</i></div>
+      <div class="title-rings" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="logo">
+        <small id="logo-kicker">GESCHWADER NACHTFALKEN</small>
+        <h1 id="logo-title" class="glitch" data-text="STERNENFRONT">STERNENFRONT</h1>
+        <i id="logo-sub">Der Perseus-Krieg</i>
+      </div>
       <nav class="menu">
         <button id="m-continue" class="btn primary hidden">Kampagne fortsetzen</button>
         <button id="m-new" class="btn">Neue Kampagne</button>
+        <button id="m-multi" class="btn">Mehrspieler &amp; TV</button>
         <button id="m-help" class="btn">Steuerung</button>
         <button id="m-settings" class="btn">Einstellungen</button>
       </nav>
       <footer id="pilot-line"></footer>
+      <aside id="tv-badge" class="hidden"></aside>
     </section>
 
     <section id="s-name" class="screen hidden">
       <div class="panel narrow">
-        <h2>Pilotenakte anlegen</h2>
-        <p>Wähle dein Rufzeichen, Fähnrich.</p>
+        <header><span>Personalakte</span><h2>Rufzeichen wählen</h2></header>
+        <p>Wie sollen dich die Nachtfalken nennen, Fähnrich?</p>
         <input id="callsign" maxlength="12" value="Nova" autocomplete="off" spellcheck="false">
         <div class="row"><button class="btn" data-back>Zurück</button><button id="name-ok" class="btn primary">Dienst antreten</button></div>
       </div>
     </section>
 
-    <section id="s-help" class="screen hidden">
-      <div class="panel">
-        <h2>Steuerung</h2>
+    <section id="s-multi" class="screen hidden">
+      <div class="panel wide">
+        <header><span>Verbindungen</span><h2>Mehrspieler &amp; TV</h2></header>
         <div class="cols">
+          <div>
+            <h3>Koop-Modus (geteilter Bildschirm)</h3>
+            <button id="mp-coop" class="btn toggle"></button>
+            <ul class="slots" id="mp-slots"></ul>
+            <p class="small">Spieler 2 fliegt mit dem zuletzt verbundenen Controller: einem Gamepad (Bluetooth/USB) oder einem Handy.</p>
+            <h3>Rufzeichen Spieler 2</h3>
+            <input id="callsign2" maxlength="12" value="Orion" autocomplete="off" spellcheck="false">
+          </div>
+          <div>
+            <h3>Handys als Controller</h3>
+            <div id="mp-online">
+              <div class="qrbox"><canvas id="mp-qr" width="180" height="180"></canvas><div><p>Mit der Handykamera scannen oder öffnen:</p><b id="mp-code">····</b><p class="small" id="mp-url"></p><p class="small" id="mp-status">Verbindungsdienst wird gestartet…</p></div></div>
+              <button id="mp-cast" class="btn hidden">Auf TV streamen (Chromecast)</button>
+            </div>
+            <div id="mp-offline" class="hidden">
+              <p>Handy-Controller und Chromecast brauchen die installierte Version des Spiels (GitHub Pages). In dieser Vorschau funktionieren Touch, Tastatur und Gamepads.</p>
+            </div>
+            <h3>Auf dem Fernseher spielen</h3>
+            <ul class="small">
+              <li><b>TV-Browser / Konsole / PC am TV:</b> Spiel dort öffnen, Handys über den QR-Code verbinden.</li>
+              <li><b>Chromecast:</b> In Chrome auf Android „Auf TV streamen“ wählen. Das Handy wird zum Controller.</li>
+              <li><b>Bildschirm spiegeln:</b> AirPlay (iPhone) oder Smart View / Miracast (Android), danach mit Gamepad spielen.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="row"><button class="btn primary" data-back>Fertig</button></div>
+      </div>
+    </section>
+
+    <section id="s-help" class="screen hidden">
+      <div class="panel wide">
+        <header><span>Handbuch</span><h2>Steuerung</h2></header>
+        <div class="cols three">
           <div><h3>Touch</h3><ul>
-            <li><b>Linke Bildschirmhälfte</b> – Steuerknüppel</li>
-            <li><b>FEUER</b> – Bordkanonen (halten)</li>
-            <li><b>RAKETE</b> – Lenkrakete auf aktuelles Ziel</li>
-            <li><b>BOOST</b> – Nachbrenner (halten)</li>
-            <li><b>ZIEL</b> – nächstes Ziel aufschalten</li>
-            <li><b>SCHUB</b> – Schubregler am rechten Rand</li>
-            <li><b>AUTOPILOT</b> – Sprung zum nächsten Navpunkt</li>
+            <li><b>Linke Hälfte</b> – Steuerknüppel</li>
+            <li><b>FEUER</b> – Kanonen (halten)</li>
+            <li><b>RAKETE</b> – Lenkrakete</li>
+            <li><b>BOOST</b> – Nachbrenner</li>
+            <li><b>ZIEL</b> – Ziel wechseln</li>
+            <li><b>SCHUB</b> – Regler rechts</li>
+          </ul></div>
+          <div><h3>Gamepad</h3><ul>
+            <li><b>Linker Stick</b> – steuern</li>
+            <li><b>RT / A</b> – feuern</li>
+            <li><b>LT / LB</b> – Nachbrenner</li>
+            <li><b>X / RB</b> – Rakete · <b>Y</b> – Ziel</li>
+            <li><b>Rechter Stick / Steuerkreuz</b> – Schub</li>
+            <li><b>Select</b> – Autopilot · <b>Start</b> – Pause</li>
           </ul></div>
           <div><h3>Tastatur</h3><ul>
             <li><b>WASD / Pfeile</b> – steuern</li>
@@ -75,14 +140,14 @@
             <li><b>Q / E</b> – Schub · <b>Esc</b> – Pause</li>
           </ul></div>
         </div>
-        <p class="hint">Tipp: Der Kreis vor dem Ziel ist der Vorhaltepunkt. Wird das Fadenkreuz grün, treffen deine Schüsse.</p>
+        <p class="hint">Tipp: Der Kreis vor dem Ziel ist der Vorhaltepunkt. Wird das Fadenkreuz grün, treffen deine Schüsse automatisch.</p>
         <div class="row"><button class="btn primary" data-back>Verstanden</button></div>
       </div>
     </section>
 
     <section id="s-settings" class="screen hidden">
       <div class="panel narrow">
-        <h2>Einstellungen</h2>
+        <header><span>System</span><h2>Einstellungen</h2></header>
         <button id="set-sound" class="btn toggle"></button>
         <button id="set-invert" class="btn toggle"></button>
         <button id="set-quality" class="btn toggle"></button>
@@ -93,24 +158,31 @@
 
     <section id="s-dialog" class="screen hidden">
       <div class="dialog">
-        <header><span id="d-kicker"></span><h2 id="d-title"></h2></header>
+        <header class="dhead">
+          <span class="rx"><i class="dot"></i> EINGEHENDE ÜBERTRAGUNG</span>
+          <span id="d-kicker"></span>
+        </header>
+        <h2 id="d-title" class="glitch"></h2>
         <div class="dbox">
-          <div id="d-avatar" class="avatar big"></div>
-          <div class="dtext"><b id="d-who"></b><p id="d-text"></p></div>
+          <div class="portrait"><canvas id="d-holo" width="200" height="200"></canvas><span id="d-freq"></span></div>
+          <div class="dtext">
+            <div class="dname"><b id="d-who"></b><canvas id="d-wave" width="120" height="22"></canvas></div>
+            <p id="d-text"></p>
+          </div>
         </div>
-        <div class="row"><button id="d-skip" class="btn ghost">Überspringen</button><button id="d-next" class="btn primary">Weiter</button></div>
+        <div class="row"><span class="kbd-hint">Tippen / A / Leertaste: weiter</span><button id="d-skip" class="btn ghost">Überspringen</button><button id="d-next" class="btn primary">Weiter</button></div>
       </div>
     </section>
 
     <section id="s-brief" class="screen hidden">
       <div class="panel wide">
-        <header><span id="b-kicker"></span><h2 id="b-title"></h2></header>
+        <header><span id="b-kicker"></span><h2 id="b-title" class="glitch"></h2></header>
         <div class="cols">
           <canvas id="b-map" width="520" height="360"></canvas>
           <div>
             <h3>Missionsziele</h3><ul id="b-obj"></ul>
             <h3>Zugeteilte Maschine</h3><p id="b-ship"></p>
-            <h3>Flügelmann</h3><p id="b-wing"></p>
+            <h3>Flügel</h3><p id="b-wing"></p>
           </div>
         </div>
         <div class="row"><button class="btn" id="b-back">Hauptmenü</button><button id="b-start" class="btn primary">Start</button></div>
@@ -119,7 +191,7 @@
 
     <section id="s-debrief" class="screen hidden">
       <div class="panel">
-        <header><span id="r-kicker"></span><h2 id="r-title"></h2></header>
+        <header><span id="r-kicker"></span><h2 id="r-title" class="glitch"></h2></header>
         <p id="r-reason"></p>
         <div class="stats" id="r-stats"></div>
         <div class="row"><button class="btn" id="r-menu">Hauptmenü</button><button class="btn primary" id="r-next">Weiter</button></div>
@@ -128,7 +200,7 @@
 
     <section id="s-pause" class="screen hidden dim">
       <div class="panel narrow">
-        <h2>Pause</h2>
+        <header><span>Flug angehalten</span><h2>Pause</h2></header>
         <button id="p-resume" class="btn primary">Weiterfliegen</button>
         <button id="p-restart" class="btn">Mission neu starten</button>
         <button id="p-quit" class="btn">Mission abbrechen</button>
@@ -136,6 +208,7 @@
     </section>
   </div>
 
+  <div id="scanfx"></div>
   <div id="fade"></div>
   <div id="rotate"><div>⟳<p>Bitte Gerät ins Querformat drehen</p></div></div>
   <script type="module" src="./src/main.js"></script>

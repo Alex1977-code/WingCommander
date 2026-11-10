@@ -7,12 +7,18 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "build:artifact": "vite build --mode artifact && node scripts/artifact.mjs",
+    "peer": "peerjs --port 9000"
   },
   "dependencies": {
+    "peerjs": "^1.5.4",
+    "qrcode": "^1.5.4",
     "three": "^0.170.0"
   },
   "devDependencies": {
-    "vite": "^5.4.0"
+    "peer": "^1.0.2",
+    "vite": "^5.4.0",
+    "vite-plugin-singlefile": "^2.0.3"
   }
 }
