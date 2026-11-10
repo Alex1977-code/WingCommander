@@ -8,8 +8,13 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
 
 - **3D-Grafik mit Three.js**: PBR-Materialien, Nebel-Skybox per Shader, Planeten mit Atmosphäre,
   Bloom, Partikel-Explosionen, Asteroidenfelder – alles prozedural, keine Asset-Downloads
-- **Kampagne**: 6 Missionen (Patrouille, Geleitschutz, Trägerverteidigung, Angriff auf Großkampfschiffe),
-  Dialoge, Briefings mit Taktikkarte, Nachbesprechung, Ränge und Speicherstand
+- **Kampagne in 3 Akten**: 15 Missionen mit eigener Story (Mentor, Verräter, Gefangennahme, Rettung, Finale)
+  - 11 Zwischensequenzen in der 3D-Engine mit Kamerafahrten, Untertiteln und Titelkarten
+  - Verzweigungen: Manche Niederlagen führen die Geschichte anders weiter statt zum Neustart
+  - Bordszenen mit Entscheidungen, die Sympathie, Flügelmann-Können und den Verlauf beeinflussen
+  - Zwei Enden („Morgenröte“ und „Asche und Sterne“)
+  - Missionstypen: Patrouille, Geleitschutz, Aufklärung, Bergung, Abfangen, Durchhalten, Flucht, Befreiung,
+    Angriff auf Zerstörer, Stationen und das Kommandoschiff
 - **Kampf**: 3 fliegbare Jäger, 4 Feindtypen inkl. Ass-Pilot, Zerstörer und Kommandoschiff mit Geschütztürmen,
   Lenkraketen, Schilde, Nachbrenner, Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
 - **Touch-Steuerung**: virtueller Stick, Feuer/Rakete/Boost/Ziel, Schubregler – dazu Tastatur am Desktop

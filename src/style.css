@@ -197,6 +197,31 @@ input:focus { border-color: var(--c2); box-shadow: 0 0 14px rgba(255, 138, 42, .
 .stats span { font: 700 9px var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--c); }
 .medal { margin-top: 12px; color: var(--warn) !important; font-weight: 700; letter-spacing: .04em; }
 
+/* ---------- in-engine cutscenes ---------- */
+#cut { position: fixed; inset: 0; z-index: 15; pointer-events: auto; }
+#cut .lb { position: absolute; left: 0; right: 0; height: 11vh; background: #000; animation: lb-in .8s cubic-bezier(.2, .8, .2, 1) both; }
+#cut .lb.top { top: 0; } #cut .lb.bottom { bottom: 0; }
+@keyframes lb-in { from { height: 0; } }
+#cut-sub {
+  position: absolute; left: 50%; bottom: calc(11vh + 14px); transform: translateX(-50%); width: min(860px, 88vw); text-align: center;
+  text-shadow: 0 0 10px rgba(0, 0, 0, .9), 0 2px 4px #000;
+}
+#cut-sub.show { animation: holo-in .45s cubic-bezier(.2, .8, .2, 1) both; }
+#cut-sub b { display: block; font: 800 clamp(10px, 1.5vw, 13px) var(--display); letter-spacing: .2em; text-transform: uppercase; color: var(--ac, var(--c)); text-shadow: 0 0 10px var(--ac, var(--c)); min-height: 1em; }
+#cut-sub p { margin: 6px 0 0; font: 600 clamp(15px, 2.4vw, 22px) var(--text); line-height: 1.4; color: #f2f8ff; }
+#cut-title { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+#cut-title small { font: 700 clamp(10px, 1.6vw, 14px) var(--display); letter-spacing: .5em; color: var(--c2); }
+#cut-title h1 { margin: 10px 0 0; font: 900 clamp(26px, 7vw, 76px) var(--display); letter-spacing: .14em; color: #f2fbff; text-shadow: 0 0 26px rgba(127, 214, 255, .75); animation: cine-track 3.6s ease-out both; }
+#cut-title.out { animation: cine-out .8s ease-in forwards; }
+#cut-skip { position: absolute; right: calc(16px + var(--sar)); top: calc(11vh + 10px); font-size: 10px; padding: 7px 14px; opacity: .55; }
+#cut-skip.armed { opacity: 1; border-color: var(--warn); color: var(--warn); }
+
+/* ---------- dialog choices ---------- */
+.choices { display: grid; gap: 8px; margin-top: 12px; }
+.choices:empty { display: none; }
+.btn.choice { font: 700 clamp(13px, 2vw, 17px) var(--text); letter-spacing: .02em; text-transform: none; padding: 10px 18px 10px 26px; border-color: rgba(255, 200, 87, .45); }
+.btn.choice:hover, .btn.choice.focus { border-color: var(--warn); }
+
 /* ---------- mission cinematic ---------- */
 #cine { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; z-index: 20; text-align: center; padding: 0 20px; }
 #cine small { font: 700 clamp(10px, 1.6vw, 14px) var(--display); letter-spacing: .5em; color: var(--c2); }

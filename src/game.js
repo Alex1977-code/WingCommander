@@ -7,6 +7,8 @@ import { buildShip, SHIPS } from './ships.js';
 import { createEnvironment, createAsteroids } from './env.js';
 import { Fx, glowTexture } from './fx.js';
 import { drawHud } from './hud.js';
+import { CHARS } from './campaign.js';
+import { installCutscenes } from './cutscene.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3();
@@ -120,7 +122,8 @@ export class Game {
   }
 
   /** controllers: one per human pilot. names: callsigns. */
-  startMission(def, controllers, names) {
+  startMission(def, controllers, names, opts = {}) {
+    this.flags = opts.flags || {};
     this.loadScene(def.sky);
     this.mode = 'flight';
     this.paused = false; this.frozen = false; this.ended = false; this.failT = 0;
@@ -147,21 +150,26 @@ export class Game {
     for (const P of this.pilots) if (this.quality === 'high') P.composer = this.makeComposer(P.camera);
     this.wingman = null;
     if (def.wingman) {
-      this.wingman = this.spawn(def.ship, new THREE.Vector3(40, -8, 270), FWD, { wingman: true, who: def.wingman, skill: 0.75 });
-      this.wingman.name = def.wingman === 'rook' ? 'Rook' : 'Kolibri';
+      const who = opts.wingman || def.wingman;
+      this.wingman = this.spawn(def.ship, new THREE.Vector3(40, -8, 270), FWD, { wingman: true, who, skill: opts.wingSkill ?? 0.75 });
+      this.wingman.name = CHARS[who]?.call || 'Flügelmann';
     }
     this.protect = null;
     if (def.protect === 'carrier') this.protect = this.carrier;
     for (const n of def.navs) {
       n._pos = new THREE.Vector3(...n.pos);
       if (n.asteroids) this.asteroids.push(...createAsteroids(this.scene, n._pos, n.asteroids));
+      if (n.field) this.asteroids.push(...createAsteroids(this.scene, new THREE.Vector3(...n.field.at), n.field.n, n.field.spread));
+      if (n.wreck) this.spawn('valkyrie', n._pos.clone(), new THREE.Vector3(0.25, -0.12, 1).normalize());
       if (def.protect === 'transport' && n.anchor) {
         this.protect = this.spawn('transport', n._pos.clone(), new THREE.Vector3(0.3, 0, 1).normalize());
       }
     }
-    this.mission = { navIdx: 0, phase: 'travel', wave: 0, waveT: null };
+    this.mission = { navIdx: 0, phase: 'travel', wave: 0, waveT: null, timer: null, prog: 0 };
+    this.pickups = []; this.failReason = null; this.failT = 0;
     this.banner = null; this.bannerT = 0; this.objT = performance.now(); this.lastObj = '';
     this.resize();
+    this.activateNav(0);
     this.audio.startEngine();
     this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Maschinen. Guten Flug, Nachtfalken!' : 'Startfreigabe erteilt. Guten Flug, {cs}!');
   }
@@ -172,6 +180,7 @@ export class Game {
   alivePilots() { return this.pilots.filter((P) => P.ship.alive); }
   /** Distance from a point to the nearest living pilot (used for audio + spawn logic). */
   ear(pos) {
+    if (this.mode === 'cut') return this.camera.position.distanceTo(pos);
     let d = Infinity;
     for (const P of this.pilots) if (P.ship.alive) d = Math.min(d, P.ship.pos.distanceTo(pos));
     return d === Infinity && this.pilots[0] ? this.pilots[0].ship.pos.distanceTo(pos) : d;
@@ -249,6 +258,12 @@ export class Game {
 
   damage(s, dmg, by, point) {
     if (!s.alive) return;
+    if (s.def.invulnerable || this.mode === 'cut') {
+      if (s.def.ghost) return;
+      this.fx.flash(point, s.def.capital ? 12 : 14, s.shield > 0 ? COL.shield : COL.spark, 0.18);
+      if (this.mode === 'cut') this.fx.sparks(point, COL.spark, 5);
+      return;
+    }
     s.shieldT = 4.5;
     s.lastHitBy = by;
     const hadShield = s.shield > 0;
@@ -346,7 +361,7 @@ export class Game {
     let best = null, bd = Infinity;
     const wantCap = s.def.bomber;
     for (const o of this.ships) {
-      if (!o.alive || o.team === s.team) continue;
+      if (!o.alive || o.team === s.team || o.team === 3) continue;
       let d = o.pos.distanceTo(s.pos);
       if (d > 6000) continue;
       if (wantCap) d *= o.def.capital ? 0.05 : 1;
@@ -373,6 +388,20 @@ export class Game {
   updateAI(s, dt) {
     const def = s.def, ai = s.ai;
     if (def.capital) return this.updateCapital(s, dt);
+    if (s.flee) {
+      t1.copy(s.flee).sub(s.pos);
+      const d = t1.length();
+      t1.divideScalar(d);
+      for (const a of this.asteroids) {
+        t3.copy(s.pos).sub(a.pos);
+        const da = t3.length();
+        if (da < a.radius + 90) t1.addScaledVector(t3.divideScalar(da), 2).normalize();
+      }
+      this.steer(s, t1, dt, def.turn);
+      s.speed = s.fleeSpeed || def.speed;
+      if (d < 300) { s.escaped = true; this.jumpOut(s); }
+      return;
+    }
     ai.retarget -= dt; ai.evadeT -= dt;
     if (!ai.target || !ai.target.alive || ai.retarget <= 0) { ai.target = this.pickTarget(s); ai.retarget = rnd(3, 6); }
     const tgt = ai.target;
@@ -431,7 +460,7 @@ export class Game {
       if (d < a.radius + 70) { dir.addScaledVector(t3.divideScalar(d), 2.5 * (1 - (d - a.radius) / 70)).normalize(); }
     }
     for (const c of this.ships) {
-      if (!c.def.capital || !c.alive || c === tgt) continue;
+      if (!c.def.capital || !c.alive || c === tgt || c.def.ghost) continue;
       if (s.pos.distanceToSquared(c.pos) > (c.radius + 120) ** 2) continue;
       const d = this.boxDist(c, s.pos, t3);
       if (d < 60) dir.addScaledVector(t3, 3).normalize();
@@ -466,7 +495,7 @@ export class Game {
       t1.set(tur[i][0], tur[i][1], tur[i][2]).applyQuaternion(s.quat).add(s.pos);
       let best = null, bd = 1500 * 1500;
       for (const o of this.ships) {
-        if (!o.alive || o.team === s.team) continue;
+        if (!o.alive || o.team === s.team || o.team === 3) continue;
         const d = o.pos.distanceToSquared(t1);
         if (d < bd) { bd = d; best = o; }
       }
@@ -527,7 +556,7 @@ export class Game {
       if (d < a.radius + 5) this.bump(P, t2.divideScalar(d), a.radius + 5 - d);
     }
     for (const cap of this.ships) {
-      if (!cap.def.capital || !cap.alive) continue;
+      if (!cap.def.capital || !cap.alive || cap.def.ghost) continue;
       if (p.pos.distanceToSquared(cap.pos) > (cap.radius + 40) ** 2) continue;
       const d = this.boxDist(cap, p.pos, t2);
       if (d < 6) this.bump(P, t2, 6 - d);
@@ -573,25 +602,50 @@ export class Game {
   hostileCount() { let n = 0; for (const s of this.ships) if (s.alive && s.team === 1) n++; return n; }
 
   // ---------- mission ----------
+  nav() { return this.def.navs[this.mission.navIdx]; }
   navPos() {
     const m = this.mission;
     if (!m) return null;
     if (m.phase === 'return') return this.carrier.pos;
-    const n = this.def.navs[m.navIdx];
-    if (m.phase === 'fight') return null;
+    if (m.phase !== 'travel') return null;
+    const n = this.nav();
     return n.anchor && this.protect ? this.protect.pos : n._pos;
   }
-  navName() { return this.mission.phase === 'return' ? 'TUS Aurora' : this.def.navs[this.mission.navIdx].name; }
+  navName() { return this.mission.phase === 'return' ? 'TUS Aurora' : this.nav().name; }
+
   objectiveText() {
     const m = this.mission;
+    const fmt = (t) => `${Math.floor(Math.max(0, t) / 60)}:${String(Math.floor(Math.max(0, t) % 60)).padStart(2, '0')}`;
     if (m.phase === 'return') return 'Kehre zur TUS Aurora zurück';
-    const n = this.def.navs[m.navIdx];
-    if (m.phase === 'travel') return `Fliege zu ${n.name}`;
-    return n.objective || 'Vernichte alle Feinde';
+    if (m.phase === 'done') return 'Mission erfüllt';
+    const n = this.nav();
+    let txt;
+    if (m.phase === 'travel') txt = `Fliege zu ${n.name}`;
+    else if (n.type === 'scan') txt = `${n.objective || 'Scanne den Sektor'} · ${Math.floor(Math.min(1, m.prog / n.scan) * 100)} %`;
+    else if (n.type === 'pickup') txt = `${n.objective || 'Bergung'} · ${this.pickups.filter((p) => p.got).length}/${this.pickups.length}`;
+    else if (n.type === 'survive') txt = `${n.objective || 'Halte durch'} · ${fmt(m.surv)}`;
+    else if (n.type === 'dock' && m.docking) txt = `Andocken · ${Math.floor(Math.min(1, m.prog / n.dock) * 100)} %`;
+    else txt = n.objective || 'Vernichte alle Feinde';
+    if (m.timer != null) txt += ` · ⏱ ${fmt(m.timer)}`;
+    return txt;
   }
+
+  /** Extra HUD markers for objectives (pickups, intercept target, dock target, scan zone). */
+  markers() {
+    const m = this.mission, out = [];
+    if (!m || m.phase !== 'fight') return out;
+    const n = this.nav();
+    if (n.type === 'pickup') for (const p of this.pickups) if (!p.got) out.push({ pos: p.pos, color: '#6dffb0', label: 'FLUGSCHREIBER' });
+    if (n.type === 'scan' && m.prog < n.scan) out.push({ pos: n._pos, color: '#ffc857', label: 'SCANZONE', main: true });
+    if (n.type === 'intercept' && m.courier?.alive) out.push({ pos: m.courier.pos, color: '#ff4d6d', label: 'KURIER', main: true });
+    if (n.type === 'dock' && m.docking && m.prison?.alive) out.push({ pos: m.prison.pos, color: '#6dffb0', label: 'ANDOCKEN', main: true });
+    return out;
+  }
+
   autoAvailable() {
     const m = this.mission;
-    if (!m || m.phase === 'fight' || this.frozen || this.hostileCount() > 0) return false;
+    if (!m || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
+    if (m.phase === 'travel' && (this.nav().type === 'escape' || m.timer != null)) return false;
     const alive = this.alivePilots();
     if (!alive.length || alive.length < this.pilots.length) return false;
     const np = this.navPos();
@@ -622,26 +676,94 @@ export class Game {
     });
   }
 
+  /** Called when a nav point becomes the current objective. */
+  activateNav(i) {
+    const n = this.def.navs[i];
+    if (!n) return;
+    const m = this.mission;
+    m.timer = null;
+    if (n.type === 'escape') {
+      m.timer = n.escape;
+      if (n.chasers) {
+        const lead = this.leadPilot().ship;
+        this.fwd(lead, t1);
+        const origin = lead.pos.clone().addScaledVector(t1, -1400);
+        this.spawnGroup(n.chasers, origin, lead.pos);
+      }
+    }
+  }
+
+  spawnGroup(entries, origin, center) {
+    for (const [type, n, cond] of entries) {
+      if (cond && !this.flags[cond]) continue;
+      for (let i = 0; i < n; i++) {
+        const cap = SHIPS[type].capital;
+        const pos = origin.clone().add(new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(cap ? 0 : 160));
+        const dir = new THREE.Vector3().copy(center).sub(pos).normalize();
+        const s = this.spawn(type, pos, dir.lengthSq() ? dir : FWD);
+        if (!cap) this.fx.flash(pos, 90, new THREE.Color(3, 1, 2.5), 0.5);
+        if (this.coop && !cap) s.hp = s.maxHp = s.maxHp * 1.25;
+      }
+    }
+  }
+
   spawnWave(nav, idx) {
     const center = nav.anchor && this.protect ? this.protect.pos : nav._pos;
     const base = t1.randomDirection(); base.y *= 0.35; base.normalize();
     const origin = new THREE.Vector3().copy(center).addScaledVector(base, nav.anchor ? 2600 : 1500);
     if (this.ear(origin) < 1300) origin.addScaledVector(base, 1300);
-    for (const [type, n] of nav.waves[idx]) {
+    const wave = nav.waves[idx] || [];
+    for (const [type, n, cond] of wave) {
+      if (cond && !this.flags[cond]) continue;
       for (let i = 0; i < n; i++) {
         const cap = SHIPS[type].capital;
         const pos = cap ? nav._pos.clone() : origin.clone().add(new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(160));
         const dir = cap ? new THREE.Vector3(1, 0, 0.2).normalize() : new THREE.Vector3().copy(center).sub(pos).normalize();
         const s = this.spawn(type, pos, dir);
         if (cap && type === 'zerstoerer') s.name = 'Dogma';
+        if (type === 'station' && nav.name) s.name = nav.name;
         if (!cap) this.fx.flash(pos, 90, new THREE.Color(3, 1, 2.5), 0.5);
-        // co-op is harder: tougher enemies
-        if (this.coop && !cap) { s.hp = s.maxHp = s.maxHp * 1.25; }
+        if (this.coop && !cap) s.hp = s.maxHp = s.maxHp * 1.25;
       }
     }
     if (idx > 0) { this.audio.warn(); this.setBanner('NEUE FEINDWELLE'); }
     const line = nav.onWave?.[idx];
     if (line) this.ui.comm(line.who, line.text);
+  }
+
+  spawnPickups(nav) {
+    const geo = new THREE.OctahedronGeometry(3.2, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 3, 1.4) });
+    for (let i = 0; i < nav.pickups; i++) {
+      const a = (i / nav.pickups) * Math.PI * 2 + rnd(-0.3, 0.3);
+      const pos = nav._pos.clone().add(new THREE.Vector3(Math.cos(a) * rnd(250, 520), rnd(-120, 120), Math.sin(a) * rnd(250, 520)));
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(geo, mat));
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(0.5, 2.2, 1), blending: THREE.AdditiveBlending, depthWrite: false }));
+      glow.scale.setScalar(36); g.add(glow);
+      g.position.copy(pos);
+      this.scene.add(g);
+      this.pickups.push({ pos: g.position, mesh: g, got: false });
+    }
+  }
+
+  fail(reason) {
+    if (this.failReason) return;
+    this.failReason = reason; this.failT = 3;
+    this.setBanner('MISSION GESCHEITERT');
+    this.audio.warn();
+  }
+
+  completeNav(nav) {
+    const m = this.mission;
+    nav.onClear?.forEach((l) => this.ui.comm(l.who, l.text));
+    if (nav.type === 'survive') for (const s of this.ships) if (s.alive && s.team === 1) this.jumpOut(s);
+    m.timer = null; m.docking = false; m.prog = 0;
+    m.navIdx++;
+    if (m.navIdx < this.def.navs.length) { m.phase = 'travel'; this.activateNav(m.navIdx); this.setBanner('SEKTOR GESICHERT'); }
+    else if (this.def.noReturn) { m.phase = 'done'; m.endT = 4; this.setBanner('MISSIONSZIELE ERFÜLLT'); }
+    else { m.phase = 'return'; this.setBanner('MISSIONSZIELE ERFÜLLT'); }
+    this.audio.beep(1200, 0.2);
   }
 
   updateMission(dt) {
@@ -658,39 +780,108 @@ export class Game {
       if (this.pilots.every((P) => P.deadT <= 0)) this.end(false, this.coop ? 'Beide Jäger wurden zerstört. Die Rettungskapseln wurden geborgen.' : 'Dein Jäger wurde zerstört. Du konntest dich mit der Rettungskapsel retten.');
       return;
     }
-    if (this.protect && !this.protect.alive) {
-      if (!this.failT) { this.failT = 3; this.setBanner(`${this.protect.name.toUpperCase()} VERLOREN`); }
+    if (this.protect && !this.protect.alive && !this.failReason) this.fail(`Die ${this.protect.name} wurde zerstört.`);
+    if (this.failReason) {
       this.failT -= dt;
-      if (this.failT <= 0) this.end(false, `Die ${this.protect.name} wurde zerstört.`);
+      if (this.failT <= 0) this.end(false, this.failReason);
       return;
     }
+    if (m.phase === 'done') { m.endT -= dt; if (m.endT <= 0) this.end(true); return; }
     const near = (pos, r) => alive.some((P) => P.ship.pos.distanceTo(pos) < r);
     if (m.phase === 'return') {
       if (near(this.carrier.pos, 750)) this.end(true);
       return;
     }
-    const nav = def.navs[m.navIdx];
+    const nav = this.nav();
+    if (m.timer != null) {
+      m.timer -= dt;
+      if (m.timer <= 0) { m.timer = 0; return this.fail(nav.timerFail || nav.limitFail || 'Die Zeit ist abgelaufen.'); }
+    }
     if (m.phase === 'travel') {
-      if (near(this.navPos(), 2500)) {
-        m.phase = 'fight'; m.wave = 0; m.waveT = null;
+      const np = this.navPos();
+      if (nav.type === 'escape') {
+        if (near(np, 650)) { nav.onArrive?.forEach((l) => this.ui.comm(l.who, l.text)); this.completeNav(nav); }
+        return;
+      }
+      if (near(np, 2500)) {
+        m.phase = 'fight'; m.wave = 0; m.waveT = null; m.prog = 0; m.docking = false;
+        if (nav.limit) m.timer = nav.limit;
+        if (nav.type === 'survive') m.surv = nav.survive;
+        if (nav.type === 'pickup') this.spawnPickups(nav);
+        if (nav.type === 'intercept') {
+          const to = new THREE.Vector3(...nav.intercept.to);
+          const c = this.spawn('kurier', nav._pos.clone(), to.clone().sub(nav._pos).normalize());
+          c.flee = to; c.name = 'Kurierschiff';
+          c.fleeSpeed = nav.intercept.fastIfNot && !this.flags[nav.intercept.fastIfNot] ? 175 : 140;
+          m.courier = c;
+        }
+        if (nav.type === 'dock') {
+          m.prison = this.spawn('prison', nav._pos.clone(), new THREE.Vector3(0.2, 0, 1).normalize());
+          m.prison.name = nav.name;
+        }
         this.spawnWave(nav, 0);
         nav.onArrive?.forEach((l) => this.ui.comm(l.who, l.text));
       }
-    } else if (this.hostileCount() === 0) {
+      return;
+    }
+
+    // ---- fight phase ----
+    const hostiles = this.hostileCount();
+    const lastWave = m.wave >= nav.waves.length - 1;
+    // wave progression
+    if (hostiles === 0 && (!lastWave || nav.type === 'survive')) {
       if (m.waveT === null) m.waveT = 3;
       m.waveT -= dt;
       if (m.waveT <= 0) {
         m.waveT = null; m.wave++;
-        if (m.wave < nav.waves.length) this.spawnWave(nav, m.wave);
-        else {
-          nav.onClear?.forEach((l) => this.ui.comm(l.who, l.text));
-          m.navIdx++;
-          m.phase = m.navIdx < def.navs.length ? 'travel' : 'return';
-          this.setBanner(m.phase === 'return' ? 'MISSIONSZIELE ERFÜLLT' : 'SEKTOR GESICHERT');
-          this.audio.beep(1200, 0.2);
-        }
+        this.spawnWave(nav, nav.type === 'survive' ? m.wave % nav.waves.length : m.wave);
       }
     }
+    let done = false;
+    switch (nav.type) {
+      case 'scan':
+        if (near(nav._pos, 700)) m.prog += dt;
+        done = m.prog >= nav.scan;
+        break;
+      case 'pickup':
+        for (const p of this.pickups) {
+          if (p.got) { continue; }
+          p.mesh.rotation.y += dt * 2;
+          if (near(p.pos, 45)) {
+            p.got = true; this.scene.remove(p.mesh);
+            this.fx.flash(p.pos, 50, new THREE.Color(0.6, 3, 1.4), 0.4);
+            this.audio.beep(1600, 0.15);
+            this.setBanner(`FLUGSCHREIBER ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
+          }
+        }
+        done = this.pickups.every((p) => p.got);
+        break;
+      case 'intercept':
+        if (m.courier.escaped) return this.fail('Das Kurierschiff hat den Sprungpunkt erreicht.');
+        done = !m.courier.alive;
+        break;
+      case 'survive':
+        m.surv -= dt;
+        done = m.surv <= 0;
+        break;
+      case 'dock':
+        if (!m.docking && lastWave && hostiles === 0) {
+          m.docking = true; m.prog = 0;
+          nav.onDock?.forEach((l) => this.ui.comm(l.who, l.text));
+          this.setBanner('ANDOCKEN FREIGEGEBEN');
+        }
+        if (m.docking) {
+          if (near(m.prison.pos, 170)) {
+            if (!m.dockWave && nav.dockWave) { m.dockWave = true; this.spawnGroup(nav.dockWave, m.prison.pos.clone().add(new THREE.Vector3(1400, 300, 0)), m.prison.pos); }
+            m.prog += dt;
+          }
+          done = m.prog >= nav.dock;
+        }
+        break;
+      default:
+        done = lastWave && hostiles === 0;
+    }
+    if (done) this.completeNav(nav);
   }
 
   end(win, reason) {
@@ -708,6 +899,15 @@ export class Game {
     this.ui.frame?.(dt);
     if (this.mode === 'idle' || !this.scene) return;
     const r = this.renderer;
+    if (this.mode === 'cut') {
+      if (!this.paused) this.updateCut(dt);
+      this.env.update(this.camera);
+      r.setScissorTest(false);
+      r.setViewport(0, 0, this.w, this.h);
+      this.hud.clearRect(0, 0, this.w, this.h);
+      if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
+      return;
+    }
     if (this.mode === 'attract') {
       this.attractT += dt;
       const a = this.attractT * 0.06 + 0.9;
@@ -770,24 +970,7 @@ export class Game {
     this.updateBolts(dt);
     this.updateMissiles(dt);
 
-    for (let i = this.dying.length - 1; i >= 0; i--) {
-      const s = this.dying[i];
-      s.dieT -= dt; s.boomT -= dt;
-      if (s.boomT <= 0) {
-        s.boomT = 0.13;
-        const b = s.def.box;
-        t1.set(rnd(-b[0], b[0]), rnd(-b[1], b[1]), rnd(-b[2], b[2])).applyQuaternion(s.quat).add(s.pos);
-        this.fx.explode(t1, rnd(1.5, 3.5));
-      }
-      if (s.dieT <= 0) {
-        this.fx.explode(s.pos, 9);
-        this.fx.flash(s.pos, 1400, new THREE.Color(4, 3, 2), 1.2);
-        this.scene.remove(s.mesh);
-        this.dying.splice(i, 1);
-        for (const P of this.pilots) P.shake = Math.max(P.shake, 1);
-        this.audio.explosion(0.9, true);
-      }
-    }
+    this.updateDying(dt);
     for (const a of this.asteroids) a.mesh.rotateOnAxis(a.axis, a.rate * dt);
 
     for (const P of this.pilots) {
@@ -834,6 +1017,27 @@ export class Game {
     }
   }
 
+  updateDying(dt) {
+    for (let i = this.dying.length - 1; i >= 0; i--) {
+      const s = this.dying[i];
+      s.dieT -= dt; s.boomT -= dt;
+      if (s.boomT <= 0) {
+        s.boomT = 0.13;
+        const b = s.def.box;
+        t1.set(rnd(-b[0], b[0]), rnd(-b[1], b[1]), rnd(-b[2], b[2])).applyQuaternion(s.quat).add(s.pos);
+        this.fx.explode(t1, rnd(1.5, 3.5));
+      }
+      if (s.dieT <= 0) {
+        this.fx.explode(s.pos, 9);
+        this.fx.flash(s.pos, 1400, new THREE.Color(4, 3, 2), 1.2);
+        this.scene.remove(s.mesh);
+        this.dying.splice(i, 1);
+        for (const P of this.pilots) P.shake = Math.max(P.shake, 1);
+        this.audio.explosion(0.9, true);
+      }
+    }
+  }
+
   updateBolts(dt) {
     for (let i = this.bolts.length - 1; i >= 0; i--) {
       const b = this.bolts[i], pos = b.mesh.position;
@@ -843,7 +1047,7 @@ export class Game {
       let hit = b.life <= 0;
       if (!hit) {
         for (const s of this.ships) {
-          if (!s.alive || s.team === b.team) continue;
+          if (!s.alive || s.team === b.team || s.def.ghost) continue;
           const r = s.radius + 4;
           if (s.def.capital) {
             if (pos.distanceToSquared(s.pos) > r * r) continue;
@@ -892,7 +1096,7 @@ export class Game {
       let boom = m.life <= 0;
       if (!boom) {
         for (const s of this.ships) {
-          if (!s.alive || s.team === m.team) continue;
+          if (!s.alive || s.team === m.team || s.def.ghost) continue;
           if (s.def.capital) {
             if (m.pos.distanceToSquared(s.pos) > (s.radius + 10) ** 2) continue;
             if (this.boxDist(s, m.pos, t2) < 5) { this.damage(s, m.dmg * (m.torpedo ? 1 : 2.4), m.owner, m.pos); boom = true; break; }
@@ -911,3 +1115,5 @@ export class Game {
     }
   }
 }
+
+installCutscenes(Game);

@@ -40,6 +40,14 @@
     <button id="btn-fire" class="rbtn">FEUER</button>
   </div>
 
+  <!-- in-engine cutscene overlay -->
+  <div id="cut" class="hidden">
+    <div class="lb top"></div><div class="lb bottom"></div>
+    <div id="cut-title" class="hidden"><small></small><h1 class="glitch"></h1></div>
+    <div id="cut-sub" class="hidden"><b></b><p></p></div>
+    <button id="cut-skip" class="btn ghost">Überspringen ▸▸</button>
+  </div>
+
   <!-- mission start cinematic -->
   <div id="cine" class="hidden">
     <div class="cine-line top"></div>
@@ -170,6 +178,7 @@
             <p id="d-text"></p>
           </div>
         </div>
+        <div id="d-choices" class="choices"></div>
         <div class="row"><span class="kbd-hint">Tippen / A / Leertaste: weiter</span><button id="d-skip" class="btn ghost">Überspringen</button><button id="d-next" class="btn primary">Weiter</button></div>
       </div>
     </section>

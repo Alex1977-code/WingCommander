@@ -2,7 +2,8 @@ import { Game, PILOT_COLORS } from './game.js';
 import { InputHub } from './input.js';
 import { Audio } from './audio.js';
 import { SHIPS } from './ships.js';
-import { CHARS, MISSIONS, INTRO, ENDING, rankFor } from './campaign.js';
+import { CHARS, MISSIONS, MISSION_BY_ID, INTRO, ENDINGS, CUTSCENES, ACTS, rankFor } from './campaign.js';
+import { passes } from './cutscene.js';
 import { decode, scramble, glitchTitle, countUp, Hologram, Waveform, decorate, reduced, setLabel } from './textfx.js';
 import { netAvailable, castAvailable, startHost, startCast, listenCastReceiver } from './net.js';
 
@@ -17,7 +18,11 @@ function load(key, fallback) {
 }
 function store(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* private mode */ } }
 
-let save = load(SAVE_KEY, { started: false, mission: 0, kills: 0, score: 0, callsign: 'Nova', done: false });
+const NEW_SAVE = () => ({ started: false, mission: 'm1', kills: 0, score: 0, callsign: 'Nova', done: false, flags: {}, aff: { rook: 0, kolibri: 0 }, scenes: {} });
+let save = load(SAVE_KEY, NEW_SAVE());
+if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
+if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
+save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
 const settings = load(SET_KEY, { sound: true, invert: true, quality: 'high', coop: false, callsign2: 'Orion' });
 
 const hub = new InputHub();
@@ -56,6 +61,7 @@ function show(id) {
   const prev = current;
   current = id;
   for (const s of screens) s.classList.toggle('hidden', s.id !== id);
+  $('cut').classList.toggle('hidden', id !== 'cut');
   $('flight').classList.toggle('hidden', !(id === null || id === 's-pause'));
   if (id && id !== prev) {
     const sc = $(id);
@@ -78,7 +84,12 @@ function show(id) {
 function menuEvent(e) {
   if (!current) return;
   navMode = true;
-  if (current === 's-dialog') {
+  if (current === 'cut') {
+    if (cutArmed) game.skipCutscene();
+    else { cutArmed = true; $('cut-skip').classList.add('armed'); setTimeout(() => { cutArmed = false; $('cut-skip').classList.remove('armed'); }, 2500); }
+    return;
+  }
+  if (current === 's-dialog' && !dlg?.choosing) {
     if (e === 'ok') advance();
     else if (e === 'back' || e === 'start') skipDialog();
     return;
@@ -90,6 +101,7 @@ function menuEvent(e) {
   else if (e === 'back' || e === 'start') {
     const sc = $(current);
     if (current === 's-pause') return resume();
+    if (current === 's-dialog') return;
     const back = sc.querySelector('[data-back]') || (current === 's-brief' ? $('b-back') : null);
     if (back && e === 'back') back.click();
     else if (e === 'start') list[focusIdx]?.click();
@@ -146,7 +158,34 @@ const ui = {
   },
   missionEnd(win, reason, stats) {
     clearComm();
-    fadeDark(() => { game.startAttract(); document.body.classList.remove('coop'); debrief(win, reason, stats); });
+    fadeDark(() => { game.startAttract(); document.body.classList.remove('coop'); onMissionEnd(win, reason, stats); });
+  },
+  cutSub(who, text) {
+    const ch = CHARS[who] || CHARS.erz;
+    const el = $('cut-sub');
+    el.style.setProperty('--ac', ch.color);
+    el.classList.remove('hidden', 'show'); void el.offsetWidth; el.classList.add('show');
+    setLabel(el.querySelector('b'), who === 'erz' ? '' : ch.name);
+    cutSubDec?.cancel();
+    const t = fill(text);
+    cutSubDec = decode(el.querySelector('p'), t, { cps: 70, window: 5 });
+    clearTimeout(cutSubT);
+    cutSubT = setTimeout(() => el.classList.add('hidden'), 1800 + t.length * 55);
+    audio.beep(700, 0.05);
+  },
+  cutTitle(kicker, title) {
+    const el = $('cut-title');
+    el.classList.remove('hidden', 'out'); void el.offsetWidth;
+    decode(el.querySelector('small'), kicker, { cps: 50 });
+    glitchTitle(el.querySelector('h1'), title, { cps: 20 });
+    audio.tone?.('sawtooth', 70, 35, 1.6, 0.08);
+    clearTimeout(cutTitleT);
+    cutTitleT = setTimeout(() => el.classList.add('out'), 3600);
+  },
+  cutShot() { const f = $('scanfx'); f.classList.remove('run'); void f.offsetWidth; f.classList.add('run'); },
+  cutEnd() {
+    cutSubDec?.cancel(); clearTimeout(cutSubT); clearTimeout(cutTitleT);
+    $('cut-sub').classList.add('hidden'); $('cut-title').classList.add('hidden');
   },
   frame(dt) {
     hub.local.update(dt);
@@ -155,6 +194,8 @@ const ui = {
     if (current) ev.forEach(menuEvent);
   },
 };
+
+let cutArmed = false, cutSubDec = null, cutSubT = 0, cutTitleT = 0;
 
 function fadeDark(cb) {
   const f = $('fade');
@@ -167,20 +208,28 @@ game.invert = settings.invert;
 game.setQuality(settings.quality);
 game.startAttract();
 
-// ---------- dialog ----------
+// ---------- dialog (with choices) ----------
 const holo = new Hologram($('d-holo'));
 const wave = new Waveform($('d-wave'));
-let dlg = null;
+let dlg = null, dlgGoto = null;
+const lineVisible = (l) => passes(l, save.flags) && (!Array.isArray(l.aff) || (save.aff[l.aff[0]] || 0) >= l.aff[1]);
+
 function runDialog(lines, kicker, title, done) {
-  dlg = { lines, i: -1, done, dec: null };
+  dlg = { lines: lines.filter(lineVisible), i: -1, done, dec: null, choosing: false };
   $('d-kicker').textContent = kicker;
+  $('d-choices').innerHTML = '';
+  setDialogButtons(true);
   show('s-dialog');
   glitchTitle($('d-title'), title);
   holo.on = true; wave.on = true;
   advance();
 }
+function setDialogButtons(on) {
+  $('d-next').classList.toggle('hidden', !on);
+  $('d-skip').classList.toggle('hidden', !on);
+}
 function advance() {
-  if (!dlg) return;
+  if (!dlg || dlg.choosing) return;
   if (dlg.dec?.running) { dlg.dec.finish(); return; }
   dlg.i++;
   if (dlg.i >= dlg.lines.length) return closeDialog();
@@ -194,9 +243,42 @@ function advance() {
   $('d-freq').textContent = `KANAL ${String(3 + (l.who.length * 7) % 17).padStart(2, '0')} · ${(120 + l.who.charCodeAt(0) * 0.37).toFixed(2)} MHZ`;
   decode($('d-who'), ch.name.toUpperCase(), { cps: 60 });
   holo.talk = 1; wave.level = 1;
-  dlg.dec = decode($('d-text'), fill(l.text), { cps: 55, window: 6, cursor: true });
-  dlg.dec.done.then(() => { holo.talk = 0; wave.level = 0.08; });
+  const dec = dlg.dec = decode($('d-text'), fill(l.text), { cps: 55, window: 6, cursor: true });
+  dec.done.then(() => {
+    holo.talk = 0; wave.level = 0.08;
+    if (dlg && dlg.dec === dec && l.choices) showChoices(l);
+  });
   audio.beep(520, 0.06);
+}
+function showChoices(l) {
+  dlg.choosing = true;
+  setDialogButtons(false);
+  const wrap = $('d-choices');
+  wrap.innerHTML = '';
+  l.choices.filter(lineVisible).forEach((c, i) => {
+    const b = document.createElement('button');
+    b.className = 'btn choice';
+    b.textContent = `${i + 1}  ${c.label}`;
+    b.dataset.label = b.textContent;
+    b.onclick = () => choose(c);
+    wrap.appendChild(b);
+    decode(b, b.textContent, { cps: 80, delay: i * 120, pad: true });
+  });
+  audio.tone?.('sine', 500, 900, 0.2, 0.06);
+  setFocus(0, false);
+}
+function choose(c) {
+  if (!dlg?.choosing) return;
+  for (const [k, v] of Object.entries(c.aff || {})) save.aff[k] = (save.aff[k] || 0) + v;
+  Object.assign(save.flags, c.set || {});
+  if (c.goto) dlgGoto = c.goto;
+  store(SAVE_KEY, save);
+  dlg.lines.splice(dlg.i + 1, 0, ...(c.reply || []).filter(lineVisible));
+  $('d-choices').innerHTML = '';
+  setDialogButtons(true);
+  dlg.choosing = false;
+  audio.beep(1100, 0.1);
+  advance();
 }
 function closeDialog() {
   if (!dlg) return;
@@ -205,7 +287,15 @@ function closeDialog() {
   holo.on = false; wave.on = false;
   d();
 }
-function skipDialog() { closeDialog(); }
+function skipDialog() {
+  if (!dlg || dlg.choosing) return;
+  if (dlg.lines[dlg.i]?.choices) { dlg.dec?.finish(); return; }
+  const idx = dlg.lines.findIndex((l, i) => i > dlg.i && l.choices);
+  if (idx === -1) return closeDialog();
+  dlg.dec?.cancel();
+  dlg.i = idx - 1;
+  advance();
+}
 $('d-next').onclick = advance;
 $('d-skip').onclick = skipDialog;
 document.querySelector('#s-dialog .dbox').addEventListener('click', advance);
@@ -267,21 +357,60 @@ function drawMap(def) {
   requestAnimationFrame(draw);
 }
 
+// ---------- campaign flow ----------
+const cur = () => MISSION_BY_ID[save.mission] || MISSIONS[0];
+const kickerFor = (def) => `${ACTS[def.act]} · Mission ${def.no} / ${MISSIONS.length} · ${def.sector}`;
+function wingFor(def) {
+  let w = def.wingman;
+  if (w === 'kolibri' && (save.flags.kolibriLost || (save.flags.kolibriCaptured && !save.flags.kolibriSaved))) w = 'juno';
+  if (w === 'rook' && save.flags.rookDead) w = 'juno';
+  return w;
+}
+
+function playCut(id, done) {
+  const def = CUTSCENES[id];
+  if (!def) return done();
+  clearComm();
+  fadeDark(() => {
+    show('cut');
+    game.startCutscene(def, save.flags, () => {
+      fadeDark(() => { game.startAttract(); done(); });
+    });
+  });
+}
+$('cut-skip').onclick = () => game.skipCutscene();
+
+/** Bord scene → cutscene → briefing for the current mission. */
+function startMissionFlow() {
+  const def = cur();
+  const go = () => (def.preCut ? playCut(def.preCut, () => briefingFor(def)) : briefingFor(def));
+  if (def.scene && !save.scenes[def.id]) {
+    dlgGoto = null;
+    runDialog(def.scene.lines, `Bordszene · ${ACTS[def.act]}`, def.scene.place, () => {
+      save.scenes[def.id] = true;
+      const g = dlgGoto; dlgGoto = null;
+      if (g && g !== def.id && MISSION_BY_ID[g]) { save.mission = g; store(SAVE_KEY, save); return startMissionFlow(); }
+      store(SAVE_KEY, save);
+      go();
+    });
+  } else go();
+}
+function briefingFor(def) {
+  runDialog(def.briefing, kickerFor(def), `Einsatzbesprechung: ${def.title}`, fillBriefing);
+}
+
 function fillBriefing() {
-  const def = MISSIONS[save.mission];
-  $('b-kicker').textContent = `Mission ${save.mission + 1} / ${MISSIONS.length} · ${def.sector}`;
+  const def = cur();
+  $('b-kicker').textContent = kickerFor(def);
   $('b-obj').innerHTML = def.objectives.map((o) => `<li>${o}</li>`).join('');
   const s = SHIPS[def.ship];
   $('b-ship').textContent = `${s.name} – ${s.guns.length} Kanonen · ${s.missiles} Raketen · Schild ${s.shield} · Hülle ${s.hp}`;
-  const wing = def.wingman ? CHARS[def.wingman].name : 'Keiner';
+  const w = wingFor(def);
+  const wing = w ? CHARS[w].name : 'Keiner';
   $('b-wing').textContent = coopActive() ? `${settings.callsign2} (Spieler 2) und ${wing}` : wing;
   show('s-brief');
   glitchTitle($('b-title'), def.title);
   drawMap(def);
-}
-function briefing() {
-  const def = MISSIONS[save.mission];
-  runDialog(def.briefing, `Mission ${save.mission + 1} / ${MISSIONS.length} · ${def.sector}`, `Einsatzbesprechung: ${def.title}`, fillBriefing);
 }
 
 function cinematic(def) {
@@ -289,7 +418,7 @@ function cinematic(def) {
   el.classList.remove('hidden', 'out');
   ['cine-title'].forEach((id) => { const n = $(id); n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
   el.querySelectorAll('.cine-line').forEach((n) => { n.style.animation = 'none'; void n.offsetWidth; n.style.animation = ''; });
-  decode($('cine-kicker'), `MISSION ${String(save.mission + 1).padStart(2, '0')} // ${def.sector.toUpperCase()}`, { cps: 60 });
+  decode($('cine-kicker'), `MISSION ${String(def.no).padStart(2, '0')} // ${def.sector.toUpperCase()}`, { cps: 60 });
   glitchTitle($('cine-title'), def.title.toUpperCase(), { cps: 22 });
   decode($('cine-sub'), def.objectives[0], { cps: 50, delay: 700 });
   audio.tone?.('sawtooth', 80, 40, 1.4, 0.08);
@@ -307,54 +436,70 @@ function launch() {
     show(null);
     document.body.classList.toggle('coop', coop);
     const ctrls = hub.assign(coop);
-    const def = MISSIONS[save.mission];
-    game.startMission(def, ctrls, [save.callsign, settings.callsign2 || 'Orion']);
+    const def = cur();
+    const w = wingFor(def);
+    const wingSkill = Math.min(0.92, 0.7 + 0.06 * (save.aff[w] || 0));
+    game.startMission(def, ctrls, [save.callsign, settings.callsign2 || 'Orion'], { flags: save.flags, wingman: w, wingSkill });
     cinematic(def);
     syncPads();
   });
 }
 
-let lastWin = false;
-function debrief(win, reason, stats) {
-  lastWin = win;
-  const def = MISSIONS[save.mission];
+let lastResult = 'lose';
+function onMissionEnd(win, reason, stats) {
+  const def = cur();
   const oldRank = rankFor(save.kills);
+  if (win) {
+    Object.assign(save.flags, def.set || {});
+    save.kills += stats.kills; save.score += stats.score;
+    if (def.next) save.mission = def.next; else { save.done = true; save.finished = true; }
+    store(SAVE_KEY, save);
+    const after = () => runDialog(def.win, `Nachbesprechung · ${def.title}`, 'Zurück an Bord', () => debrief('win', reason, stats, def, oldRank));
+    if (def.postCut) playCut(def.postCut, after); else after();
+  } else if (def.lose) {
+    Object.assign(save.flags, def.lose.set || {});
+    save.kills += stats.kills; save.score += stats.score;
+    save.mission = def.lose.next;
+    store(SAVE_KEY, save);
+    runDialog(def.lose.lines, `Nachbesprechung · ${def.title}`, def.lose.title, () => debrief('branch', reason, stats, def, oldRank));
+  } else {
+    debrief('lose', reason, stats, def, oldRank);
+  }
+}
+
+function debrief(result, reason, stats, def, oldRank) {
+  lastResult = result;
   const acc = stats.shots ? Math.round(Math.min(1, stats.hits / stats.shots) * 100) : 0;
   $('r-kicker').textContent = `Nachbesprechung · ${def.title}`;
-  $('r-title').style.color = win ? 'var(--ok)' : 'var(--foe)';
+  $('r-title').style.color = result === 'win' ? 'var(--ok)' : result === 'branch' ? 'var(--warn)' : 'var(--foe)';
   const mm = Math.floor(stats.time / 60), ss = String(Math.floor(stats.time % 60)).padStart(2, '0');
   $('r-stats').innerHTML = `<div><b id="st-k">0</b><span>Abschüsse</span></div><div><b id="st-a">0%</b><span>Trefferquote</span></div><div><b>${mm}:${ss}</b><span>Flugzeit</span></div><div><b id="st-s">0</b><span>Punkte</span></div>`;
   let extra = reason || '';
-  if (win) {
-    save.kills += stats.kills; save.score += stats.score;
+  if (result !== 'lose') {
     const nr = rankFor(save.kills);
-    extra = `Gesamtabschüsse: ${save.kills} · Rang: ${nr}`;
+    extra = `${result === 'branch' ? `${reason || ''} Die Geschichte geht weiter. · ` : ''}Gesamtabschüsse: ${save.kills} · Rang: ${nr}`;
     if (nr !== oldRank) extra += ` · BEFÖRDERUNG zum ${nr}!`;
-    else if (stats.kills >= 8 && acc >= 30) extra += ' · Belobigung: Bronzener Falke für herausragende Leistung.';
-    save.mission++;
-    if (save.mission >= MISSIONS.length) { save.mission = MISSIONS.length - 1; save.done = true; save.finishedNow = true; }
-    store(SAVE_KEY, save);
+    else if (stats.kills >= 8 && acc >= 30) extra += ' · Belobigung: Bronzener Falke.';
   }
   if (stats.per.length > 1) extra += `  ·  ${save.callsign}: ${stats.per[0]} · ${settings.callsign2}: ${stats.per[1]} Abschüsse`;
   $('r-reason').textContent = extra;
-  $('r-reason').className = win ? 'medal' : '';
-  setLabel($('r-next'), win ? 'Weiter' : 'Erneut versuchen');
-  const after = () => {
-    show('s-debrief');
-    glitchTitle($('r-title'), win ? 'Mission erfolgreich' : 'Mission gescheitert');
-    countUp($('st-k'), stats.kills); countUp($('st-a'), acc, '%'); countUp($('st-s'), stats.score, '', 1300);
-  };
-  if (win) runDialog(def.win, `Nachbesprechung · ${def.title}`, 'Zurück an Bord', after);
-  else after();
+  $('r-reason').className = result === 'win' ? 'medal' : '';
+  setLabel($('r-next'), result === 'lose' ? 'Erneut versuchen' : 'Weiter');
+  show('s-debrief');
+  glitchTitle($('r-title'), result === 'win' ? 'Mission erfolgreich' : result === 'branch' ? 'Mission verloren' : 'Mission gescheitert');
+  countUp($('st-k'), stats.kills); countUp($('st-a'), acc, '%'); countUp($('st-s'), stats.score, '', 1300);
+}
+
+function playEnding() {
+  save.finished = false; store(SAVE_KEY, save);
+  const bitter = !!save.flags.kolibriLost;
+  runDialog(bitter ? ENDINGS.bitter : ENDINGS.good, 'Epilog', bitter ? 'Asche und Sterne' : 'Morgenröte', () => title());
 }
 
 $('r-next').onclick = () => {
-  if (!lastWin) return fillBriefing();
-  if (save.finishedNow) {
-    save.finishedNow = false; store(SAVE_KEY, save);
-    return runDialog(ENDING, 'Epilog', 'Morgenröte', () => title());
-  }
-  briefing();
+  if (lastResult === 'lose') return fillBriefing();
+  if (save.finished) return playEnding();
+  startMissionFlow();
 };
 $('r-menu').onclick = () => title();
 $('b-back').onclick = () => title();
@@ -363,9 +508,10 @@ $('b-start').onclick = launch;
 // ---------- title / menus ----------
 function title() {
   $('m-continue').classList.toggle('hidden', !save.started);
-  setLabel($('m-continue'), save.done ? 'Letzte Mission erneut fliegen' : `Fortsetzen · Mission ${save.mission + 1}`);
+  const def = cur();
+  setLabel($('m-continue'), save.done ? 'Finale erneut fliegen' : `Fortsetzen · ${def.no}. ${def.title}`);
   show('s-title');
-  const line = save.started ? `${rankFor(save.kills)} „${save.callsign}“ · ${save.kills} Abschüsse · ${save.score} Punkte` : '';
+  const line = save.started ? `${rankFor(save.kills)} „${save.callsign}“ · ${ACTS[def.act]} · ${save.kills} Abschüsse` : '';
   decode($('pilot-line'), line, { cps: 80, delay: 400 });
   decode($('logo-kicker'), 'GESCHWADER NACHTFALKEN', { cps: 40 });
   decode($('logo-title'), 'STERNENFRONT', { cps: 18, window: 4 });
@@ -375,7 +521,7 @@ function title() {
     if (!b.classList.contains('hidden')) { b._scr?.cancel(); b._scr = decode(b, b.dataset.label, { cps: 50, delay: 300 + i * 90, pad: true }); }
   });
 }
-$('m-continue').onclick = () => { audio.unlock(); briefing(); };
+$('m-continue').onclick = () => { audio.unlock(); startMissionFlow(); };
 $('m-new').onclick = () => { audio.unlock(); $('callsign').value = save.callsign; show('s-name'); };
 $('m-help').onclick = () => { audio.unlock(); show('s-help'); };
 $('m-settings').onclick = () => { audio.unlock(); show('s-settings'); };
@@ -384,9 +530,9 @@ document.querySelectorAll('[data-back]').forEach((b) => (b.onclick = () => { sto
 $('callsign').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('name-ok').click(); });
 $('name-ok').onclick = () => {
   const cs = $('callsign').value.trim().replace(/[<>{}]/g, '') || 'Nova';
-  save = { started: true, mission: 0, kills: 0, score: 0, callsign: cs, done: false };
+  save = { ...NEW_SAVE(), started: true, callsign: cs };
   store(SAVE_KEY, save);
-  runDialog(INTRO, 'Prolog · 2643', 'Der Perseus-Graben', briefing);
+  playCut('prolog', () => runDialog(INTRO, 'Prolog · 2643', 'An Bord der Aurora', startMissionFlow));
 };
 
 function refreshSettings() {
@@ -523,4 +669,4 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) ui.pa
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 title();
-if (import.meta.env?.DEV || query.has('debug')) window.__game = { game, save: () => save, hub, MISSIONS, settings, show, launch };
+if (import.meta.env?.DEV || query.has('debug')) window.__game = { game, save: () => save, hub, MISSIONS, CUTSCENES, settings, show, launch, startMissionFlow, playCut, setSave: (s) => { save = s; } };

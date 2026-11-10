@@ -101,8 +101,8 @@ export function drawHud(ctx, g, P) {
     if (!o.alive || o === p || o === P.target) continue;
     const q = project(P, o.pos);
     if (q.behind) continue;
-    const foe = o.team !== 0;
-    const col = o.isPlayer ? o.pilot.color : foe ? C.foe : C.ok;
+    const foe = o.team === 1;
+    const col = o.isPlayer ? o.pilot.color : o.team === 3 ? '#9fe8ff' : foe ? C.foe : C.ok;
     ctx.strokeStyle = col; ctx.lineWidth = 1.2 * s;
     const r = 7 * s;
     ctx.globalAlpha = 0.75;
@@ -133,6 +133,21 @@ export function drawHud(ctx, g, P) {
     } else if (!P.target) {
       arrow(ctx, P, nav, C.warn, s);
     }
+  }
+
+  // objective markers (pickups, scan zone, intercept target, docking)
+  for (const mk of g.markers()) {
+    const q = project(P, mk.pos);
+    const d = p.pos.distanceTo(mk.pos);
+    if (!q.behind && q.x > 0 && q.x < w && q.y > 0 && q.y < h) {
+      const r = (9 + Math.sin(t * 5) * 2) * s;
+      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(t * 1.5);
+      ctx.strokeStyle = mk.color; ctx.lineWidth = 1.8 * s; ctx.shadowColor = mk.color; ctx.shadowBlur = 10;
+      ctx.strokeRect(-r, -r, 2 * r, 2 * r);
+      ctx.restore();
+      ctx.fillStyle = mk.color; ctx.font = `700 ${9.5 * s}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(`${mk.label} · ${d < 1000 ? Math.round(d) + ' M' : (d / 1000).toFixed(1) + ' KM'}`, q.x, q.y + r + 5 * s);
+    } else if (mk.main) arrow(ctx, P, mk.pos, mk.color, s);
   }
 
   // target
@@ -256,10 +271,11 @@ export function drawHud(ctx, g, P) {
   };
   for (const o of g.ships) {
     if (!o.alive || o === p) continue;
-    blip(o.pos, o === tg ? '#ffffff' : o.isPlayer ? o.pilot.color : (o.team === 0 ? C.ok : C.foe), (o.def.capital ? 5 : 3) * s);
+    blip(o.pos, o === tg ? '#ffffff' : o.isPlayer ? o.pilot.color : o.team === 3 ? '#9fe8ff' : (o.team === 0 ? C.ok : C.foe), (o.def.capital ? 5 : 3) * s);
   }
   for (const m of g.missiles) if (m.team === 1) blip(m.pos, C.warn, 2.5 * s);
   if (nav) blip(nav, C.warn, 4 * s);
+  for (const mk of g.markers()) blip(mk.pos, mk.color, 3.5 * s);
 
   // warnings
   if (P.missileWarn && Math.sin(t * 16) > 0) {
