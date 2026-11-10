@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { glyph } from './textfx.js';
 
 const v = new THREE.Vector3();
+const GL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@$<>/\\|=+*';
 const out = { x: 0, y: 0, behind: false };
 const FONT = "'Rajdhani', 'Segoe UI', system-ui, sans-serif";
 const DISPLAY = "'Orbitron', 'Rajdhani', system-ui, sans-serif";
@@ -23,7 +23,7 @@ function decoded(text, t0, cps = 55, win = 5) {
   if (n >= text.length) return text;
   let s = text.slice(0, n);
   const seed = Math.floor(performance.now() / 50);
-  for (let i = n; i < Math.min(text.length, n + win); i++) s += text[i] === ' ' ? ' ' : (seed + i) % 3 === 0 ? glyph() : glyph();
+  for (let i = n; i < Math.min(text.length, n + win); i++) s += text[i] === ' ' ? ' ' : GL[(seed * 7 + i * 13) % GL.length];
   return s;
 }
 
@@ -214,7 +214,7 @@ export function drawHud(ctx, g, P) {
 
   // --- target panel (top-right) ---
   if (tg && tg.alive) {
-    const tw = 128 * s, tx = w - tw - 12 * s - safeR - (solo ? 0 : 0), ty = (solo ? 58 : 26) * s;
+    const tw = 128 * s, tx = w - tw - 12 * s - safeR, ty = (solo || P.vy === 0 ? 58 : 26) * s;
     ctx.font = `800 ${10 * s}px ${DISPLAY}`; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
     glowText(ctx, decoded(tg.name.toUpperCase(), P.targetT || 0, 40), tx + tw, ty - 3 * s, C.foe, 8);
     if (tg.maxShield > 0) bar(ctx, tx, ty, tw, bh, tg.shield / tg.maxShield, 'rgba(70,170,255,.85)', 'SCHILD', s);
@@ -223,7 +223,8 @@ export function drawHud(ctx, g, P) {
 
   // --- objective (top-center) ---
   const obj = g.objectiveText().toUpperCase();
-  if (obj !== g.lastObj) { g.lastObj = obj; g.objT = performance.now(); }
+  const objKey = obj.split(' · ')[0];
+  if (objKey !== g.lastObj) { g.lastObj = objKey; g.objT = performance.now(); }
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   ctx.font = `700 ${10 * s}px ${DISPLAY}`;
   const oy = 10 * s;

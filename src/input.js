@@ -76,7 +76,10 @@ export class TouchKeys {
     const MENU = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'ok', Space: 'ok', Escape: 'back', Backspace: 'back' };
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement) return;
-      if (MENU[e.code]) hub.menu(MENU[e.code]);
+      if (MENU[e.code]) {
+        if (!e.repeat || e.code.startsWith('Arrow')) hub.menu(MENU[e.code]);
+        if (e.target instanceof HTMLButtonElement || e.target === document.body) e.preventDefault();
+      }
       if (e.repeat) return;
       this.keys[e.code] = true;
       if (e.code === 'KeyM' || e.code === 'Enter') this.events.push('missile');
@@ -119,6 +122,7 @@ export class GamepadDevice {
     if (!p) return;
     this.pad = p;
     const b = (i) => !!(p.buttons[i] && (p.buttons[i].pressed || p.buttons[i].value > 0.5));
+    if (!this.inited) { this.inited = true; for (let i = 0; i < p.buttons.length; i++) this.prev[i] = b(i); return; }
     const dz = (v) => (Math.abs(v) < 0.14 ? 0 : (v - Math.sign(v) * 0.14) / 0.86);
     const ax = dz(p.axes[0] || 0), ay = dz(p.axes[1] || 0);
     this.x = ax; this.y = ay;
@@ -143,6 +147,7 @@ export class GamepadDevice {
   }
   take() { const e = this.events; this.events = []; return e; }
   reset() { this.events = []; }
+  release() { this.x = this.y = 0; this.firing = this.boosting = false; this.throttleRate = 0; this.throttleSet = null; this.events = []; }
   buzz(ms) {
     try { this.pad?.vibrationActuator?.playEffect('dual-rumble', { duration: ms, strongMagnitude: 0.6, weakMagnitude: 0.4 }); } catch { /* ignore */ }
   }
@@ -151,7 +156,8 @@ export class GamepadDevice {
 /** A phone acting as controller (data arrives over WebRTC or the Presentation API). */
 export class RemoteDevice {
   constructor(hub, transport, name) {
-    this.hub = hub; this.transport = transport; this.kind = 'remote'; this.name = name || 'Handy-Controller';
+    this.hub = hub; this.transport = transport; this.kind = 'remote';
+    this.name = (typeof name === 'string' && name.trim() ? name : 'Handy-Controller').slice(0, 24);
     this.x = 0; this.y = 0; this.firing = false; this.boosting = false;
     this.throttleSet = null; this.throttleRate = 0; this.events = [];
     transport.onMessage((m) => this.onMessage(m));
@@ -159,9 +165,9 @@ export class RemoteDevice {
   onMessage(m) {
     if (!m || typeof m !== 'object') return;
     if (m.t === 's') {
-      this.x = clamp(+m.x || 0); this.y = clamp(+m.y || 0);
+      this.x = Number.isFinite(m.x) ? clamp(m.x) : 0; this.y = Number.isFinite(m.y) ? clamp(m.y) : 0;
       this.firing = !!m.f; this.boosting = !!m.b;
-      if (typeof m.th === 'number') this.throttleSet = Math.max(0, Math.min(1, m.th));
+      if (Number.isFinite(m.th) && Math.abs(m.th - (this.lastTh ?? -1)) > 0.002) { this.lastTh = m.th; this.throttleSet = Math.max(0, Math.min(1, m.th)); }
     } else if (m.t === 'e') {
       if (['missile', 'target', 'auto', 'pause'].includes(m.e)) this.events.push(m.e);
     } else if (m.t === 'm') {
@@ -174,12 +180,14 @@ export class RemoteDevice {
   send(m) { try { this.transport.send(m); } catch { /* closed */ } }
   take() { const e = this.events; this.events = []; return e; }
   reset() { this.events = []; }
+  release() { this.x = this.y = 0; this.firing = this.boosting = false; this.throttleRate = 0; this.throttleSet = null; this.events = []; }
   buzz(ms) { this.send({ t: 'buzz', ms }); }
 }
 
 /** Combines several controllers into one (used when multiple devices steer the same ship). */
 export class Merged {
-  constructor(list) { this.list = list.filter(Boolean); this.throttleSet = null; this.throttleRate = 0; }
+  constructor(list) { this.src = typeof list === 'function' ? list : () => list; this.throttleSet = null; this.throttleRate = 0; }
+  get list() { return this.src().filter(Boolean); }
   update() {
     let x = 0, y = 0;
     this.throttleSet = null; this.throttleRate = 0;
@@ -227,13 +235,13 @@ export class InputHub {
       }
     }
     const before = this.devices.length;
-    this.devices = this.devices.filter((d) => d.kind !== 'gamepad' || pads[d.index]);
+    this.devices = this.devices.filter((d) => { const keep = d.kind !== 'gamepad' || pads[d.index]; if (!keep) d.release(); return keep; });
     if (dirty || before !== this.devices.length) this.changed();
   }
   addRemote(transport, name) {
     const d = new RemoteDevice(this, transport, name);
     this.devices.push(d);
-    transport.onClose(() => { this.devices = this.devices.filter((x) => x !== d); this.changed(); });
+    transport.onClose(() => { d.release(); this.devices = this.devices.filter((x) => x !== d); this.changed(); });
     this.changed();
     return d;
   }
@@ -250,11 +258,15 @@ export class InputHub {
     const devs = this.devices;
     if (coop && devs.length >= 1) {
       const p2 = devs[devs.length - 1];
-      return [new Merged([this.local, ...devs.slice(0, -1)]), new Merged([p2])];
+      this.activeP2 = p2;
+      // P1 follows the live device list, so a controller that reconnects mid-flight steers again
+      return [new Merged(() => [this.local, ...this.devices.filter((d) => d !== p2)]), new Merged(() => (this.devices.includes(p2) ? [p2] : []))];
     }
-    return [new Merged([this.local, ...devs])];
+    this.activeP2 = null;
+    return [new Merged(() => [this.local, ...this.devices])];
   }
   roleOf(dev, coop) {
+    if (this.activeP2 !== undefined) return dev === this.activeP2 ? 2 : 1;
     if (coop && this.devices.length >= 1 && dev === this.devices[this.devices.length - 1]) return 2;
     return 1;
   }

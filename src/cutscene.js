@@ -27,7 +27,15 @@ export function installCutscenes(Game) {
       this.paused = false;
       this.flags = flags || {};
       this.mission = null;
-      if (def.rocks) this.asteroids.push(...createAsteroids(this.scene, new THREE.Vector3(...def.rocks.at), def.rocks.n, def.rocks.spread));
+      if (def.rocks) {
+        // keep rocks away from the cast and from fixed camera positions
+        const keep = def.cast.map((c) => new THREE.Vector3(...c.pos));
+        for (const sh of def.shots) if (!sh.cam.rel) { keep.push(new THREE.Vector3(...sh.cam.from)); if (sh.cam.to) keep.push(new THREE.Vector3(...sh.cam.to)); }
+        for (const a of createAsteroids(this.scene, new THREE.Vector3(...def.rocks.at), def.rocks.n, def.rocks.spread)) {
+          if (keep.some((k) => k.distanceTo(a.pos) < a.radius + 160)) this.scene.remove(a.mesh);
+          else this.asteroids.push(a);
+        }
+      }
       const cast = {};
       for (const c of def.cast) {
         if (!passes(c, this.flags)) continue;
@@ -39,7 +47,7 @@ export function installCutscenes(Game) {
         if (c.hidden) { s.mesh.visible = false; s.alive = false; s.cutHidden = true; }
         cast[c.id] = s;
       }
-      this.cut = { def, cast, shot: -1, t: 0, onDone, shake: 0, sh: null, queue: [] };
+      this.cut = { def, cast, shot: -1, t: 0, T: 0, onDone, shake: 0, sh: null, queue: [] };
       this.camera.fov = 50; this.camera.updateProjectionMatrix();
       this.nextShot();
     },
@@ -60,6 +68,7 @@ export function installCutscenes(Game) {
       if (!this.cut) return;
       const cb = this.cut.onDone;
       this.cut = null;
+      this.camera.fov = 62; this.camera.updateProjectionMatrix();
       this.mode = 'idle';
       this.audio.stopEngine?.();
       this.ui.cutEnd?.();
@@ -88,11 +97,11 @@ export function installCutscenes(Game) {
       if (e.id && !s) return;
       switch (e.a) {
         case 'speed': s.cut.speedTo = e.v; break;
-        case 'fire': s.cut.fire = { at: c.cast[e.at], until: c.t + (e.dur || 2), cool: 0 }; break;
+        case 'fire': s.cut.fire = { at: c.cast[e.at], until: c.T + (e.dur || 2), cool: 0 }; break;
         case 'missile': this.launchMissile(s, c.cast[e.at]); break;
         case 'turn': s.cut.turn = { dir: new THREE.Vector3(...e.dir).normalize(), rate: e.rate || 0.6 }; break;
         case 'shake': c.shake = Math.max(c.shake, e.v || 1); break;
-        case 'show': s.mesh.visible = true; s.alive = true; break;
+        case 'show': s.mesh.visible = true; s.alive = true; s.cutHidden = false; break;
         case 'boom':
           if (!s.alive) break;
           if (s.def.capital) this.kill(s, null);
@@ -106,7 +115,7 @@ export function installCutscenes(Game) {
             m1.lookAt(v3.copy(face).sub(s.pos).normalize(), ZERO, UP);
             s.quat.setFromRotationMatrix(m1);
           }
-          s.mesh.visible = true; s.alive = true;
+          s.mesh.visible = true; s.alive = true; s.cutHidden = false;
           // streak in from behind
           v1.copy(FWD).applyQuaternion(s.quat);
           s.cut.jumpEnd = s.pos.clone();
@@ -137,10 +146,14 @@ export function installCutscenes(Game) {
     updateCut(dt) {
       const c = this.cut;
       if (!c) return;
-      c.t += dt;
+      c.t += dt; c.T += dt;
       while (c.queue.length && c.queue[0].t <= c.t) this.cutEvent(c.queue.shift());
       for (const s of Object.values(c.cast)) {
-        if (!s.alive) continue;
+        if (!s.alive) {
+          // hidden cast members keep drifting with their speed so they appear where expected
+          if (s.cutHidden) s.pos.addScaledVector(v1.copy(FWD).applyQuaternion(s.quat), s.speed * dt);
+          continue;
+        }
         const k = s.cut;
         if (k.speedTo != null) s.speed += (k.speedTo - s.speed) * Math.min(1, dt * 1.6);
         if (k.turn) { m1.lookAt(k.turn.dir, ZERO, UP); q1.setFromRotationMatrix(m1); s.quat.rotateTowards(q1, k.turn.rate * dt); }
@@ -151,7 +164,7 @@ export function installCutscenes(Game) {
         } else {
           s.pos.addScaledVector(v1.copy(FWD).applyQuaternion(s.quat), s.speed * dt);
         }
-        if (k.fire && c.t < k.fire.until && k.fire.at) {
+        if (k.fire && c.T < k.fire.until && k.fire.at?.alive) {
           k.fire.cool -= dt;
           if (k.fire.cool <= 0) {
             const tg = k.fire.at;

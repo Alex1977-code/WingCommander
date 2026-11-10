@@ -57,9 +57,11 @@ function setFocus(i, sound = true) {
   if (sound) audio.beep(1400, 0.04);
 }
 
+let shownAt = 0;
 function show(id) {
   const prev = current;
   current = id;
+  if (id !== prev) shownAt = performance.now();
   for (const s of screens) s.classList.toggle('hidden', s.id !== id);
   $('cut').classList.toggle('hidden', id !== 'cut');
   $('flight').classList.toggle('hidden', !(id === null || id === 's-pause'));
@@ -82,9 +84,12 @@ function show(id) {
 }
 
 function menuEvent(e) {
-  if (!current) return;
+  if (!current || busy) return;
+  // ignore confirm presses that were meant for the previous screen
+  if ((e === 'ok' || e === 'start') && performance.now() - shownAt < 300) return;
   navMode = true;
   if (current === 'cut') {
+    if (!['ok', 'back', 'start'].includes(e) || performance.now() - shownAt < 700) return;
     if (cutArmed) game.skipCutscene();
     else { cutArmed = true; $('cut-skip').classList.add('armed'); setTimeout(() => { cutArmed = false; $('cut-skip').classList.remove('armed'); }, 2500); }
     return;
@@ -139,7 +144,7 @@ function nextComm() {
   audio.beep(660, 0.1); setTimeout(() => audio.beep(990, 0.07), 90);
   commT = setTimeout(nextComm, 2400 + c.text.length * 45);
 }
-function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; commDec?.cancel(); commHolo.on = false; $('comm').classList.add('hidden'); }
+function clearComm() { commQ.length = 0; clearTimeout(commT); commT = null; commFrozen = false; commHold = 0; commDec?.cancel(); commHolo.on = false; $('comm').classList.add('hidden'); }
 
 // ---------- UI bridge used by the game ----------
 const ui = {
@@ -154,11 +159,15 @@ const ui = {
   pause() {
     if (game.mode !== 'flight' || game.ended) return;
     game.paused = true;
+    audio.setEngine(0, false);
+    if (commT) { clearTimeout(commT); commT = null; commFrozen = true; }
     show('s-pause');
   },
-  missionEnd(win, reason, stats) {
+  missionEnd(win, reason, stats, cause) {
     clearComm();
-    fadeDark(() => { game.startAttract(); document.body.classList.remove('coop'); onMissionEnd(win, reason, stats); });
+    game.paused = false;
+    hub.activeP2 = undefined;
+    fadeDark(() => { game.startAttract(); document.body.classList.remove('coop'); onMissionEnd(win, reason, stats, cause); });
   },
   cutSub(who, text) {
     const ch = CHARS[who] || CHARS.erz;
@@ -184,6 +193,7 @@ const ui = {
   },
   cutShot() { const f = $('scanfx'); f.classList.remove('run'); void f.offsetWidth; f.classList.add('run'); },
   cutEnd() {
+    cutArmed = false; $('cut-skip').classList.remove('armed');
     cutSubDec?.cancel(); clearTimeout(cutSubT); clearTimeout(cutTitleT);
     $('cut-sub').classList.add('hidden'); $('cut-title').classList.add('hidden');
   },
@@ -191,17 +201,29 @@ const ui = {
     hub.local.update(dt);
     hub.poll(dt);
     const ev = hub.takeMenu();
-    if (current) ev.forEach(menuEvent);
+    if (!current) return;
+    let confirmed = false;
+    for (const e of ev) {
+      if (e === 'ok' || e === 'start') { if (confirmed) continue; confirmed = true; }
+      menuEvent(e);
+    }
   },
 };
 
-let cutArmed = false, cutSubDec = null, cutSubT = 0, cutTitleT = 0;
+let cutArmed = false, cutSubDec = null, cutSubT = 0, cutTitleT = 0, commFrozen = false;
 
+/** Fade to black, run cb, fade back. Input is ignored while the screen is black. */
+let busy = false;
 function fadeDark(cb) {
   const f = $('fade');
+  busy = true;
   f.classList.add('dark', 'on');
-  setTimeout(() => { cb(); f.classList.remove('on'); }, 550);
+  setTimeout(() => { busy = false; cb(); f.classList.remove('on'); }, 550);
 }
+// swallow clicks during transitions so nothing starts twice
+document.addEventListener('click', (e) => { if (busy) { e.stopPropagation(); e.preventDefault(); } }, true);
+// mouse-clicked buttons must not keep focus, or Enter/Space would trigger them a second time
+document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('button'); if (b) setTimeout(() => b.blur(), 0); });
 
 const game = new Game($('view'), $('hud'), audio, ui);
 game.invert = settings.invert;
@@ -215,7 +237,7 @@ let dlg = null, dlgGoto = null;
 const lineVisible = (l) => passes(l, save.flags) && (!Array.isArray(l.aff) || (save.aff[l.aff[0]] || 0) >= l.aff[1]);
 
 function runDialog(lines, kicker, title, done) {
-  dlg = { lines: lines.filter(lineVisible), i: -1, done, dec: null, choosing: false };
+  dlg = { lines: lines.filter(lineVisible), i: -1, done, dec: null, choosing: false, effects: [], answered: -1 };
   $('d-kicker').textContent = kicker;
   $('d-choices').innerHTML = '';
   setDialogButtons(true);
@@ -230,7 +252,13 @@ function setDialogButtons(on) {
 }
 function advance() {
   if (!dlg || dlg.choosing) return;
-  if (dlg.dec?.running) { dlg.dec.finish(); return; }
+  if (dlg.dec?.running) {
+    dlg.dec.finish();
+    const cl = dlg.lines[dlg.i];
+    if (cl?.choices && dlg.answered !== dlg.i) showChoices(cl);
+    return;
+  }
+  if (dlg.lines[dlg.i]?.choices && dlg.answered !== dlg.i) { showChoices(dlg.lines[dlg.i]); return; }
   dlg.i++;
   if (dlg.i >= dlg.lines.length) return closeDialog();
   const l = dlg.lines[dlg.i];
@@ -251,11 +279,14 @@ function advance() {
   audio.beep(520, 0.06);
 }
 function showChoices(l) {
+  if (!dlg || dlg.choosing || dlg.answered === dlg.i) return;
+  const options = l.choices.filter(lineVisible);
+  if (!options.length) { dlg.answered = dlg.i; return; }
   dlg.choosing = true;
   setDialogButtons(false);
   const wrap = $('d-choices');
   wrap.innerHTML = '';
-  l.choices.filter(lineVisible).forEach((c, i) => {
+  options.forEach((c, i) => {
     const b = document.createElement('button');
     b.className = 'btn choice';
     b.textContent = `${i + 1}  ${c.label}`;
@@ -269,10 +300,9 @@ function showChoices(l) {
 }
 function choose(c) {
   if (!dlg?.choosing) return;
-  for (const [k, v] of Object.entries(c.aff || {})) save.aff[k] = (save.aff[k] || 0) + v;
-  Object.assign(save.flags, c.set || {});
-  if (c.goto) dlgGoto = c.goto;
-  store(SAVE_KEY, save);
+  // effects are applied when the dialog closes, together with marking the scene as seen
+  dlg.effects.push(c);
+  dlg.answered = dlg.i;
   dlg.lines.splice(dlg.i + 1, 0, ...(c.reply || []).filter(lineVisible));
   $('d-choices').innerHTML = '';
   setDialogButtons(true);
@@ -283,13 +313,18 @@ function choose(c) {
 function closeDialog() {
   if (!dlg) return;
   dlg.dec?.cancel();
-  const d = dlg.done; dlg = null;
+  const d = dlg.done, effects = dlg.effects; dlg = null;
   holo.on = false; wave.on = false;
+  for (const c of effects) {
+    for (const [k, v] of Object.entries(c.aff || {})) save.aff[k] = (save.aff[k] || 0) + v;
+    Object.assign(save.flags, c.set || {});
+    if (c.goto) dlgGoto = c.goto;
+  }
   d();
 }
 function skipDialog() {
   if (!dlg || dlg.choosing) return;
-  if (dlg.lines[dlg.i]?.choices) { dlg.dec?.finish(); return; }
+  if (dlg.lines[dlg.i]?.choices && dlg.answered !== dlg.i) { dlg.dec?.finish(); showChoices(dlg.lines[dlg.i]); return; }
   const idx = dlg.lines.findIndex((l, i) => i > dlg.i && l.choices);
   if (idx === -1) return closeDialog();
   dlg.dec?.cancel();
@@ -370,6 +405,7 @@ function wingFor(def) {
 function playCut(id, done) {
   const def = CUTSCENES[id];
   if (!def) return done();
+  cutArmed = false;
   clearComm();
   fadeDark(() => {
     show('cut');
@@ -435,6 +471,7 @@ function launch() {
     clearComm();
     show(null);
     document.body.classList.toggle('coop', coop);
+    commHold = performance.now() + 3700;
     const ctrls = hub.assign(coop);
     const def = cur();
     const w = wingFor(def);
@@ -446,7 +483,7 @@ function launch() {
 }
 
 let lastResult = 'lose';
-function onMissionEnd(win, reason, stats) {
+function onMissionEnd(win, reason, stats, cause) {
   const def = cur();
   const oldRank = rankFor(save.kills);
   if (win) {
@@ -456,7 +493,7 @@ function onMissionEnd(win, reason, stats) {
     store(SAVE_KEY, save);
     const after = () => runDialog(def.win, `Nachbesprechung · ${def.title}`, 'Zurück an Bord', () => debrief('win', reason, stats, def, oldRank));
     if (def.postCut) playCut(def.postCut, after); else after();
-  } else if (def.lose) {
+  } else if (def.lose && cause === 'objective') {
     Object.assign(save.flags, def.lose.set || {});
     save.kills += stats.kills; save.score += stats.score;
     save.mission = def.lose.next;
@@ -509,7 +546,7 @@ $('b-start').onclick = launch;
 function title() {
   $('m-continue').classList.toggle('hidden', !save.started);
   const def = cur();
-  setLabel($('m-continue'), save.done ? 'Finale erneut fliegen' : `Fortsetzen · ${def.no}. ${def.title}`);
+  setLabel($('m-continue'), save.finished ? 'Epilog ansehen' : save.done ? 'Finale erneut fliegen' : `Fortsetzen · ${def.no}. ${def.title}`);
   show('s-title');
   const line = save.started ? `${rankFor(save.kills)} „${save.callsign}“ · ${ACTS[def.act]} · ${save.kills} Abschüsse` : '';
   decode($('pilot-line'), line, { cps: 80, delay: 400 });
@@ -521,7 +558,7 @@ function title() {
     if (!b.classList.contains('hidden')) { b._scr?.cancel(); b._scr = decode(b, b.dataset.label, { cps: 50, delay: 300 + i * 90, pad: true }); }
   });
 }
-$('m-continue').onclick = () => { audio.unlock(); startMissionFlow(); };
+$('m-continue').onclick = () => { audio.unlock(); if (save.finished) playEnding(); else startMissionFlow(); };
 $('m-new').onclick = () => { audio.unlock(); $('callsign').value = save.callsign; show('s-name'); };
 $('m-help').onclick = () => { audio.unlock(); show('s-help'); };
 $('m-settings').onclick = () => { audio.unlock(); show('s-settings'); };
@@ -559,15 +596,16 @@ function tryFullscreen(force) {
 
 // ---------- multiplayer / TV ----------
 let lobby = null, lobbyStarting = false;
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 function renderSlots() {
   const coop = coopActive();
   const devs = hub.devices;
   const rows = [];
   const p1 = ['Touch / Tastatur', ...devs.filter((d) => hub.roleOf(d, coop) === 1).map((d) => d.name)];
-  rows.push(`<li><b style="color:${PILOT_COLORS[0]}">P1</b><span>${p1.join(' + ')}</span></li>`);
+  rows.push(`<li><b style="color:${PILOT_COLORS[0]}">P1</b><span>${p1.map(esc).join(' + ')}</span></li>`);
   if (settings.coop) {
     const p2 = devs.find((d) => hub.roleOf(d, coop) === 2);
-    rows.push(p2 ? `<li><b style="color:${PILOT_COLORS[1]}">P2</b><span>${p2.name}</span></li>` : '<li class="empty"><b>P2</b><span>Wartet auf Controller: Gamepad-Taste drücken oder Handy verbinden</span></li>');
+    rows.push(p2 ? `<li><b style="color:${PILOT_COLORS[1]}">P2</b><span>${esc(p2.name)}</span></li>` : '<li class="empty"><b>P2</b><span>Wartet auf Controller: Gamepad-Taste drücken oder Handy verbinden</span></li>');
   }
   $('mp-slots').innerHTML = rows.join('');
   setLabel($('mp-coop'), `Koop für 2 Spieler: ${settings.coop ? 'An' : 'Aus'}`);
@@ -595,6 +633,7 @@ async function ensureLobby() {
       ui.comm?.('flug', `Controller verbunden: ${name || 'Handy'}.`);
     }, (s, info) => {
       if (s === 'error') { st.textContent = `Verbindungsdienst nicht erreichbar (${info}).`; st.className = 'small err'; }
+      if (s === 'open' && lobby) { st.textContent = 'Bereit: Handys können sich jetzt verbinden.'; st.className = 'small ok'; }
     });
     $('mp-code').textContent = lobby.code;
     $('mp-url').textContent = lobby.url;
@@ -658,14 +697,18 @@ function syncPads() {
 
 // ---------- pause ----------
 function resume() {
+  if (game.mode !== 'flight' || game.ended) return;
   game.paused = false;
   game.pilots.forEach((P) => { P.ctrl.take(); });
   show(null);
+  if (commFrozen) { commFrozen = false; commT = setTimeout(nextComm, 1200); }
 }
 $('p-resume').onclick = resume;
-$('p-restart').onclick = () => { game.stop(); launch(); };
-$('p-quit').onclick = () => { game.stop(); clearComm(); document.body.classList.remove('coop'); fadeDark(() => { game.startAttract(); title(); }); };
-document.addEventListener('visibilitychange', () => { if (document.hidden) ui.pause(); });
+$('p-restart').onclick = () => { if (game.ended) return; game.stop(); launch(); };
+$('p-quit').onclick = () => { if (game.ended) return; hub.activeP2 = undefined; game.stop(); clearComm(); document.body.classList.remove('coop'); fadeDark(() => { game.startAttract(); title(); }); };
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { ui.pause(); audio.ctx?.suspend(); } else audio.ctx?.resume();
+});
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 title();

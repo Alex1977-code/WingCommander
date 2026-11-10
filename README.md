@@ -1,7 +1,7 @@
 # Sternenfront – Der Perseus-Krieg
 
 Ein mobiles 3D-Weltraumkampfspiel im Stil klassischer Space-Combat-Sims: Trägerschiff, Flügelmann,
-Einsatzbesprechungen und eine Story-Kampagne mit sechs Missionen. Eigenes Universum, eigene Story,
+Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 15 Missionen. Eigenes Universum, eigene Story,
 eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt sich als PWA installieren.
 
 ## Features
@@ -30,7 +30,8 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
 
 ```bash
 npm install
-npm run dev      # Entwicklungsserver (im WLAN auch vom Handy erreichbar)
+npm run dev      # Entwicklungsserver (nur dieser Rechner)
+npm run dev:lan  # Entwicklungsserver, im WLAN auch vom Handy erreichbar
 npm run build    # Produktions-Build nach dist/
 npm run preview  # Build lokal testen
 ```
@@ -48,9 +49,12 @@ npm run preview  # Build lokal testen
 | Bildschirm spiegeln | AirPlay oder Smart View, danach mit Bluetooth-Gamepad spielen |
 | Koop | *Mehrspieler & TV → Koop an*. Der zuletzt verbundene Controller fliegt Spieler 2 |
 
-Die Handy-Verbindung nutzt den öffentlichen PeerJS-Vermittlungsdienst nur für den Verbindungsaufbau; danach
-laufen die Daten direkt zwischen den Geräten. Für einen eigenen Dienst: `npm run peer` starten und das Spiel mit
-`?peer=host:9000` öffnen.
+Die Handy-Verbindung nutzt den öffentlichen PeerJS-Vermittlungsdienst (`0.peerjs.com`) für den Verbindungsaufbau.
+Danach laufen die Steuerdaten per WebRTC meist direkt zwischen den Geräten; je nach Netzwerk können sie auch über
+STUN/TURN-Server von Google bzw. PeerJS vermittelt werden. Schriften werden von Google Fonts geladen.
+Für einen eigenen Vermittlungsdienst: `npm run peer` starten und das Spiel mit `?peer=host:9000` öffnen. Das
+funktioniert nur, wenn das Spiel selbst per `http` läuft (z. B. `npm run dev:lan`); für die https-Version auf
+GitHub Pages braucht der eigene Dienst ein TLS-Zertifikat.
 
 `npm run build:artifact` erzeugt zusätzlich eine einzelne, eigenständige HTML-Datei ohne die WebRTC-Funktionen.
 

@@ -73,18 +73,23 @@ export function startPadPage(code, existingTransport) {
     t.onClose(() => { tr = null; setStatus('Verbindung getrennt – Seite neu laden', false); setMode('connect'); });
   };
 
+  let connecting = false;
   const go = async () => {
+    if (connecting) return;
     const c = $('pad-code').value.trim().toUpperCase();
     const n = $('pad-name').value.trim() || 'Handy';
     try { localStorage.setItem('sf.padname', n); } catch { /* ignore */ }
     if (c.length !== 4) { setStatus('Code hat 4 Zeichen', false); return; }
     setStatus('Verbinde…');
+    connecting = true; $('pad-go').disabled = true;
     try {
-      const t = await connectPad(c, n, (s, e) => s === 'error' && setStatus(`Fehler: ${e}`));
+      const t = await connectPad(c, n);
+      tr?.close?.();
       attach(t);
     } catch (e) {
-      setStatus(`Keine Verbindung (${e?.type || 'Netzwerk'}). Code prüfen.`, false);
-    }
+      const type = e?.type || e?.message || 'network';
+      setStatus(type === 'peer-unavailable' ? 'Kein Spiel mit diesem Code gefunden. Code prüfen.' : `Keine Verbindung (${type}). Netzwerk prüfen und erneut versuchen.`, false);
+    } finally { connecting = false; $('pad-go').disabled = false; }
   };
   $('pad-go').onclick = go;
   try { $('pad-name').value = localStorage.getItem('sf.padname') || ''; } catch { /* ignore */ }
@@ -100,7 +105,6 @@ export function startPadPage(code, existingTransport) {
   }));
   document.querySelectorAll('[data-e]').forEach((b) => b.addEventListener('pointerdown', (e) => {
     e.preventDefault(); tr?.send({ t: 'e', e: b.dataset.e }); buzz(10);
-    if (b.dataset.e === 'pause') tr?.send({ t: 'm', e: 'start' });
     b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120);
   }));
   document.querySelectorAll('[data-h]').forEach((b) => {

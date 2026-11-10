@@ -66,7 +66,8 @@ export const ENDINGS = {
   bitter: [
     { who: 'erz', text: 'Mit dem Fall der Apotheose zerbrach das Netz der Aszendenz. Der Perseus-Graben war frei. Der Preis war hoch.' },
     { who: 'juno', text: 'Ich habe Kolibri nie gekannt. Aber die ganze Staffel trägt jetzt ihr Abzeichen. Und Rooks.' },
-    { who: 'brandt', text: 'Ich habe einen Befehl gegeben, den ich für richtig hielt. Ich werde jede Nacht darüber nachdenken, ob er es war.' },
+    { who: 'brandt', text: 'Ich habe einen Befehl gegeben, den ich für richtig hielt. Ich werde jede Nacht darüber nachdenken, ob er es war.', ifNot: 'defied' },
+    { who: 'brandt', text: 'Ich habe Ihnen eine Stunde gegeben. Es war nicht genug. Das werde ich mir nie verzeihen.', if: 'defied' },
     { who: 'erz', text: 'Auf dem Hangardeck der Aurora hängen seitdem zwei leere Pilotenhelme. Niemand nimmt sie ab. Ende – „Asche und Sterne“.' },
   ],
 };
@@ -80,16 +81,16 @@ export const CUTSCENES = {
     sky: SKY.keth,
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 12 },
-      { id: 'f1', type: 'sperber', pos: A(38, -12, 100), speed: 0 },
-      { id: 'f2', type: 'sperber', pos: A(-38, -12, 90), speed: 0 },
-      { id: 'f3', type: 'sperber', pos: A(38, -12, 60), speed: 0 },
+      { id: 'f1', type: 'sperber', pos: A(70, -12, 100), speed: 12 },
+      { id: 'f2', type: 'sperber', pos: A(-70, -12, 90), speed: 12 },
+      { id: 'f3', type: 'sperber', pos: A(76, -16, 60), speed: 12 },
     ],
     shots: [
       { dur: 7, cam: { from: A(-760, 210, 1050), to: A(-470, 130, 640), look: 'aurora', lookOff: A(0, 0, -40) },
         ev: [{ t: 0.3, sub: 'erz', text: 'Im Jahr 2643 hat die Terranische Union den Perseus-Graben besiedelt – vierzig Welten am äußersten Rand des bekannten Raums.' }] },
       { dur: 6, cam: { rel: 'aurora', from: A(95, 40, 260), to: A(95, 28, -140), look: 'aurora', lookOff: A(0, 0, -60) },
         ev: [{ t: 0.2, sub: 'erz', text: 'Dann kehrten die Verlorenen zurück: Nachfahren der ersten Kolonieschiffe, verschmolzen mit ihren Maschinen. Sie nennen sich die Aszendenz.' }] },
-      { dur: 5, cam: { rel: 'f1', from: A(-14, 5, 30), to: A(-9, 4, -32), look: 'f1' },
+      { dur: 5, cam: { rel: 'f1', from: A(16, 5, 30), to: A(10, 4, -32), look: 'f1' },
         ev: [{ t: 0.1, sub: 'erz', text: 'Drei Welten sind verstummt. Zwischen der Aszendenz und dem Rest des Grabens steht nur ein Träger: die TUS Aurora.' },
           { t: 0.6, a: 'speed', id: 'f1', v: 300 }, { t: 0.9, a: 'speed', id: 'f2', v: 300 }, { t: 1.2, a: 'speed', id: 'f3', v: 300 }] },
       { dur: 5, cam: { from: A(20, 40, 380), look: 'f1' },
@@ -106,9 +107,10 @@ export const CUTSCENES = {
     ],
     shots: [
       { dur: 5, cam: { rel: 'sam', from: A(-130, 34, 70), to: A(-105, 22, -50), look: 'sam' },
-        ev: [{ t: 0.3, sub: 'samariter', text: 'Sprungantrieb geladen. Zweitausend Menschen an Bord, und jeder einzelne weiß Ihre Namen. Danke, Nachtfalken.' }] },
+        ev: [{ t: 0.3, sub: 'samariter', text: 'Sprungantrieb geladen. Zweitausend Menschen an Bord, und jeder einzelne kennt Ihre Namen. Danke, Nachtfalken.' }] },
       { dur: 4, cam: { rel: 'sam', from: A(30, 70, -280), look: 'sam' },
         ev: [{ t: 1.2, a: 'jumpout', id: 'sam' }, { t: 1.6, sub: 'kolibri', text: 'Und weg sind sie. Weißt du was, {cs}? Dafür lohnt sich das alles.' }] },
+      { dur: 2.5, cam: { rel: 'p', from: A(-12, 5, 30), look: 'p' }, ev: [] },
     ],
   },
 
@@ -135,14 +137,14 @@ export const CUTSCENES = {
     sky: SKY.alarm,
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
-      { id: 'z', type: 'zerstoerer', pos: A(-900, 220, 1700), dir: A(0.45, -0.1, -0.88), hidden: true, name: 'Psalm' },
-      { id: 'h1', type: 'hammer', pos: A(-520, 120, 1300), dir: A(0.4, -0.1, -0.9), hidden: true, speed: 170 },
-      { id: 'h2', type: 'hammer', pos: A(-470, 150, 1340), dir: A(0.4, -0.1, -0.9), hidden: true, speed: 170 },
-      { id: 'h3', type: 'hammer', pos: A(-560, 90, 1380), dir: A(0.4, -0.1, -0.9), hidden: true, speed: 170 },
-      { id: 'd1', type: 'dorn', pos: A(-420, 180, 1200), dir: A(0.4, -0.1, -0.9), hidden: true, speed: 200 },
+      { id: 'z', type: 'zerstoerer', pos: A(-480, 160, 900), dir: A(0.45, -0.1, -0.88), hidden: true, name: 'Psalm' },
+      { id: 'h1', type: 'hammer', pos: A(-520, 120, 1300), dir: A(0.62, -0.05, -0.78), hidden: true, speed: 120 },
+      { id: 'h2', type: 'hammer', pos: A(-470, 150, 1340), dir: A(0.62, -0.05, -0.78), hidden: true, speed: 120 },
+      { id: 'h3', type: 'hammer', pos: A(-560, 90, 1380), dir: A(0.62, -0.05, -0.78), hidden: true, speed: 120 },
+      { id: 'd1', type: 'dorn', pos: A(-420, 180, 1200), dir: A(0.62, -0.05, -0.78), hidden: true, speed: 140 },
     ],
     shots: [
-      { dur: 4.5, cam: { from: A(-260, 130, 760), to: A(-300, 140, 820), look: A(-700, 170, 1500) },
+      { dur: 4.5, cam: { from: A(-60, 110, 420), to: A(-90, 120, 470), look: A(-600, 150, 1200) },
         ev: [{ t: 0.3, sub: 'flug', text: 'Sprungsignaturen! Mehrere! Direkt vor dem Bug!' },
           { t: 0.9, a: 'jumpin', id: 'z' }, { t: 1.4, a: 'jumpin', id: 'h1' }, { t: 1.6, a: 'jumpin', id: 'h2' }, { t: 1.8, a: 'jumpin', id: 'h3' }, { t: 2.0, a: 'jumpin', id: 'd1' }] },
       { dur: 4, cam: { rel: 'h1', from: A(14, 6, -32), to: A(10, 4, -24), look: 'h1', lookOff: A(0, 0, 60) },
@@ -164,6 +166,7 @@ export const CUTSCENES = {
         ev: [{ t: 0.3, a: 'boom', id: 's' }, { t: 3.4, sub: 'brandt', text: 'Treffer bestätigt! Die Brutstätte ist vernichtet!' }] },
       { dur: 4, cam: { rel: 'p', from: A(9, 4, 42), to: A(7, 3, 30), look: 'p' },
         ev: [{ t: 0.3, sub: 'rook', text: 'Das war für Keth IV. Und für jeden, den sie da drin „aufsteigen“ lassen wollten.' }] },
+      { dur: 2.5, cam: { rel: 'p', from: A(-30, 10, -60), look: 'p', lookOff: A(0, 0, 300) }, ev: [] },
     ],
   },
 
@@ -188,7 +191,7 @@ export const CUTSCENES = {
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
       { id: 'z', type: 'zerstoerer', pos: A(700, 100, 1400), dir: A(-0.45, -0.05, -0.89), speed: 0, name: 'Litanei' },
-      { id: 'r', type: 'greif', pos: A(-1100, -100, -2160), dir: A(0.45, 0.05, 0.89), speed: 345 },
+      { id: 'r', type: 'greif', pos: A(-1300, -160, -2160), dir: A(0.489, 0.0636, 0.870), speed: 345 },
       { id: 'k', type: 'greif', pos: A(320, -60, 620), dir: A(0.2, 0, 1), speed: 40 },
       { id: 'v', type: 'archon', pos: A(0, 0, 0), hidden: true },
     ],
@@ -222,7 +225,7 @@ export const CUTSCENES = {
       { dur: 5, cam: { rel: 'pr', from: A(40, 24, 170), look: 'k' },
         ev: [{ t: 0.4, a: 'show', id: 'k' }, { t: 0.5, a: 'speed', id: 'k', v: 240 }, { t: 1.0, a: 'speed', id: 'p', v: 240 },
           { t: 0.8, sub: 'kolibri', text: 'Sie wollten mich „vollenden“. Noch ein Tag, und ich hätte ja gesagt. Bring mich nach Hause.' }] },
-      { dur: 4, cam: { rel: 'k', from: A(-20, 8, -40), look: 'k', lookOff: A(0, 0, 80) },
+      { dur: 6, cam: { rel: 'k', from: A(-20, 8, -40), look: 'k', lookOff: A(0, 0, 80) },
         ev: [{ t: 0.3, sub: 'brandt', text: 'Ich sollte Sie beide vors Kriegsgericht stellen. Willkommen zurück, Leutnant Sandoval.' }] },
     ],
   },
@@ -241,8 +244,8 @@ export const CUTSCENES = {
         ev: [{ t: 0.3, sub: 'brandt', text: 'An alle Schiffe: Kurs auf das Tor. Was dahinter liegt, hat noch kein Mensch gesehen – und überlebt.' }] },
       { dur: 5.3, cam: { rel: 'aurora', from: A(-90, 50, -230), look: 'aurora', lookOff: A(0, 0, 320) },
         ev: [{ t: 4.9, a: 'jumpout', id: 'aurora' }] },
-      { dur: 4, cam: { from: A(0, 30, 700), look: 'g' },
-        ev: [{ t: 0.4, a: 'jumpout', id: 't1' }, { t: 0.9, a: 'jumpout', id: 't2' }, { t: 1.6, a: 'jumpout', id: 'p' },
+      { dur: 6.5, cam: { from: A(0, 30, 700), look: 'g' },
+        ev: [{ t: 1.9, a: 'jumpout', id: 't1' }, { t: 2.5, a: 'jumpout', id: 't2' }, { t: 0.5, a: 'jumpout', id: 'p' },
           { t: 0.5, sub: 'erz', text: 'Die Flotte der Union passierte das Tor von Orun. Auf der anderen Seite wartete das Herz der Aszendenz.' }] },
     ],
   },
@@ -321,7 +324,7 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Rechnen Sie mit Jägern vom Typ „Klinge“ und Bombern der „Hammer“-Klasse. Die Bomber haben Vorrang.' },
       { who: 'kolibri', text: 'Kolibri hier, heute bin ich dein Flügel. Versuch mitzuhalten – und zähl wenigstens meine Abschüsse mit.' },
     ],
-    objectives: ['Die Samariter beschützen', 'Alle Angriffswellen abwehren'],
+    objectives: ['Die Samariter beschützen', 'Alle Angriffswellen abwehren', 'Zur TUS Aurora zurückkehren'],
     protect: 'transport',
     navs: [
       { name: 'Samariter', pos: A(2000, 0, 8000), anchor: true, objective: 'Beschütze die Samariter',
@@ -339,6 +342,7 @@ export const MISSIONS = [
       lines: [
         { who: 'kolibri', text: 'Zweitausend Menschen… Ich hab die Rettungskapseln gezählt, {cs}. Es waren elf.' },
         { who: 'brandt', text: 'Wir trauern, wenn der Krieg vorbei ist. Jetzt brauche ich Sie bei klarem Verstand.' },
+        { who: 'brandt', text: 'Unsere Abhörstation hat den Namen des Angreifers aufgefangen: Archon Veyl. Der Schlächter von Tessa Prime.' },
       ],
     },
     next: 'm3',
@@ -352,8 +356,8 @@ export const MISSIONS = [
       { who: 'rook', text: 'Ich schulde dir eine ganze Menge. Was ist mit dir, {cs}? Du bist so still.' },
       { who: 'rook', text: 'Wie geht es dir nach den ersten Einsätzen?', choices: [
         { label: 'Ich will besser werden. Bring mir alles bei.', aff: { rook: 1 }, reply: [{ who: 'rook', text: 'Das wollte ich hören. Morgen, sechs Uhr, Simulator. Und dann noch mal draußen.' }] },
-        { label: 'Ehrlich gesagt: Ich hatte Angst.', aff: { rook: 1, kolibri: 1 }, reply: [{ who: 'kolibri', text: 'Wer keine Angst hat, ist entweder gelogen oder tot. Willkommen im Club.' }] },
-        { label: 'Kolibri, wetten, dass ich nächstes Mal mehr Abschüsse habe?', aff: { kolibri: 1 }, reply: [{ who: 'kolibri', text: 'Oh, die Wette gilt. Der Verlierer putzt eine Woche lang meinen Vogel.' }] },
+        { label: 'Ehrlich gesagt: Ich hatte Angst.', aff: { rook: 1, kolibri: 1 }, reply: [{ who: 'kolibri', text: 'Wer keine Angst hat, lügt oder ist tot. Willkommen im Club.' }] },
+        { label: 'Kolibri, wetten, dass ich nächstes Mal mehr Abschüsse habe?', aff: { kolibri: 1 }, reply: [{ who: 'kolibri', text: 'Oh, die Wette gilt. Der Verlierer putzt eine Woche lang den Vogel des Gewinners.' }] },
       ] },
     ] },
     briefing: [
@@ -385,7 +389,7 @@ export const MISSIONS = [
       { who: 'rook', text: 'Er kennt meinen Namen. Meinen echten Namen, {cs}. Den kennt niemand mehr, der noch lebt.' },
       { who: 'rook', text: 'Im Feld sind die Felsen gefährlicher als der Feind. Augen auf. Und unterschätz ihn nicht.' },
     ],
-    objectives: ['Nav 1 im Trümmerfeld säubern', 'Das Depot bei Nav 2 ausschalten', 'Zur TUS Aurora zurückkehren'],
+    objectives: ['Nav 1 im Trümmerfeld säubern', 'Veyls Staffel bei Nav 2 vertreiben', 'Zur TUS Aurora zurückkehren'],
     navs: [
       { name: 'Nav 1', pos: A(-2500, 200, 7500), asteroids: 46, waves: [[['dorn', 4]], [['klinge', 2]]],
         onArrive: [{ who: 'rook', text: 'Sie kommen aus dem Schatten der Felsen. Bleib dicht, aber nicht zu dicht!' }],
@@ -396,7 +400,7 @@ export const MISSIONS = [
     ],
     win: [
       { who: 'rook', text: '„Ob du ihn auch zurücklässt.“ Er weiß von der Valkyrie. Er weiß Dinge, die er nicht wissen kann.' },
-      { who: 'brandt', text: 'Das Depot ist zerstört. Die Aszendenz wird das nicht hinnehmen. Erhöhte Bereitschaft.' },
+      { who: 'brandt', text: 'Veyls Staffel ist zerschlagen. Die Aszendenz wird das nicht hinnehmen. Erhöhte Bereitschaft.' },
     ],
     next: 'm5',
   },
@@ -486,7 +490,7 @@ export const MISSIONS = [
   {
     id: 'm8', no: 8, act: 'II', title: 'Der Verräter', sector: 'Tessa-System · Sprungpunkt Ost', ship: 'falke', wingman: 'kolibri', sky: SKY.asche,
     scene: { place: 'Hangardeck', lines: [
-      { who: 'erz', text: 'Nachtschicht. Rook sitzt auf der Tragfläche seines Greif und starrt in die Dunkelheit hinter dem Hangarschild.' },
+      { who: 'erz', text: 'Nachtschicht. Rook sitzt auf der Tragfläche seines Greifs und starrt in die Dunkelheit hinter dem Hangarschild.' },
       { who: 'rook', text: 'Zehn Jahre habe ich gedacht, er ist tot. Und jetzt wünschte ich, er wäre es.' },
       { who: 'rook', text: 'Was würdest du tun, {cs}? Wenn er dein Freund gewesen wäre?', choices: [
         { label: 'Es war nicht deine Schuld. Du hättest ihn nicht retten können.', aff: { rook: 1 }, reply: [{ who: 'rook', text: 'Vielleicht. Aber ich werde nie erfahren, ob ich es hätte versuchen sollen.' }] },
@@ -545,7 +549,7 @@ export const MISSIONS = [
         onClear: [{ who: 'flug', text: 'Sprungantrieb geladen! Aber… ein Zerstörer springt direkt vor uns rein!' }] },
     ],
     win: [
-      { who: 'erz', text: 'Die Aurora sprang. Hinter ihr verglühten die Trümmer der Litanei – und eines Greif mit der Kennung „Rook“.' },
+      { who: 'erz', text: 'Die Aurora sprang. Hinter ihr verglühten die Trümmer der Litanei – und eines Greifs mit der Kennung „Rook“.' },
       { who: 'brandt', text: 'Major Tobias Adeyemi. Gefallen im Dienst. Leutnant Mika Sandoval: vermisst, vermutlich in Gefangenschaft.' },
     ],
     next: 'm10',
@@ -553,11 +557,11 @@ export const MISSIONS = [
   {
     id: 'm10', no: 10, act: 'II', title: 'Fährte', sector: 'Der Mahlstrom', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
     scene: { place: 'Hangardeck · Gedenkfeier', lines: [
-      { who: 'erz', text: 'Die Besatzung steht stumm vor einem leeren Startplatz. Jemand hat Rooks Helm auf die Tragfläche eines Greif gestellt.' },
+      { who: 'erz', text: 'Die Besatzung steht stumm vor einem leeren Startplatz. Jemand hat Rooks Helm auf die Tragfläche eines Greifs gestellt.' },
       { who: 'brandt', text: 'Major Adeyemi hat einmal gesagt: „Bring den Vogel heil zurück.“ Er hat sich nicht daran gehalten. Dafür leben wir noch.' },
       { who: 'juno', text: 'Leutnant Ada Kerimov, Rufzeichen Juno. Ich bin von der Ares versetzt worden. Ich… es tut mir leid, dass wir uns so kennenlernen.' },
       { who: 'juno', text: 'Sie sagen, du warst sein Schüler. Willst du etwas sagen?', choices: [
-        { label: '„Schieß nur auf das, was du triffst.“ Für Rook.', aff: { rook: 1 }, reply: [{ who: 'juno', text: 'Für Rook.' }, { who: 'erz', text: 'Hundert Stimmen wiederholen es leise. Für Rook.' }] },
+        { label: '„Schieß nur auf das, was du triffst.“ Für Rook.', aff: { kolibri: 1 }, reply: [{ who: 'juno', text: 'Für Rook.' }, { who: 'erz', text: 'Hundert Stimmen wiederholen es leise. Für Rook.' }] },
         { label: 'Wir holen Kolibri zurück. Das ist alles, was zählt.', set: { vowRescue: true }, reply: [{ who: 'juno', text: 'Dann bin ich dabei. Egal, was der Befehl sagt.' }] },
       ] },
     ] },
@@ -595,6 +599,7 @@ export const MISSIONS = [
           { who: 'juno', text: 'Ich komme mit.' }] },
         { label: 'Verstanden, Kapitänin. Die Flotte geht vor.', set: { kolibriLost: true }, goto: 'm12', reply: [
           { who: 'brandt', text: 'Danke. Ich weiß, was das für Sie bedeutet.' },
+          { who: 'juno', text: 'Du hast an Rooks Startplatz geschworen, sie zurückzuholen. Ich habe es gehört.', if: 'vowRescue' },
           { who: 'juno', text: 'Ich hoffe, du kannst damit leben. Ich weiß nicht, ob ich es könnte.' }] },
       ] },
     ] },
@@ -621,7 +626,7 @@ export const MISSIONS = [
     lose: {
       next: 'm12', set: { kolibriLost: true }, title: 'Die Ketten ist gesprungen',
       lines: [
-        { who: 'juno', text: 'Er ist weg. Sie ist weg. Es tut mir so leid, {cs}.' },
+        { who: 'juno', text: 'Die Ketten ist weg. Und Kolibri mit ihr. Es tut mir so leid, {cs}.' },
         { who: 'brandt', text: 'Kommen Sie zurück zur Flotte. Ich brauche Sie in Orun. Wir tun es jetzt auch für sie.' },
       ],
     },
@@ -657,6 +662,7 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Wir sind durch. Aber eine Wächterstation versucht, das Tor hinter uns zu schließen. Dann sitzt die halbe Flotte fest.' },
       { who: 'brandt', text: 'Zerstören Sie die Station, bevor sie das Tor kollabieren lässt.' },
       { who: 'kolibri', text: 'Noch so ein Ding wie die Brutstätte? Gut. Ich hab mit diesen Stationen noch eine Rechnung offen.', ifNot: 'kolibriLost' },
+      { who: 'juno', text: 'Eine Station, die ein Sprungtor kollabieren lässt. Wenn wir versagen, sitzt die halbe Flotte in der Falle. Kein Druck.', if: 'kolibriLost' },
     ],
     objectives: ['Die Abfangjäger bei Nav 1 vernichten', 'Die Wächterstation zerstören'],
     noReturn: true,
@@ -683,21 +689,22 @@ export const MISSIONS = [
       ] },
       { who: 'juno', text: 'Ich habe Kolibris Akte gelesen. Sie wäre gern hier gewesen, oder?', if: 'kolibriLost', choices: [
         { label: 'Sie ist hier. Jedes Mal, wenn wir starten.', reply: [{ who: 'juno', text: 'Dann fliegen wir morgen zu dritt.' }] },
-        { label: 'Ich hätte sie holen sollen.', reply: [{ who: 'juno', text: 'Vielleicht. Aber dann stünde die Flotte jetzt nicht hier. Es gibt keine richtige Antwort, {cs}.' }] },
+        { label: 'Ich hätte sie holen sollen.', ifNot: 'defied', reply: [{ who: 'juno', text: 'Vielleicht. Aber dann stünde die Flotte jetzt nicht hier. Es gibt keine richtige Antwort, {cs}.' }] },
+        { label: 'Wir waren so nah dran. Ich war zu langsam.', if: 'defied', reply: [{ who: 'juno', text: 'Du hast es versucht, gegen jeden Befehl. Mehr kann niemand verlangen, {cs}.' }] },
       ] },
     ] },
     briefing: [
       { who: 'brandt', text: 'Die Schattenflotte steht zwischen uns und der Apotheose. Unsere Kreuzer binden die Großkampfschiffe. Sie räumen die Jäger ab.' },
       { who: 'brandt', text: 'Und noch etwas: Unter den feindlichen Signalen ist eine Union-Kennung. Holt fliegt für sie.', if: 'holtEscaped' },
     ],
-    objectives: ['Drei Jägerstaffeln der Schattenflotte vernichten'],
+    objectives: ['Zwei Verteidigungslinien der Schattenflotte durchbrechen'],
     noReturn: true,
     navs: [
       { name: 'Linie Alpha', pos: A(-2500, 0, 7000), waves: [[['klinge', 3], ['dorn', 2]], [['hammer', 2], ['klinge', 2]]],
         onArrive: [{ who: 'flug', text: 'Feindliche Jäger in Massen. Alle Nachtfalken: Feuer frei!' }],
         onClear: [{ who: 'flug', text: 'Linie Alpha durchbrochen!' }] },
       { name: 'Linie Beta', pos: A(1500, 300, 13000), waves: [[['klinge', 4]], [['holt', 1, 'holtEscaped'], ['klinge', 2]], [['dorn', 4]]],
-        onWave: [null, { who: 'holt', text: 'Ihr hättet aufsteigen können. Alle. Jetzt sterbt ihr als das, was ihr seid.' }],
+        onWave: [null, { who: 'holt', text: 'Ihr hättet aufsteigen können. Alle. Jetzt sterbt ihr als das, was ihr seid.', if: 'holtEscaped' }],
         onClear: [{ who: 'brandt', text: 'Die Schattenflotte weicht zurück! Der Weg zur Apotheose ist frei!' }] },
     ],
     win: [

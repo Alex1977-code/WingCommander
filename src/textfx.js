@@ -44,8 +44,11 @@ export function decode(el, text, opts = {}) {
 export function scramble(el, text = el.dataset.label || el.textContent, ms = 380) {
   if (!el.dataset.label) el.dataset.label = text;
   if (el._scr) el._scr.cancel();
-  el._scr = decode(el, text, { cps: Math.max(12, text.length / (ms / 1000)), window: 4, pad: true });
-  return el._scr;
+  // keep the element's size fixed while glyphs of varying width cycle through it
+  if (!el._lockW) { const r = el.getBoundingClientRect(); if (r.width) { el._lockW = true; el.style.width = r.width + 'px'; } }
+  const h = el._scr = decode(el, text, { cps: Math.max(12, text.length / (ms / 1000)), window: 4, pad: true });
+  h.done.then(() => { if (el._scr === h && el._lockW) { el._lockW = false; el.style.width = ''; } });
+  return h;
 }
 
 /** Stamp a glitch title: sets data-text for the CSS RGB split layers and decodes the visible text. */

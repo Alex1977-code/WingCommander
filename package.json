@@ -5,7 +5,8 @@
   "description": "Sternenfront – ein mobiles 3D-Weltraumkampfspiel mit Story-Kampagne",
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
+    "dev": "vite",
+    "dev:lan": "vite --host",
     "build": "vite build",
     "preview": "vite preview --host",
     "build:artifact": "vite build --mode artifact && node scripts/artifact.mjs",

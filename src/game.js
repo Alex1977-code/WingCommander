@@ -8,7 +8,7 @@ import { createEnvironment, createAsteroids } from './env.js';
 import { Fx, glowTexture } from './fx.js';
 import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
-import { installCutscenes } from './cutscene.js';
+import { installCutscenes, passes } from './cutscene.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3();
@@ -24,6 +24,20 @@ const COL = {
   shield: new THREE.Color(0.6, 1.6, 3), spark: new THREE.Color(3, 1.8, 0.6),
 };
 export const PILOT_COLORS = ['#7fd6ff', '#ffb347'];
+
+/** Free GPU resources of a removed object (geometries + materials; textures are shared caches). */
+function disposeObj(o) {
+  o.traverse?.((c) => {
+    if (c.geometry && !c.geometry.userData?.shared) c.geometry.dispose();
+    const m = c.material;
+    if (m && !m.userData?.shared) (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
+  });
+}
+function disposeComposer(c) {
+  if (!c) return;
+  c.passes.forEach((p) => p.dispose?.());
+  c.dispose();
+}
 
 export class Game {
   constructor(canvas, hudCanvas, audio, ui) {
@@ -42,8 +56,9 @@ export class Game {
     this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = [];
     this.boltPool = [];
     this.boltGeo = new THREE.BoxGeometry(0.55, 0.55, 18);
+    this.boltGeo.userData.shared = true;
     this.boltMats = {};
-    for (const k of ['ally', 'foe', 'turret', 'turretFoe']) this.boltMats[k] = new THREE.MeshBasicMaterial({ color: COL[k] });
+    for (const k of ['ally', 'foe', 'turret', 'turretFoe']) { this.boltMats[k] = new THREE.MeshBasicMaterial({ color: COL[k] }); this.boltMats[k].userData.shared = true; }
     this.safeL = 0; this.safeR = 0;
     this.last = 0;
     this.resize();
@@ -74,7 +89,8 @@ export class Game {
     this.hudCanvas.width = w * pr; this.hudCanvas.height = h * pr;
     this.hud.setTransform(pr, 0, 0, pr, 0, 0);
     this.w = w; this.h = h;
-    if (this.composer) { this.composer.setPixelRatio(pr); this.composer.setSize(w, h); }
+    const cpr = Math.min(pr, 1.5);
+    if (this.composer) { this.composer.setPixelRatio(cpr); this.composer.setSize(w, h); }
     const n = this.pilots.length;
     this.pilots.forEach((P, i) => {
       // split vertically stacked on landscape screens, side by side on portrait
@@ -84,22 +100,29 @@ export class Game {
       P.camera.aspect = P.vw / P.vh;
       P.baseFov = n > 1 && stack ? 50 : 60;
       P.camera.updateProjectionMatrix();
-      if (P.composer) { P.composer.setPixelRatio(pr); P.composer.setSize(P.vw, P.vh); }
+      if (P.composer) { P.composer.setPixelRatio(cpr); P.composer.setSize(P.vw, P.vh); }
     });
     const cs = getComputedStyle(document.documentElement);
     this.safeL = parseFloat(cs.getPropertyValue('--sal')) || 0;
     this.safeR = parseFloat(cs.getPropertyValue('--sar')) || 0;
   }
 
-  setQuality(q) { this.quality = q; this.resize(); }
+  setQuality(q) {
+    this.quality = q;
+    for (const P of this.pilots) {
+      if (q === 'high' && !P.composer) P.composer = this.makeComposer(P.camera);
+      if (q !== 'high' && P.composer) { disposeComposer(P.composer); P.composer = null; }
+    }
+    this.resize();
+  }
 
   loadScene(sky) {
     if (this.scene) {
-      this.scene.traverse((o) => { if (o.geometry && o.geometry !== this.boltGeo) o.geometry.dispose?.(); });
+      for (const c of [...this.scene.children]) if (!c.userData?.keep) disposeObj(c);
       this.env?.dispose();
     }
-    this.composer?.dispose();
-    this.pilots.forEach((P) => P.composer?.dispose());
+    disposeComposer(this.composer);
+    this.pilots.forEach((P) => disposeComposer(P.composer));
     this.pilots = [];
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
@@ -118,6 +141,7 @@ export class Game {
     this.spawn('falke', new THREE.Vector3(92, 16, 96), FWD).speed = 0;
     this.spawn('greif', new THREE.Vector3(112, 10, 70), FWD).speed = 0;
     this.attractT = 0;
+    this.camera.fov = 62; this.camera.updateProjectionMatrix();
     this.hud.clearRect(0, 0, this.w, this.h);
   }
 
@@ -219,7 +243,7 @@ export class Game {
     b.mesh.quaternion.setFromRotationMatrix(m1);
     b.vel.copy(dir).multiplyScalar(BOLT_SPEED);
     b.prev.copy(pos);
-    b.life = BOLT_LIFE; b.team = owner.team; b.owner = owner; b.dmg = dmg;
+    b.life = this.mode === 'cut' ? 3 : BOLT_LIFE; b.team = owner.team; b.owner = owner; b.dmg = dmg;
     this.scene.add(b.mesh);
     this.bolts.push(b);
   }
@@ -248,6 +272,7 @@ export class Game {
     mesh.position.set(0, -1.6, 2).applyQuaternion(s.quat).add(s.pos);
     mesh.quaternion.copy(s.quat);
     this.scene.add(mesh);
+    if (s.isPlayer) this.stats.shots += 2;
     this.missiles.push({
       mesh, pos: mesh.position, quat: mesh.quaternion, target, team: s.team, owner: s,
       speed: torpedo ? 300 : Math.max(380, s.speed + 150), maxSpeed: torpedo ? 300 : 620, turn: torpedo ? 0.7 : (s.team === 0 ? 2.6 : 1.35),
@@ -301,6 +326,7 @@ export class Game {
     this.fx.flash(s.pos, 120, new THREE.Color(2, 3, 5), 0.6);
     this.fx.ring(s.pos, 40, new THREE.Color(1, 2, 4), 0.6);
     this.scene.remove(s.mesh);
+    if (!s.isPlayer && !s.cut) disposeObj(s.mesh);
     for (const P of this.pilots) if (P.target === s) P.target = null;
   }
 
@@ -315,6 +341,7 @@ export class Game {
     } else {
       this.fx.explode(s.pos, 1.3);
       this.scene.remove(s.mesh);
+      if (!s.isPlayer) disposeObj(s.mesh);
       this.audio.explosion(vol * 0.7);
     }
     if (s.isPlayer) {
@@ -515,7 +542,7 @@ export class Game {
     if (c.throttleSet != null) { P.throttle = c.throttleSet; c.throttleSet = null; }
     P.throttle = Math.min(1, Math.max(0, P.throttle + c.throttleRate * dt * 0.8));
     const sy = c.y * (this.invert ? 1 : -1);
-    const rate = def.turn * (c.boosting ? 0.7 : 1);
+    const rate = def.turn * (P.boosting ? 0.7 : 1);
     q1.setFromAxisAngle(AX, -sy * rate * dt);
     q2.setFromAxisAngle(AY, -c.x * rate * dt);
     p.quat.multiply(q1).multiply(q2).normalize();
@@ -523,7 +550,9 @@ export class Game {
     p.mesh.userData.body.rotation.z = p.bank;
     p.mesh.userData.body.rotation.x = -sy * 0.12;
 
-    const boosting = c.boosting && P.energy > 0.02;
+    if (P.energy <= 0.02) P.boostLock = true;
+    if (P.boostLock && (P.energy > 0.3 || !c.boosting)) P.boostLock = false;
+    const boosting = c.boosting && !P.boostLock && P.energy > 0.02;
     if (boosting) P.energy = Math.max(0, P.energy - dt * 0.22);
     else P.energy = Math.min(1, P.energy + dt * 0.1);
     P.boosting = boosting;
@@ -541,7 +570,7 @@ export class Game {
       t3.copy(P.leadPoint).sub(p.pos).normalize();
       if (!tg.def.capital && dist < 1100 && t3.dot(t1) > 0.9975) P.aimLocked = true;
     }
-    if (c.firing) this.fire(p, P.aimLocked ? t3.clone() : t1.clone());
+    if (c.firing) this.fire(p, P.aimLocked ? t3 : t1);
 
     for (const e of c.take()) {
       if (e === 'missile') this.playerMissile(P);
@@ -727,8 +756,7 @@ export class Game {
       }
     }
     if (idx > 0) { this.audio.warn(); this.setBanner('NEUE FEINDWELLE'); }
-    const line = nav.onWave?.[idx];
-    if (line) this.ui.comm(line.who, line.text);
+    if (nav.type !== 'survive' || this.mission.wave < nav.waves.length) this.say([nav.onWave?.[idx]]);
   }
 
   spawnPickups(nav) {
@@ -736,7 +764,14 @@ export class Game {
     const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 3, 1.4) });
     for (let i = 0; i < nav.pickups; i++) {
       const a = (i / nav.pickups) * Math.PI * 2 + rnd(-0.3, 0.3);
-      const pos = nav._pos.clone().add(new THREE.Vector3(Math.cos(a) * rnd(250, 520), rnd(-120, 120), Math.sin(a) * rnd(250, 520)));
+      let pos;
+      for (let tries = 0; tries < 40; tries++) {
+        const r = rnd(250, 520 + tries * 15);
+        pos = nav._pos.clone().add(new THREE.Vector3(Math.cos(a) * r, rnd(-120, 120), Math.sin(a) * r));
+        const clear = this.asteroids.every((ast) => ast.pos.distanceTo(pos) > ast.radius + 70)
+          && this.ships.every((c) => !c.def.capital || this.boxDist(c, pos, t3) > 60);
+        if (clear) break;
+      }
       const g = new THREE.Group();
       g.add(new THREE.Mesh(geo, mat));
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(0.5, 2.2, 1), blending: THREE.AdditiveBlending, depthWrite: false }));
@@ -747,6 +782,9 @@ export class Game {
     }
   }
 
+  /** Send scripted radio lines, honouring if/ifNot conditions. */
+  say(lines) { lines?.forEach((l) => { if (l && passes(l, this.flags)) this.ui.comm(l.who, l.text); }); }
+
   fail(reason) {
     if (this.failReason) return;
     this.failReason = reason; this.failT = 3;
@@ -756,12 +794,24 @@ export class Game {
 
   completeNav(nav) {
     const m = this.mission;
-    nav.onClear?.forEach((l) => this.ui.comm(l.who, l.text));
-    if (nav.type === 'survive') for (const s of this.ships) if (s.alive && s.team === 1) this.jumpOut(s);
+    this.say(nav.onClear);
+    const last = m.navIdx + 1 >= this.def.navs.length;
+    // objective-driven navs end the local fight: remaining enemies retreat
+    if (nav.type && nav.type !== 'clear' || (last && this.def.noReturn)) {
+      for (const s of this.ships) if (s.alive && s.team === 1) this.jumpOut(s);
+      for (const mi of this.missiles) if (mi.team === 1) mi.life = 0;
+    }
+    for (const p of this.pickups) if (!p.got) this.scene.remove(p.mesh);
+    this.pickups = []; m.dockWave = false; m.courier = null;
     m.timer = null; m.docking = false; m.prog = 0;
     m.navIdx++;
     if (m.navIdx < this.def.navs.length) { m.phase = 'travel'; this.activateNav(m.navIdx); this.setBanner('SEKTOR GESICHERT'); }
-    else if (this.def.noReturn) { m.phase = 'done'; m.endT = 4; this.setBanner('MISSIONSZIELE ERFÜLLT'); }
+    else if (this.def.noReturn) {
+      m.phase = 'done';
+      const talk = (nav.onClear || []).filter((l) => passes(l, this.flags)).reduce((a, l) => a + 2.4 + l.text.length * 0.045, 0);
+      m.endT = Math.max(4, talk + 1.5);
+      this.setBanner('MISSIONSZIELE ERFÜLLT');
+    }
     else { m.phase = 'return'; this.setBanner('MISSIONSZIELE ERFÜLLT'); }
     this.audio.beep(1200, 0.2);
   }
@@ -770,6 +820,12 @@ export class Game {
     const m = this.mission, def = this.def;
     this.stats.time += dt;
     if (this.ended) return;
+    if (m.phase === 'done') {
+      for (const P of this.pilots) if (P.ship.alive) { P.ship.hp = Math.max(P.ship.hp, 1); P.ship.shield = P.ship.maxShield; }
+      m.endT -= dt;
+      if (m.endT <= 0) this.end(true);
+      return;
+    }
     for (const P of this.pilots) {
       if (P.ship.alive) continue;
       P.deadT -= dt;
@@ -777,18 +833,18 @@ export class Game {
     }
     const alive = this.alivePilots();
     if (!alive.length) {
-      if (this.pilots.every((P) => P.deadT <= 0)) this.end(false, this.coop ? 'Beide Jäger wurden zerstört. Die Rettungskapseln wurden geborgen.' : 'Dein Jäger wurde zerstört. Du konntest dich mit der Rettungskapsel retten.');
+      if (this.pilots.every((P) => P.deadT <= 0)) this.end(false, this.coop ? 'Beide Jäger wurden zerstört. Die Rettungskapseln wurden geborgen.' : 'Dein Jäger wurde zerstört. Du konntest dich mit der Rettungskapsel retten.', 'death');
       return;
     }
     if (this.protect && !this.protect.alive && !this.failReason) this.fail(`Die ${this.protect.name} wurde zerstört.`);
     if (this.failReason) {
       this.failT -= dt;
-      if (this.failT <= 0) this.end(false, this.failReason);
+      if (this.failT <= 0) this.end(false, this.failReason, 'objective');
       return;
     }
-    if (m.phase === 'done') { m.endT -= dt; if (m.endT <= 0) this.end(true); return; }
     const near = (pos, r) => alive.some((P) => P.ship.pos.distanceTo(pos) < r);
     if (m.phase === 'return') {
+      if (!this.carrier.alive) return this.fail('Die TUS Aurora wurde zerstört.');
       if (near(this.carrier.pos, 750)) this.end(true);
       return;
     }
@@ -800,7 +856,7 @@ export class Game {
     if (m.phase === 'travel') {
       const np = this.navPos();
       if (nav.type === 'escape') {
-        if (near(np, 650)) { nav.onArrive?.forEach((l) => this.ui.comm(l.who, l.text)); this.completeNav(nav); }
+        if (near(np, 650)) { this.say(nav.onArrive); this.completeNav(nav); }
         return;
       }
       if (near(np, 2500)) {
@@ -820,13 +876,13 @@ export class Game {
           m.prison.name = nav.name;
         }
         this.spawnWave(nav, 0);
-        nav.onArrive?.forEach((l) => this.ui.comm(l.who, l.text));
+        this.say(nav.onArrive);
       }
       return;
     }
 
     // ---- fight phase ----
-    const hostiles = this.hostileCount();
+    const hostiles = this.hostileCount() - (m.courier?.alive ? 1 : 0);
     const lastWave = m.wave >= nav.waves.length - 1;
     // wave progression
     if (hostiles === 0 && (!lastWave || nav.type === 'survive')) {
@@ -867,7 +923,7 @@ export class Game {
       case 'dock':
         if (!m.docking && lastWave && hostiles === 0) {
           m.docking = true; m.prog = 0;
-          nav.onDock?.forEach((l) => this.ui.comm(l.who, l.text));
+          this.say(nav.onDock);
           this.setBanner('ANDOCKEN FREIGEGEBEN');
         }
         if (m.docking) {
@@ -884,11 +940,12 @@ export class Game {
     if (done) this.completeNav(nav);
   }
 
-  end(win, reason) {
+  /** cause: 'death' (all pilots down → retry) or 'objective' (story may branch). */
+  end(win, reason, cause = null) {
     if (this.ended) return;
     this.ended = true;
     this.audio.stopEngine();
-    this.ui.missionEnd(win, reason, this.stats);
+    this.ui.missionEnd(win, reason, this.stats, cause);
   }
 
   // ---------- frame ----------
@@ -922,6 +979,7 @@ export class Game {
       return;
     }
     if (!this.paused && !this.frozen) this.update(dt);
+    else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); P.ctrl.take(); }
     const split = this.pilots.length > 1;
     r.setScissorTest(split);
     this.hud.clearRect(0, 0, this.w, this.h);
@@ -1031,6 +1089,7 @@ export class Game {
         this.fx.explode(s.pos, 9);
         this.fx.flash(s.pos, 1400, new THREE.Color(4, 3, 2), 1.2);
         this.scene.remove(s.mesh);
+        disposeObj(s.mesh);
         this.dying.splice(i, 1);
         for (const P of this.pilots) P.shake = Math.max(P.shake, 1);
         this.audio.explosion(0.9, true);
@@ -1051,7 +1110,12 @@ export class Game {
           const r = s.radius + 4;
           if (s.def.capital) {
             if (pos.distanceToSquared(s.pos) > r * r) continue;
-            if (this.boxDist(s, pos, t1) < 2.5) { this.damage(s, b.dmg, b.owner, pos); hit = true; break; }
+            let hp = null;
+            for (const k of [0.25, 0.5, 0.75, 1]) {
+              t2.copy(b.prev).lerp(pos, k);
+              if (this.boxDist(s, t2, t1) < 2.5) { hp = t2; break; }
+            }
+            if (hp) { this.damage(s, b.dmg, b.owner, hp); hit = true; break; }
           } else {
             t1.copy(pos).sub(b.prev);
             const len2 = t1.lengthSq();
@@ -1110,6 +1174,7 @@ export class Game {
         this.fx.explode(m.pos, m.torpedo ? 1.6 : 0.8);
         this.audio.explosion(Math.max(0, 0.6 - this.ear(m.pos) / 2500));
         this.scene.remove(m.mesh);
+        disposeObj(m.mesh);
         this.missiles.splice(i, 1);
       }
     }

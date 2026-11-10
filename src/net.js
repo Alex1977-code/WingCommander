@@ -62,31 +62,45 @@ export async function startHost(onDevice, onStatus) {
   const open = () => new Promise((resolve, reject) => {
     const code = randomCode();
     const peer = new Peer(PREFIX + code, peerOptions());
-    peer.on('open', () => resolve({ peer, code }));
-    peer.on('error', (e) => {
-      if (e.type === 'unavailable-id' && tries++ < 4) { peer.destroy(); open().then(resolve, reject); }
+    const onErr = (e) => {
+      peer.off('error', onErr);
+      peer.destroy();
+      if (e.type === 'unavailable-id' && tries++ < 4) open().then(resolve, reject);
       else { onStatus?.('error', e.type || String(e)); reject(e); }
-    });
+    };
+    peer.on('error', onErr);
+    peer.on('open', () => { peer.off('error', onErr); resolve({ peer, code }); });
   });
   const { peer, code } = await open();
   peer.on('connection', (conn) => {
-    conn.on('open', () => onDevice(wrapPeerConn(conn), conn.metadata?.name));
+    conn.on('open', () => onDevice(wrapPeerConn(conn), typeof conn.metadata?.name === 'string' ? conn.metadata.name.slice(0, 24) : 'Handy'));
   });
-  peer.on('disconnected', () => { onStatus?.('reconnect'); try { peer.reconnect(); } catch { /* ignore */ } });
+  // after the lobby is open: report problems, reconnect with backoff
+  let delay = 1000;
+  peer.on('error', (e) => onStatus?.('error', e.type || String(e)));
+  peer.on('open', () => { delay = 1000; onStatus?.('open', code); });
+  peer.on('disconnected', () => {
+    onStatus?.('reconnect');
+    setTimeout(() => { if (!peer.destroyed) try { peer.reconnect(); } catch { /* ignore */ } }, delay);
+    delay = Math.min(15000, delay * 2);
+  });
   onStatus?.('open', code);
   return { code, url: padUrl(code), close: () => peer.destroy() };
 }
 
 /** Connects a phone controller to a host code. */
-export async function connectPad(code, name, onStatus) {
+export async function connectPad(code, name) {
   const { Peer } = await import('peerjs');
   return new Promise((resolve, reject) => {
     const peer = new Peer(peerOptions());
-    peer.on('error', (e) => { onStatus?.('error', e.type || String(e)); reject(e); });
+    let settled = false;
+    const failure = (e) => { if (settled) return; settled = true; clearTimeout(timer); peer.destroy(); reject(e); };
+    const timer = setTimeout(() => failure(new Error('timeout')), 15000);
+    peer.on('error', failure);
     peer.on('open', () => {
-      const conn = peer.connect(PREFIX + code.toUpperCase(), { metadata: { name }, serialization: 'json' });
-      conn.on('open', () => resolve(wrapPeerConn(conn)));
-      conn.on('error', (e) => reject(e));
+      const conn = peer.connect(PREFIX + code.toUpperCase(), { metadata: { name: String(name).slice(0, 24) }, serialization: 'json', reliable: true });
+      conn.on('open', () => { if (settled) return; settled = true; clearTimeout(timer); resolve(wrapPeerConn(conn)); });
+      conn.on('error', failure);
     });
   });
 }

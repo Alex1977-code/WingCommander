@@ -139,6 +139,7 @@ export function createEnvironment(scene, renderer, opts) {
   envScene.add(sunBall);
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envRT = pmrem.fromScene(envScene, 0.02, 0.1, 200);
+  envScene.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
   scene.environment = envRT.texture;
   scene.environmentIntensity = 1.0;
   pmrem.dispose();
@@ -178,8 +179,9 @@ const ROCK_GEOS = [];
 let rockMat = null;
 export function createAsteroids(scene, center, count, spread = 1500) {
   if (!ROCK_GEOS.length) {
-    for (let i = 0; i < 4; i++) ROCK_GEOS.push(asteroidGeometry(i * 3.7 + 1));
+    for (let i = 0; i < 4; i++) { const g = asteroidGeometry(i * 3.7 + 1); g.userData.shared = true; ROCK_GEOS.push(g); }
     rockMat = new THREE.MeshStandardMaterial({ color: 0x6b6258, roughness: 0.95, metalness: 0.1, flatShading: true });
+    rockMat.userData.shared = true;
   }
   const list = [];
   for (let i = 0; i < count; i++) {

@@ -248,7 +248,7 @@ body.coop #stick-zone, body.coop #stick-base, body.coop .rbtn, body.coop #thrott
 
 .rbtn, .hbtn {
   position: absolute; font: 700 10px var(--display); letter-spacing: .08em; color: #dff4ff; touch-action: none; cursor: pointer;
-  border: 1.5px solid rgba(127, 214, 255, .45); background: rgba(10, 26, 44, .45); backdrop-filter: blur(3px);
+  border: 1.5px solid rgba(127, 214, 255, .45); background: rgba(10, 26, 44, .55);
 }
 .rbtn { border-radius: 50%; font-size: 9px; }
 .rbtn.down { background: rgba(127, 214, 255, .4); transform: scale(.94); }
