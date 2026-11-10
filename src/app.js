@@ -2,6 +2,7 @@ import { Game, PILOT_COLORS } from './game.js';
 import { InputHub } from './input.js';
 import { Audio } from './audio.js';
 import { SHIPS } from './ships.js';
+import { warmHands } from './hand.js';
 import { CHARS, MISSIONS, MISSION_BY_ID, INTRO, ENDINGS, CUTSCENES, ACTS, rankFor } from './campaign.js';
 import { passes } from './cutscene.js';
 import { decode, scramble, glitchTitle, countUp, Hologram, Waveform, decorate, reduced, setLabel } from './textfx.js';
@@ -254,6 +255,7 @@ document.addEventListener('click', (e) => { if (busy) { e.stopPropagation(); e.p
 document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('button'); if (b) setTimeout(() => b.blur(), 0); });
 
 const game = new Game($('view'), $('hud'), audio, ui);
+setTimeout(warmHands, 1500); // sculpt the cockpit hands while the title screen idles
 game.invert = settings.invert;
 game.sens = settings.sens;
 game.view = settings.view;

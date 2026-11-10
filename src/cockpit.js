@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildShip } from './ships.js';
+import { gripHandGeometry, throttleHandGeometry } from './hand.js';
 
 const v = new THREE.Vector3(), v2 = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEG = Math.PI / 180;
@@ -146,27 +147,6 @@ function dymo(g, text, x, y, h, color = '#151515') {
   g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(0, 0, w, h * 0.18);
   g.fillStyle = 'rgba(240,240,240,.92)'; g.textBaseline = 'middle'; g.fillText(text, h * 0.4, h * 0.54);
   g.restore();
-}
-
-/** bare skin: warm base tone, mottling, pores and fine creases */
-function skinTexture() {
-  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
-  const g = c.getContext('2d');
-  g.fillStyle = '#b27a5c'; g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 260; i++) {
-    const x = rnd(0, S), y = rnd(0, S), rr = rnd(6, 40);
-    const gr = g.createRadialGradient(x, y, 0, x, y, rr);
-    const warm = Math.random() < 0.6;
-    gr.addColorStop(0, warm ? `rgba(170,80,65,${rnd(0.04, 0.12)})` : `rgba(235,195,160,${rnd(0.04, 0.1)})`);
-    gr.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = gr; g.fillRect(x - rr, y - rr, rr * 2, rr * 2);
-  }
-  for (let i = 0; i < 3500; i++) { g.fillStyle = `rgba(110,60,45,${rnd(0.04, 0.12)})`; g.fillRect(rnd(0, S), rnd(0, S), 1, 1); }
-  // faint veins
-  for (let i = 0; i < 8; i++) { let x = rnd(0, S), y = rnd(0, S); g.strokeStyle = 'rgba(90,90,140,.1)'; g.lineWidth = rnd(1.5, 3); g.beginPath(); g.moveTo(x, y); for (let k = 0; k < 6; k++) { x += rnd(-14, 14); y += rnd(8, 22); g.lineTo(x, y); } g.stroke(); }
-  for (let i = 0; i < 90; i++) { const x = rnd(0, S), y = rnd(0, S); g.strokeStyle = `rgba(130,70,55,${rnd(0.08, 0.2)})`; g.lineWidth = 0.6; g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + rnd(-6, 6), y + rnd(2, 5), x + rnd(-10, 10), y + rnd(4, 10)); g.stroke(); }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  return t;
 }
 
 function smudgeTexture() {
@@ -335,7 +315,7 @@ export class Cockpit {
     this.cautionMat = new THREE.MeshStandardMaterial({ color: 0x401014, emissive: 0x000000, roughness: 0.4 });
     this.hudEdge = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 0.8), toneMapped: false });
     // the pilot's bare hands (skin with a soft sheen standing in for subsurface scattering), nails, flight-suit sleeves
-    this.skin = new THREE.MeshPhysicalMaterial({ color: 0xc9a090, map: skinTexture(), roughness: 0.62, metalness: 0, sheen: 0.35, sheenColor: new THREE.Color(0.8, 0.35, 0.28), sheenRoughness: 0.6, envMapIntensity: 0.35, side: THREE.DoubleSide });
+    this.skin = new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.58, metalness: 0, sheen: 0.25, sheenColor: new THREE.Color(0.8, 0.35, 0.28), sheenRoughness: 0.6, envMapIntensity: 0.35, side: THREE.DoubleSide });
     this.nail = new THREE.MeshStandardMaterial({ color: 0xd8a898, roughness: 0.3, metalness: 0, envMapIntensity: 0.5, side: THREE.DoubleSide });
     this.cuffMat = new THREE.MeshStandardMaterial({ color: 0x23271f, roughness: 0.9, metalness: 0 });
     const ws = wornTexture('#3b3a2e', { rivets: false, grime: 1.2 });
@@ -410,7 +390,7 @@ export class Cockpit {
   build(aspect, fov) {
     if (Math.abs(aspect - this.aspect) < 0.01 && fov === this.fov) return;
     this.aspect = aspect; this.fov = fov;
-    for (const c of [...this.rig.children]) { this.rig.remove(c); c.traverse((o) => o.geometry?.dispose()); }
+    for (const c of [...this.rig.children]) { this.rig.remove(c); c.traverse((o) => { if (!o.geometry?.userData.shared) o.geometry?.dispose(); }); }
     const th = Math.tan((fov * Math.PI) / 360);
     const S = (fx, fy, d) => new THREE.Vector3(fx * th * aspect * d, fy * th * d, -d);
     const tube = (pts, r, mat, parent = this.rig) => { const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, r, 10), mat); parent.add(m); return m; };
@@ -537,8 +517,8 @@ export class Cockpit {
     this.rig.add(thr); this.lever = lever;
     // forearms: from each wrist back to an elbow below the field of view
     this.arms = {};
-    const armGeo = new THREE.CylinderGeometry(0.03, 0.04, 1, 16, 1, true); armGeo.translate(0, 0.5 + 0.035, 0);
-    const cuffGeo = new THREE.CylinderGeometry(0.03, 0.037, 0.03, 16); cuffGeo.translate(0, 0.022, 0);
+    const armGeo = new THREE.CylinderGeometry(0.028, 0.038, 1, 16, 1, true); armGeo.translate(0, 0.5 + 0.035, 0);
+    const cuffGeo = new THREE.CylinderGeometry(0.026, 0.031, 0.026, 18); cuffGeo.translate(0, 0.024, 0);
     for (const k of ['stick', 'thr', 'yokeL', 'yokeR']) {
       const m = new THREE.Mesh(armGeo, this.sleeve); m.frustumCulled = false; this.rig.add(m);
       const c = new THREE.Mesh(cuffGeo, this.cuffMat); m.userData.cuff = c; this.rig.add(c);
@@ -548,35 +528,6 @@ export class Cockpit {
     this.applyStyle();
   }
 
-  /** capsule from a to b (a finger bone, the thumb, the wrist) */
-  bone(parent, a, b, r, mat = this.skin) {
-    const d = new THREE.Vector3().subVectors(b, a), len = d.length();
-    const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.0005, len), 5, 12), mat);
-    m.position.addVectors(a, b).multiplyScalar(0.5);
-    m.quaternion.setFromUnitVectors(UP, d.normalize());
-    parent.add(m);
-    return m;
-  }
-
-  /** fingernail on the back of the last bone, out = direction the back of the finger faces */
-  fingernail(parent, a, b, r, out) {
-    const along = new THREE.Vector3().subVectors(b, a), len = along.length(); along.normalize();
-    const z = out.clone().addScaledVector(along, -out.dot(along)).normalize();
-    const x = new THREE.Vector3().crossVectors(along, z);
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), this.nail);
-    m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, along, z));
-    m.scale.set(r * 0.72, len * 0.42 + r * 0.5, r * 0.22);
-    m.position.copy(a).lerp(b, 0.62).addScaledVector(z, r * 0.86);
-    parent.add(m);
-  }
-
-  ellipsoid(parent, pos, rad, rot = null) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), this.skin);
-    m.position.copy(pos); m.scale.copy(rad); if (rot) m.rotation.set(...rot);
-    parent.add(m);
-    return m;
-  }
-
   /**
    * Bare hand wrapped round a vertical grip of radius r (grip axis = local y):
    * three bones per finger curling round the grip, knuckles standing off, nails,
@@ -584,34 +535,12 @@ export class Cockpit {
    * side 1 = right hand (knuckles outboard on +x), -1 = mirrored left hand.
    */
   gripHand(r, side) {
-    const h = new THREE.Group(), V = THREE.Vector3;
-    const P = (a, rad, y) => new V(Math.cos(a) * rad, y, -Math.sin(a) * rad);
-    // [height on the grip, finger radius, length scale]: index, middle, ring, little finger
-    [[0.029, 0.0084, 1.0], [0.0105, 0.0088, 1.07], [-0.008, 0.0083, 1.0], [-0.025, 0.0072, 0.8]].forEach(([y, fr, ls]) => {
-      const ring = r + fr * 0.95;
-      const a0 = -0.3, a1 = a0 + (0.042 * ls) / ring, a2 = a1 + (0.025 * ls) / ring, a3 = Math.min(3.35, a2 + (0.02 * ls) / ring);
-      const K = P(a0, ring + 0.011, y + 0.002), A = P(a1, ring, y), B = P(a2, ring, y - 0.002), C = P(a3, ring * 0.97, y - 0.004);
-      this.bone(h, K, A, fr * 1.1); this.bone(h, A, B, fr); this.bone(h, B, C, fr * 0.9);
-      this.fingernail(h, B, C, fr * 0.9, new V(C.x + B.x, 0, C.z + B.z).normalize());
-      // knuckle bumps on the joints and a tendon running back over the hand
-      const kb = K.clone().add(new V(0.004, 0, 0.002)); this.ellipsoid(h, kb, new V(fr * 0.9, fr * 1.05, fr * 0.9));
-      for (const J of [A, B]) { const o = new V(J.x, 0, J.z).normalize().multiplyScalar(fr * 0.45); this.ellipsoid(h, J.clone().add(o), new V(fr * 0.8, fr * 0.85, fr * 0.8)); }
-      this.bone(h, K.clone().add(new V(0.002, 0, 0.004)), new V(r + 0.024, y * 0.35, 0.068), 0.0032);
-    });
-    // back of the hand, palm against the grip, thumb ball
-    this.ellipsoid(h, new V(r + 0.009, 0.001, 0.047), new V(0.016, 0.041, 0.043), [0, -0.12, 0]);
-    this.ellipsoid(h, new V(r - 0.009, -0.004, 0.03), new V(0.016, 0.035, 0.015));
-    this.ellipsoid(h, new V(-0.006, 0.022, 0.036), new V(0.015, 0.018, 0.023), [0.3, 0, 0]);
-    // thumb over the top of the grip (on the hat switch of the stick)
-    const top = r + 0.03;
-    const T0 = new V(-0.006, 0.028, 0.038), T1 = new V(-0.01, top - 0.008, 0.02), T2 = new V(-0.006, top + 0.002, 0.002), T3 = new V(0.001, top + 0.001, -0.012);
-    this.bone(h, T0, T1, 0.0112); this.bone(h, T1, T2, 0.0098); this.bone(h, T2, T3, 0.009);
-    this.fingernail(h, T2, T3, 0.009, new V(0, 1, 0.1));
-    // wrist
-    const W0 = new V(r + 0.007, -0.004, 0.07), W1 = new V(r + 0.009, -0.008, 0.097);
-    this.bone(h, W0, W1, 0.021);
-    const wrist = new THREE.Object3D(); wrist.position.copy(W1); h.add(wrist);
-    h.userData.wrist = wrist;
+    const h = new THREE.Group();
+    const { geometry, wrist } = gripHandGeometry();
+    if (r !== 0.017) h.scale.setScalar(r / 0.017 * 0.5 + 0.5);
+    h.add(new THREE.Mesh(geometry, this.skin));
+    const w = new THREE.Object3D(); w.position.copy(wrist); h.add(w);
+    h.userData.wrist = w;
     if (side < 0) h.scale.x = -1;
     return h;
   }
@@ -619,26 +548,10 @@ export class Cockpit {
   /** left hand resting on the throttle knob: palm on top, fingers curled over the front edge, thumb along the side, pilot's watch */
   throttleHand() {
     const h = new THREE.Group(), V = THREE.Vector3;
-    // index finger next to the thumb (+x, inboard), little finger outboard
-    [[0.021, 0.0084, 1.0], [0.0072, 0.0088, 1.06], [-0.0075, 0.0083, 1.0], [-0.0215, 0.0072, 0.82]].forEach(([x, fr, ls]) => {
-      const K = new V(x, 0.031, 0.012);
-      const A = K.clone().add(new V(0, -0.003, -0.034 * ls)), B = A.clone().add(new V(0, -0.021 * ls, -0.012 * ls)), C = B.clone().add(new V(0, -0.016 * ls, 0.007 * ls));
-      this.bone(h, K, A, fr * 1.1); this.bone(h, A, B, fr); this.bone(h, B, C, fr * 0.9);
-      this.fingernail(h, B, C, fr * 0.9, new V(0, -0.35, -1));
-      this.ellipsoid(h, K.clone().add(new V(0, 0.005, 0)), new V(fr * 0.95, fr * 0.85, fr * 0.95));
-      this.ellipsoid(h, A.clone().add(new V(0, 0.004, -0.002)), new V(fr * 0.85, fr * 0.8, fr * 0.85));
-      this.bone(h, K.clone().add(new V(0, 0.008, 0.004)), new V(x * 0.4, 0.05, 0.066), 0.0034);
-    });
-    this.ellipsoid(h, new V(0, 0.036, 0.04), new V(0.038, 0.011, 0.04), [0.12, 0, 0]);
-    this.ellipsoid(h, new V(0, 0.023, 0.03), new V(0.034, 0.009, 0.032));
-    this.ellipsoid(h, new V(0.024, 0.027, 0.042), new V(0.012, 0.011, 0.018));
-    const T0 = new V(0.031, 0.028, 0.044), T1 = new V(0.043, 0.02, 0.024), T2 = new V(0.046, 0.011, 0.006), T3 = new V(0.044, 0.005, -0.009);
-    this.bone(h, T0, T1, 0.0112); this.bone(h, T1, T2, 0.0098); this.bone(h, T2, T3, 0.009);
-    this.fingernail(h, T2, T3, 0.009, new V(1, 0.2, 0));
-    const W0 = new V(-0.002, 0.037, 0.066), W1 = new V(-0.004, 0.039, 0.094);
-    this.bone(h, W0, W1, 0.021);
+    const { geometry, wrist: W1 } = throttleHandGeometry();
+    h.add(new THREE.Mesh(geometry, this.skin));
     // chunky pilot's watch on the left wrist
-    const watch = new THREE.Group(); watch.position.copy(W1).add(new V(0, 0.003, -0.012));
+    const watch = new THREE.Group(); watch.position.copy(W1).add(new V(0, 0.001, -0.008));
     const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0225, 0.0045, 6, 24), this.cuffMat); strap.scale.set(1.05, 0.9, 2.2); watch.add(strap);
     const face = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.012, 0.006, 24), this.steel); face.position.y = 0.021; watch.add(face);
     const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.0015, 20), new THREE.MeshStandardMaterial({ color: 0x101214, emissive: 0x0c2a1c, roughness: 0.08, metalness: 0.2 })); glass.position.y = 0.0245; watch.add(glass);
@@ -1279,7 +1192,7 @@ export class Cockpit {
   }
 
   dispose() {
-    this.scene.traverse((o) => { o.geometry?.dispose(); });
+    this.scene.traverse((o) => { if (!o.geometry?.userData.shared) o.geometry?.dispose(); });
     for (const m of [this.metal, this.dark, this.bezel, ...this.decals, this.rubber, this.chrome, this.trim, this.canopyMat, this.cautionMat, this.hudEdge, this.skin, this.nail, this.cuffMat, this.sleeve, this.crackMat, this.sparkMat, this.steel, this.steelDark, this.redCover, ...this.cableMats, this.conduit, ...(this.watchMat ? [this.watchMat] : []), ...this.keys.map((k) => k.mat), ...this.toggles.map((x) => x.led)]) { m.map?.dispose(); m.roughnessMap?.dispose(); m.dispose(); }
     this.envRT?.dispose();
     for (const m of [...this.mfds, ...this.logs, this.annun, this.segPanel, this.barPanel]) { m.tex.dispose(); m.mat.dispose(); }
