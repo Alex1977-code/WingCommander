@@ -489,7 +489,7 @@ export class Game {
     s.cool = s.def.rof;
     const key = s.team === 0 ? 'ally' : 'foe';
     // AI wingmen and allied fighters support the player instead of winning the fight for them
-    const dmg = s.isPlayer || s.team !== 0 || s.def.capital ? s.def.dmg : s.def.dmg * (s.wingman ? 0.35 : 0.5);
+    const dmg = s.isPlayer || s.team !== 0 || s.def.capital ? s.def.dmg : s.def.dmg * (s.wingman ? 0.25 : 0.35);
     for (const g of s.def.guns) {
       t4.set(g[0], g[1], g[2]).applyQuaternion(s.quat).add(s.pos);
       this.spawnBolt(t4, dir, s, dmg, key);
@@ -563,6 +563,7 @@ export class Game {
       if (dmg > 5) P.ctrl.buzz?.(hadShield ? 25 : 60);
     } else if (by?.isPlayer) {
       this.stats.hits++;
+      s.playerHit = { by, t: performance.now() };
     }
     if (s.def.ace && !this.def.navs[this.mission.navIdx]?.final && s.hp < s.maxHp * 0.4) return this.jumpOut(s);
     if (s.hp <= 0) {
@@ -605,6 +606,7 @@ export class Game {
       return;
     }
     if (s.team === 1) {
+      if (!by?.isPlayer && s.playerHit && performance.now() - s.playerHit.t < 8000 && s.playerHit.by.alive) by = s.playerHit.by;
       if (by?.isPlayer) {
         this.stats.kills++; this.stats.score += s.def.score || 100;
         this.stats.per[by.pilot.idx]++;
@@ -647,8 +649,13 @@ export class Game {
       if (d > 6000) continue;
       if (wantCap) d *= o.def.capital ? 0.05 : 1;
       else if (o.def.capital) d *= s.team === 0 ? 2.2 : 4;
-      if (o.isPlayer) d *= 0.75;
-      if (s.wingman && this.pilots.some((P) => P.target === o)) d *= 0.6;
+      // enemy fighters seek out the players - the dogfights are theirs
+      if (o.isPlayer) d *= s.team === 1 && !wantCap ? 0.28 : 0.75;
+      if (s.team === 0 && !o.def.capital) {
+        // allies leave the player's chosen target alone and go after whoever is chasing a player
+        if (this.pilots.some((P) => P.target === o)) d *= 3;
+        if (o.ai?.target?.isPlayer) d *= s.wingman ? 0.45 : 0.7;
+      }
       d *= rnd(0.8, 1.2);
       if (d < bd) { bd = d; best = o; }
     }
@@ -684,7 +691,15 @@ export class Game {
       return;
     }
     ai.retarget -= dt; ai.evadeT -= dt;
-    if (!ai.target || !ai.target.alive || ai.retarget <= 0) { ai.target = this.pickTarget(s); ai.retarget = rnd(3, 6); }
+    if (!ai.target || !ai.target.alive || ai.retarget <= 0) {
+      ai.target = this.pickTarget(s); ai.retarget = rnd(3, 6);
+      // the wingman calls it when it peels an enemy off the player's tail
+      if (s.wingman && ai.target?.ai?.target?.isPlayer && performance.now() - (this.wingCallT || 0) > 25000 && Math.random() < 0.5) {
+        this.wingCallT = performance.now();
+        const P = ai.target.ai.target.pilot;
+        this.ui.comm(s.who, ['Einer an deinem Heck, {cs} – ich hol ihn runter!', 'Ich halte dir den Rücken frei. Du nimmst die vorne!', 'Hab den Verfolger. Konzentrier dich auf dein Ziel!'][Math.random() * 3 | 0].replace('{cs}', () => P?.ship?.name || ''));
+      }
+    }
     const tgt = ai.target;
     const dir = t1;
     let want = def.speed;
@@ -820,8 +835,11 @@ export class Game {
       const dist = Math.sqrt(bd);
       this.fwd(best, t2);
       t3.copy(best.pos).addScaledVector(t2, best.speed * dist / BOLT_SPEED).sub(t1).normalize();
-      t3.add(t4.randomDirection().multiplyScalar(best.def.capital ? 0.03 : 0.05)).normalize();
-      this.spawnBolt(t1, t3, s, s.def.dmg, s.team === 0 ? 'turret' : 'turretFoe');
+      const ally = s.team === 0 && !best.def.capital;
+      // friendly guns hold fire on a fighter that is dogfighting a player up close - that kill is the player's
+      if (ally && this.pilots.some((P) => P.ship.alive && (P.target === best || best.ai?.target === P.ship) && P.ship.pos.distanceTo(best.pos) < 700)) continue;
+      t3.add(t4.randomDirection().multiplyScalar(best.def.capital ? 0.03 : ally ? 0.09 : 0.05)).normalize();
+      this.spawnBolt(t1, t3, s, ally ? s.def.dmg * 0.25 : s.def.dmg, s.team === 0 ? 'turret' : 'turretFoe');
     }
   }
 
