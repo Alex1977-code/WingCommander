@@ -180,7 +180,7 @@ function roundedRect(w, h, r, depth, bevel = 0.004) {
  * glowing outline and faint panel lines, cached per ship type and tint.
  */
 const OUTLINES = {};
-function shipOutline(type) {
+export function shipOutline(type) {
   if (OUTLINES[type]) return OUTLINES[type];
   const N = 256;
   const root = buildShip(type); root.updateMatrixWorld(true);

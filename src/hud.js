@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { shipOutline } from './cockpit.js';
 
 const v = new THREE.Vector3();
 const GL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@$<>/\\|=+*';
@@ -301,6 +302,15 @@ export function drawHud(ctx, g, P) {
   ctx.fillStyle = C.warn;
   ctx.fillText(`TORP ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
+  // --- ship status (left) and wingman status (right) as green line schematics ---
+  shipStatus(ctx, p, P, px, by + (bh + 4 * s) * 3 + 22 * s, 74 * s, s, t, false);
+  const wm = g.wingman;
+  if (wm && solo) {
+    // on touch screens keep clear of the throttle slider (right edge) and the ZIEL button below
+    const touch = document.body.classList.contains('touch'), D = (touch ? 60 : 74) * s;
+    shipStatus(ctx, wm, null, w - D - (touch ? 62 : 12 * s) - safeR, (tg && tg.alive ? (touch ? 96 : 128) : 58) * s, D, s, t, true);
+  }
+
   // --- target panel (top-right) ---
   if (tg && tg.alive) {
     const tw = 128 * s, tx = w - tw - 12 * s - safeR, ty = (solo || P.vy === 0 ? 58 : 26) * s;
@@ -531,5 +541,61 @@ function seqHud(ctx, g, P, w, h, s, t) {
       ctx.fillText(`STOPPMARKE ${Math.round(dist)} M · ${Math.round(p.speed)} M/S`, cx, gy + R + 14 * s);
     }
   }
+  ctx.restore();
+}
+
+/**
+ * Line schematic of a ship traced from its model: green while healthy, amber when damaged,
+ * blinking red when critical; four shield sectors around it (flashing on the side that was hit)
+ * and the pilot's hull hit marks. Used for the own ship (left) and the wingman (right).
+ */
+function shipStatus(ctx, ship, P, x, y, D, s, t, wing) {
+  if (!ship?.def) return;
+  const ol = shipOutline(ship.type);
+  const alive = ship.alive;
+  const hk = alive ? Math.max(0, ship.hp / ship.maxHp) : 0, sk = ship.maxShield ? Math.max(0, ship.shield / ship.maxShield) : 0;
+  const G = '#6dffb0', A = '#ffc857', R = '#ff4d6d';
+  const col = !alive ? 'rgba(160,170,180,.6)' : hk > 0.65 ? G : hk > 0.3 ? A : (Math.sin(t * 9) > -0.2 ? R : '#7a1020');
+  ctx.save();
+  // frame corners
+  ctx.strokeStyle = 'rgba(109,255,176,.35)'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + D, y, -1, 1], [x, y + D, 1, -1], [x + D, y + D, -1, -1]]) { ctx.moveTo(cx, cy + dy * 8 * s); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * 8 * s, cy); }
+  ctx.stroke();
+  // shield sectors
+  const mx = x + D / 2, my = y + D / 2, rx = D * 0.47, ry = D * 0.5;
+  if (alive && ship.maxShield) {
+    const now = performance.now();
+    for (const [side, a0, a1] of [['front', -Math.PI * 0.75, -Math.PI * 0.25], ['right', -Math.PI * 0.25, Math.PI * 0.25], ['back', Math.PI * 0.25, Math.PI * 0.75], ['left', Math.PI * 0.75, Math.PI * 1.25]]) {
+      const flash = P && now - (P.hitSide?.[side] || 0) < 500;
+      ctx.strokeStyle = flash ? '#ffffff' : sk > 0.5 ? 'rgba(109,255,176,.8)' : sk > 0.15 ? 'rgba(255,200,87,.8)' : 'rgba(255,77,109,.6)';
+      ctx.globalAlpha = sk <= 0.01 && !flash ? 0.2 : 1;
+      ctx.lineWidth = (flash ? 3 : 2) * s;
+      ctx.beginPath(); ctx.ellipse(mx, my, rx, ry, 0, a0 + 0.08, a1 - 0.08); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  // traced outline in the status colour
+  const S = D * 0.8;
+  ctx.shadowColor = col; ctx.shadowBlur = 6;
+  ctx.drawImage(ol.tint(col), mx - S / 2, my - S / 2, S, S);
+  ctx.shadowBlur = 0;
+  // hull hit marks (own ship)
+  if (P?.marks) {
+    const k = S / ol.N;
+    for (const m of P.marks) {
+      const [u, v2] = ol.map(m.x, m.z);
+      const hx = mx - S / 2 + u * k, hy = my - S / 2 + v2 * k, fresh = performance.now() - m.t < 700;
+      ctx.strokeStyle = fresh ? '#ffffff' : R; ctx.lineWidth = 1.6 * s;
+      ctx.beginPath(); ctx.moveTo(hx - 3 * s, hy - 3 * s); ctx.lineTo(hx + 3 * s, hy + 3 * s); ctx.moveTo(hx + 3 * s, hy - 3 * s); ctx.lineTo(hx - 3 * s, hy + 3 * s); ctx.stroke();
+    }
+  }
+  // caption
+  ctx.font = `700 ${8.5 * s}px ${FONT}`; ctx.textBaseline = 'top'; ctx.textAlign = wing ? 'right' : 'left';
+  const tx = wing ? x + D : x;
+  ctx.fillStyle = col;
+  ctx.fillText(wing ? `${(ship.name || 'FLÜGELMANN').toUpperCase()}` : (ship.def.name || '').toUpperCase(), tx, y + D + 3 * s);
+  ctx.fillStyle = alive ? 'rgba(220,240,255,.85)' : 'rgba(160,170,180,.7)';
+  ctx.fillText(alive ? `S ${Math.round(sk * 100)}% · H ${Math.round(hk * 100)}%` : 'AUSGEFALLEN', tx, y + D + 13 * s);
   ctx.restore();
 }
