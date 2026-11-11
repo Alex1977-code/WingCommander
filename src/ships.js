@@ -37,8 +37,63 @@ function canvasTex(size, draw, srgb = true) {
   t.anisotropy = 4;
   return t;
 }
+/**
+ * Battle and service wear painted over a hull texture: paint chipped down to bare metal along edges,
+ * grime streaks running from seams and rivets, soot and scorch marks, replacement plates in a different
+ * tone, scratches, oil stains. rough = the matching roughness map (worn = rougher, bare metal = smoother).
+ */
+function weather(g, s, rough, k = 1) {
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  // replacement plates: a slightly different tone, fresh rivets
+  for (let i = 0; i < 6 * k; i++) {
+    const x = rnd(0, s), y = rnd(0, s), w = rnd(30, 90), h = rnd(20, 60);
+    const v = Math.random() < 0.5 ? 'rgba(120,128,138,.35)' : 'rgba(205,200,185,.3)';
+    g.fillStyle = v; g.fillRect(x, y, w, h);
+    g.strokeStyle = 'rgba(20,20,22,.6)'; g.lineWidth = 1.5; g.strokeRect(x, y, w, h);
+    g.fillStyle = 'rgba(255,255,255,.4)'; for (let r = 4; r < w - 3; r += 7) { g.fillRect(x + r, y + 3, 1.5, 1.5); g.fillRect(x + r, y + h - 4, 1.5, 1.5); }
+    rough.fillStyle = 'rgba(90,90,90,.6)'; rough.fillRect(x, y, w, h);
+  }
+  // grime streaks running down from seams and rivets
+  for (let i = 0; i < 160 * k; i++) {
+    const x = rnd(0, s), y = rnd(0, s), len = rnd(10, 70), w = rnd(1, 4);
+    const gr = g.createLinearGradient(x, y, x, y + len);
+    gr.addColorStop(0, `rgba(35,30,25,${rnd(0.15, 0.4)})`); gr.addColorStop(1, 'rgba(35,30,25,0)');
+    g.fillStyle = gr; g.fillRect(x, y, w, len);
+    rough.fillStyle = 'rgba(255,255,255,.12)'; rough.fillRect(x, y, w, len);
+  }
+  // soot and scorch marks (hits, exhaust wash)
+  for (let i = 0; i < 9 * k; i++) {
+    const x = rnd(0, s), y = rnd(0, s), r = rnd(14, 55);
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(10,8,6,.75)'); gr.addColorStop(0.45, 'rgba(45,30,18,.45)'); gr.addColorStop(1, 'rgba(60,40,20,0)');
+    g.fillStyle = gr; g.beginPath(); g.ellipse(x, y, r, r * rnd(0.5, 1), rnd(0, 3), 0, 6.283); g.fill();
+    rough.fillStyle = 'rgba(255,255,255,.35)'; rough.beginPath(); rough.arc(x, y, r * 0.6, 0, 6.283); rough.fill();
+  }
+  // oil / coolant stains
+  for (let i = 0; i < 12 * k; i++) {
+    const x = rnd(0, s), y = rnd(0, s), r = rnd(6, 20);
+    g.fillStyle = `rgba(30,24,40,${rnd(0.12, 0.3)})`; g.beginPath(); g.ellipse(x, y, r, r * 0.6, rnd(0, 3), 0, 6.283); g.fill();
+  }
+  // chipped paint: bright bare-metal flecks, clustered along plate edges
+  for (let i = 0; i < 520 * k; i++) {
+    const edge = Math.random() < 0.6;
+    const x = rnd(0, s), y = edge ? Math.round(rnd(0, 8)) * (s / 8) + rnd(-4, 5) : rnd(0, s);
+    const w = rnd(1, 6), h = rnd(1, 3.5);
+    g.fillStyle = `rgba(225,228,232,${rnd(0.35, 0.85)})`; g.beginPath(); g.ellipse(x, y, w, h, rnd(0, 3), 0, 6.283); g.fill();
+    rough.fillStyle = 'rgba(40,40,40,.8)'; rough.fillRect(x - w / 2, y - h / 2, w, h);
+  }
+  // scratches and scrapes
+  for (let i = 0; i < 90 * k; i++) {
+    const x = rnd(0, s), y = rnd(0, s), a = rnd(-0.6, 0.6), l = rnd(8, 60);
+    g.strokeStyle = `rgba(235,235,235,${rnd(0.15, 0.45)})`; g.lineWidth = rnd(0.5, 1.4);
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+}
+
 function textures() {
   if (TEX) return TEX;
+  const panelRough = document.createElement('canvas'); panelRough.width = panelRough.height = 512;
+  { const r = panelRough.getContext('2d'); r.fillStyle = '#9a9a9a'; r.fillRect(0, 0, 512, 512); }
   const panel = canvasTex(512, (g, s) => {
     g.fillStyle = '#b4b4b4'; g.fillRect(0, 0, s, s);
     for (let i = 0; i < 150; i++) {
@@ -54,6 +109,7 @@ function textures() {
     }
     g.fillStyle = 'rgba(0,0,0,.5)';
     for (let i = 0; i < 300; i++) g.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+    weather(g, s, panelRough.getContext('2d'), 1.2);
   });
   const windows = canvasTex(512, (g, s) => {
     g.fillStyle = '#000'; g.fillRect(0, 0, s, s);
@@ -97,7 +153,11 @@ function textures() {
       for (let i = 0; i < 120; i++) { g.strokeStyle = `rgba(255,255,255,${0.05 + Math.random() * 0.15})`; g.lineWidth = 0.7; const x = Math.random() * s, y = Math.random() * s; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 8); g.stroke(); }
     }
   };
-  const plate = canvasTex(PLATE, (g, s) => plates(g, s, false));
+  const plateRoughC = document.createElement('canvas'); plateRoughC.width = plateRoughC.height = PLATE;
+  const prg = plateRoughC.getContext('2d'); prg.fillStyle = '#8c8c8c'; prg.fillRect(0, 0, PLATE, PLATE);
+  const plate = canvasTex(PLATE, (g, s) => { plates(g, s, false); weather(g, s, prg, 1.5); });
+  const plateRough = new THREE.CanvasTexture(plateRoughC); plateRough.wrapS = plateRough.wrapT = THREE.RepeatWrapping; plateRough.repeat.set(2, 2);
+  const panelRoughT = new THREE.CanvasTexture(panelRough); panelRoughT.wrapS = panelRoughT.wrapT = THREE.RepeatWrapping;
   const plateBump = canvasTex(PLATE, (g, s) => plates(g, s, true), false);
   for (const t of [plate, plateBump]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 2); }
   // squadron codes / alien glyphs for the hull sides
@@ -105,12 +165,17 @@ function textures() {
   const codeUnion = decalTex((g) => {
     g.fillStyle = 'rgba(200,88,26,.95)'; g.fillRect(0, 22, 18, 20); g.fillRect(22, 22, 8, 20);
     g.font = '800 44px Rajdhani, sans-serif'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(235,238,240,.95)'; g.fillText('NF·07', 40, 34);
+    // faded and chipped stencil
+    g.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 260; i++) { g.globalAlpha = Math.random() * 0.9; g.fillRect(Math.random() * 256, Math.random() * 64, 1 + Math.random() * 5, 1 + Math.random() * 3); }
+    g.globalAlpha = 0.35; g.fillRect(0, 0, 256, 64);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
   });
   const glyphAsz = decalTex((g) => {
     g.strokeStyle = 'rgba(255,90,200,1)'; g.lineWidth = 4; g.lineCap = 'round';
     for (let i = 0; i < 6; i++) { const x = 20 + i * 38; g.beginPath(); g.moveTo(x, 12); g.lineTo(x + 14, 32); g.lineTo(x, 52); if (i % 2) { g.moveTo(x + 22, 14); g.lineTo(x + 22, 50); } g.stroke(); }
   });
-  TEX = { panel, windows, plate, plateBump, codeUnion, glyphAsz };
+  TEX = { panel, windows, plate, plateBump, plateRough, panelRough: panelRoughT, codeUnion, glyphAsz };
   return TEX;
 }
 
@@ -135,7 +200,11 @@ function fuselageGeo(noseR, bodyR, len, seg = 12) {
   g.rotateX(Math.PI / 2);
   return g;
 }
+/** blackened, burnt metal round nozzles and gun muzzles */
+const SOOT = new THREE.MeshStandardMaterial({ color: 0x17130f, roughness: 0.95, metalness: 0.3 });
 function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
+  const sootBand = new THREE.CylinderGeometry(r * 1.06, r * 1.0, r * 0.7, 14, 1, true); sootBand.rotateX(Math.PI / 2);
+  mk(group, sootBand, SOOT, x, y, z - r * 0.75);
   const n = new THREE.CylinderGeometry(r, r * 0.8, r * 2.2, 12, 1, true);
   n.rotateX(Math.PI / 2);
   mk(group, n, darkMat, x, y, z);
@@ -165,9 +234,9 @@ const PAL = {
 function mats(p) {
   const t = textures();
   return {
-    hull: new THREE.MeshStandardMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 1.4, metalness: 0.72, roughness: 0.42 }),
+    hull: new THREE.MeshStandardMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 1.4, roughnessMap: t.plateRough, metalness: 0.68, roughness: 0.62 }),
     decal: new THREE.MeshStandardMaterial({ map: p === PAL.union ? t.codeUnion : t.glyphAsz, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, roughness: 0.6, metalness: 0.2, emissive: p === PAL.union ? 0x000000 : 0xffffff, emissiveMap: p === PAL.union ? null : t.glyphAsz, emissiveIntensity: 0.8 }),
-    dark: new THREE.MeshStandardMaterial({ color: p.dark, metalness: 0.8, roughness: 0.5 }),
+    dark: new THREE.MeshStandardMaterial({ color: p.dark, map: t.plate, roughnessMap: t.plateRough, metalness: 0.75, roughness: 0.68 }),
     accent: new THREE.MeshStandardMaterial({ color: p.accent, metalness: 0.5, roughness: 0.4 }),
     canopy: new THREE.MeshStandardMaterial({ color: p.canopy, metalness: 1, roughness: 0.05 }),
     glow: new THREE.MeshBasicMaterial({ color: p.glow }),
@@ -302,7 +371,7 @@ function fighter(o) {
     const bl = new THREE.CylinderGeometry(0.11, 0.13, Math.min(2.6, o.root * 0.35), 8); bl.rotateX(Math.PI / 2);
     mk(g, bl, m.dark, px, py, pz + Math.min(1.3, o.root * 0.17));
     const mz = new THREE.CylinderGeometry(0.19, 0.19, 0.25, 8); mz.rotateX(Math.PI / 2);
-    mk(g, mz, m.dark, px, py, pz + Math.min(2.6, o.root * 0.35));
+    mk(g, mz, SOOT, px, py, pz + Math.min(2.6, o.root * 0.35));
     mk(g, new THREE.BoxGeometry(0.42, 0.08, o.root * 0.45), m.hull, px, py + 0.32, pz);      // cooling fin
   }
   for (const hx of hulls) {
@@ -512,11 +581,11 @@ function capital(type) {
   const union = SHIPS[type].team === 0 || wreck;
   const pal = union ? PAL.union : PAL.asz;
   const hull = new THREE.MeshStandardMaterial({
-    color: union ? 0x8a94a0 : 0x3a2f48, map: t.panel, metalness: 0.7, roughness: 0.5,
+    color: union ? 0x8a94a0 : 0x3a2f48, map: t.panel, roughnessMap: t.panelRough, metalness: 0.66, roughness: 0.66,
     emissiveMap: t.windows, emissive: wreck ? new THREE.Color(0.35, 0.18, 0.08) : union ? new THREE.Color(1.8, 1.5, 0.9) : new THREE.Color(2.4, 0.3, 0.8),
   });
   if (wreck) { hull.color.set(0x4a4f57); hull.roughness = 0.85; }
-  const dark = new THREE.MeshStandardMaterial({ color: union ? 0x30363f : 0x15111c, map: t.panel, metalness: 0.8, roughness: 0.55 });
+  const dark = new THREE.MeshStandardMaterial({ color: union ? 0x30363f : 0x15111c, map: t.panel, roughnessMap: t.panelRough, metalness: 0.75, roughness: 0.7 });
   const glow = new THREE.MeshBasicMaterial({ color: pal.glow });
   const accent = new THREE.MeshStandardMaterial({ color: pal.accent, metalness: 0.4, roughness: 0.5 });
   const strip = new THREE.MeshBasicMaterial({ color: wreck ? new THREE.Color(0.25, 0.08, 0.04) : union ? new THREE.Color(0.6, 1.8, 3) : new THREE.Color(3, 0.3, 0.9) });
