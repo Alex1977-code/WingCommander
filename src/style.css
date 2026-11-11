@@ -260,7 +260,7 @@ body.coop #stick-zone, body.coop #stick-base, body.coop .rbtn, body.coop #thrott
 #btn-fire { right: calc(74px + var(--sar)); bottom: calc(22px + var(--sab)); width: 92px; height: 92px; font-size: 12px; border-color: rgba(255, 138, 42, .85); background: rgba(255, 120, 30, .22); color: #ffd9b8; }
 #btn-fire.down { background: rgba(255, 138, 42, .6); }
 #btn-boost { right: calc(176px + var(--sar)); bottom: calc(16px + var(--sab)); width: 64px; height: 64px; }
-#btn-msl { right: calc(150px + var(--sar)); bottom: calc(92px + var(--sab)); width: 64px; height: 64px; border-color: rgba(255, 200, 87, .7); color: #ffe2a6; }
+#btn-msl { right: calc(196px + var(--sar)); bottom: calc(120px + var(--sab)); width: 64px; height: 64px; border-color: rgba(255, 200, 87, .7); color: #ffe2a6; }
 #btn-tgt { right: calc(78px + var(--sar)); bottom: calc(126px + var(--sab)); width: 58px; height: 58px; }
 #throttle {
   position: absolute; right: calc(14px + var(--sar)); bottom: calc(22px + var(--sab)); width: 40px; height: min(190px, 46vh); touch-action: none;

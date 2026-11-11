@@ -66,7 +66,22 @@ export class TouchKeys {
     hold('btn-fire', 'fireBtn');
     hold('btn-boost', 'boostBtn');
     const tap = (id, ev) => $(id).addEventListener('pointerdown', (e) => { this.events.push(ev); e.preventDefault(); });
-    tap('btn-msl', 'missile'); tap('btn-tgt', 'target'); tap('btn-auto', 'auto'); tap('btn-pause', 'pause'); tap('btn-view', 'view');
+    // missiles fire on a deliberate tap: finger lifted on the button within 0.8 s, so a thumb that
+    // brushes the button while reaching for FEUER does not launch anything
+    {
+      const el = $('btn-msl'); let id = null, t0 = 0, last = 0;
+      el.addEventListener('pointerdown', (e) => { id = e.pointerId; t0 = performance.now(); el.classList.add('down'); el.setPointerCapture(e.pointerId); e.preventDefault(); });
+      const done = (e, ok) => {
+        if (e.pointerId !== id) return;
+        id = null; el.classList.remove('down');
+        const r = el.getBoundingClientRect(), now = performance.now();
+        const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+        if (ok && inside && now - t0 < 800 && now - last > 500) { last = now; this.events.push('missile'); }
+      };
+      el.addEventListener('pointerup', (e) => done(e, true));
+      el.addEventListener('pointercancel', (e) => done(e, false));
+    }
+    tap('btn-tgt', 'target'); tap('btn-auto', 'auto'); tap('btn-pause', 'pause'); tap('btn-view', 'view');
 
     const thr = $('throttle');
     const setThr = (e) => {

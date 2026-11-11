@@ -20,7 +20,7 @@ export const SHIPS = {
   tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [15, 13, 48], dmg: 5, turrets: [[0, 14, 0]] },
   habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
   relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
-  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 230, box: [40, 22, 205], dmg: 7, turrets: [[14, 13.6, 90], [-14, 13.6, 90], [14, 16.6, -60], [-14, 16.6, -60], [0, 23.5, -20], [0, -16.8, 60]] },
+  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 230, box: [40, 22, 205], dmg: 7, turrets: [[14, 13.6, 90], [-14, 13.6, 90], [14, 16.6, -60], [-14, 16.6, -60], [0, 23.5, -20], [0, -30.2, 60]] },
   transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [15, 13, 48], dmg: 6, turrets: [[0, 14, 0]] },
   zerstoerer: { name: 'Zerstörer', team: 1, capital: true, hp: 2100, speed: 18, radius: 135, box: [24, 20, 125], dmg: 8, score: 2000, turrets: [[20, 14, 70], [-20, 14, 70], [0, 22, -20], [0, -18, 20], [0, 18, -90]] },
   dreadnought: { name: 'Apotheose', team: 1, capital: true, hp: 5200, speed: 9, radius: 260, box: [50, 40, 245], dmg: 9, score: 5000, turrets: [[44, 20, 150], [-44, 20, 150], [44, 20, 0], [-44, 20, 0], [0, 44, 60], [0, -40, 60], [0, 44, -120], [0, -40, -120]] },
@@ -273,6 +273,15 @@ function auroraR(z) {
   return P[P.length - 1][1];
 }
 const AW = 1.3, AH = 0.62; // hull cross-section: wide and flat
+/** launch / landing tunnel of the TUS Aurora in carrier coordinates (centre line, half width/height) */
+export const BAY = { y: -23.5, back: 30, mouth: 142, hw: 12, hh: 4.5 };
+/** the bay's signal lamps (shared materials, driven by the game during launch) */
+export const BAY_LIGHTS = {
+  red: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.02, 0.02) }),
+  amber: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.15, 0.02) }),
+  green: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.02, 0.25, 0.06) }),
+};
+for (const m of Object.values(BAY_LIGHTS)) m.userData.keep = true;
 
 function blinker(group, x, y, z, color, rate, phase, size = 5) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -314,8 +323,6 @@ function carrier(g, engines, M) {
   prow.rotateX(Math.PI / 2);
   const puv = prow.attributes.uv; for (let i = 0; i < puv.count; i++) puv.setXY(i, puv.getX(i) / 60, puv.getY(i) / 60);
   mk(g, prow, hull, 0, 9, 0);
-  // keel blade under the prow
-  const keel = mk(g, wingGeo(14, 120, 20, -60, 3), dark, 0, -6, 150); keel.rotation.z = -Math.PI / 2;
   // registry on the prow top and both flanks, livery band
   const regMat = new THREE.MeshStandardMaterial({ map: registryTexture(), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   const top = mk(g, new THREE.PlaneGeometry(56, 9), regMat, 0, 12.6, 120); top.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
@@ -331,11 +338,23 @@ function carrier(g, engines, M) {
   const band = mk(g, new THREE.TorusGeometry(1, 0.045, 6, 40), strip, 0, 20.5, 40); band.scale.set(13.6, 21.8, 1); band.rotation.x = Math.PI / 2;
   mk(g, new THREE.CylinderGeometry(0.5, 0.8, 18, 6), dark, 0, 31, 30);
   mk(g, new THREE.CylinderGeometry(0.4, 0.6, 12, 6), dark, 4, 28, 22);
-  // flight deck: recessed bay under the bow with a glowing mouth and deck lights
-  mk(g, uvBox(34, 7, 120), dark, 0, -15, 80);
-  const bayGlow = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.2, 1.6) });
-  mk(g, new THREE.PlaneGeometry(30, 5), bayGlow, 0, -15, 140.2);
-  for (let z = 30; z < 138; z += 9) for (const sx of [-1, 1]) mk(g, uvBox(1.4, 0.4, 3), strip, sx * 13, -18.7, z);
+  // flight deck: a ventral hangar module with a real, flyable launch/landing tunnel (see BAY)
+  const { y: by, back, mouth, hw, hh } = BAY, len = mouth - back, mid = (mouth + back) / 2;
+  const bayGlow = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.15, 1.05, 0.9) });
+  mk(g, uvBox(hw * 2 + 10, 2, len), dark, 0, by - hh - 1, mid);          // floor
+  mk(g, uvBox(hw * 2 + 10, 2, len), dark, 0, by + hh + 1, mid);          // ceiling
+  for (const sx of [-1, 1]) mk(g, uvBox(5, hh * 2 + 4, len), hull, sx * (hw + 2.5), by, mid); // walls
+  mk(g, uvBox(hw * 2, hh * 2, 2), dark, 0, by, back);                     // back wall
+  mk(g, uvBox(hw * 2 + 10, 8, 56), hull, 0, by + hh + 5, mouth - 28);   // fairing up to the hull
+  for (let z = back + 8; z < mouth - 4; z += 10) mk(g, uvBox(7, 0.3, 2.6), bayGlow, 0, by + hh - 0.2, z); // ceiling lamps
+  for (let z = back + 6; z < mouth; z += 6) for (const sx of [-1, 1]) mk(g, uvBox(0.8, 0.25, 2.2), strip, sx * 6, by - hh + 0.15, z); // floor guide lights
+  const bandMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.15, 0.5, 0.85) });
+  for (const sx of [-1, 1]) mk(g, uvBox(0.3, 0.5, len - 4), bandMat, sx * (hw - 0.05), by + 1.5, mid); // wall light bands
+  // glowing frame round the mouth and the three-lamp launch signal above it
+  mk(g, uvBox(hw * 2, 0.7, 0.7), glow, 0, by + hh - 0.4, mouth); mk(g, uvBox(hw * 2, 0.7, 0.7), glow, 0, by - hh + 0.4, mouth);
+  for (const sx of [-1, 1]) mk(g, uvBox(0.7, hh * 2, 0.7), glow, sx * (hw - 0.4), by, mouth);
+  [BAY_LIGHTS.red, BAY_LIGHTS.amber, BAY_LIGHTS.green].forEach((m, i) => mk(g, uvBox(2.2, 1.2, 0.6), m, (i - 1) * 3.2, by + hh - 1.6, mouth - 2));
+  for (let z = back + 4; z < mouth; z += 9) for (const sx of [-1, 1]) mk(g, uvBox(1.4, 0.4, 3), strip, sx * 13, by - hh - 2.1, z); // deck lights underneath
   // outboard engine nacelles on swept pylons
   const nacProf = [[-86, 0.01], [-86, 6], [-80, 9.5], [-40, 10.5], [40, 10.5], [70, 9], [86, 5], [90, 0.01]].map(([z, r]) => new THREE.Vector2(r, z));
   const nac = new THREE.LatheGeometry(nacProf, 24); nac.rotateX(Math.PI / 2);

@@ -524,7 +524,7 @@ function launch() {
     const def = cur();
     const w = wingFor(def);
     const wingSkill = Math.min(0.92, 0.7 + 0.06 * (save.aff[w] || 0));
-    game.startMission(def, ctrls, [save.callsign, settings.callsign2 || 'Orion'], { flags: save.flags, wingman: w, wingSkill });
+    game.startMission(def, ctrls, [save.callsign, settings.callsign2 || 'Orion'], { flags: save.flags, wingman: w, wingSkill, launch: true });
     cinematic(def);
     audio.mood('travel');
     if (def.id === 'm1' && !save.tutorialDone) tutorial();

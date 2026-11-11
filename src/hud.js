@@ -280,6 +280,9 @@ export function drawHud(ctx, g, P) {
     }
   }
 
+  // --- launch / landing overlay ---
+  if (g.seq && p.seqHold) seqHud(ctx, g, P, w, h, s, t);
+
   // --- cockpit head-up display: speed tape, set-speed caret, throttle and afterburner ---
   if (P.view === 'cockpit') cockpitHud(ctx, P, w, h, s, t);
 
@@ -487,5 +490,46 @@ function cockpitHud(ctx, P, w, h, s, t) {
   ctx.beginPath(); ctx.moveTo(rcx + Math.cos(ba) * (rr - 2 * s), rcy + Math.sin(ba) * (rr - 2 * s));
   ctx.lineTo(rcx + Math.cos(ba - 0.05) * (rr - 10 * s), rcy + Math.sin(ba - 0.05) * (rr - 10 * s));
   ctx.lineTo(rcx + Math.cos(ba + 0.05) * (rr - 10 * s), rcy + Math.sin(ba + 0.05) * (rr - 10 * s)); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+/** catapult signal lights + countdown, or the landing guidance (centre-line cross and range to the stop mark) */
+function seqHud(ctx, g, P, w, h, s, t) {
+  const q = g.seq;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const cx = w / 2, y = h * 0.3;
+  if (q.kind === 'launch') {
+    const GO = 2.6, lit = q.t < 1.2 ? 0 : q.t < GO ? 1 : 2;
+    const cols = ['#ff3d4e', '#ffc23d', '#4dff8a'];
+    for (let i = 0; i < 3; i++) {
+      const x = cx + (i - 1) * 34 * s, on = i === lit;
+      ctx.beginPath(); ctx.arc(x, y, 11 * s, 0, 6.283);
+      ctx.fillStyle = on ? cols[i] : 'rgba(40,40,40,.7)'; ctx.shadowColor = cols[i]; ctx.shadowBlur = on ? 24 : 0; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.font = `800 ${13 * s}px ${DISPLAY}`; ctx.fillStyle = cols[lit];
+    const txt = lit === 2 ? 'KATAPULT · START!' : `KATAPULT BEREIT · ${Math.max(1, Math.ceil(GO - q.t))}`;
+    glowText(ctx, txt, cx, y + 30 * s, cols[lit], 10);
+  } else {
+    const c = g.carrier, p = P.ship;
+    const L = v.copy(p.pos).sub(c.pos).applyQuaternion(c.quat.clone().invert());
+    const col = '#7fd6ff';
+    ctx.font = `800 ${12 * s}px ${DISPLAY}`;
+    glowText(ctx, P.landStage >= 2 ? 'AUFGESETZT' : P.landStage === 1 ? 'ENDANFLUG · BUCHT 1' : 'LANDEANFLUG · AUTOPILOT', cx, y, col, 10);
+    // centre-line cross: how far the ship is off the bay axis
+    const R = 44 * s, gy = h * 0.5;
+    ctx.strokeStyle = 'rgba(127,214,255,.5)'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(cx - R, gy - R, R * 2, R * 2);
+    const dx = Math.max(-1, Math.min(1, L.x / 30)), dy = Math.max(-1, Math.min(1, (L.y - (-24)) / 20));
+    ctx.strokeStyle = '#ffc857'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(cx - dx * R, gy - R); ctx.lineTo(cx - dx * R, gy + R); ctx.moveTo(cx - R, gy - dy * R); ctx.lineTo(cx + R, gy - dy * R); ctx.stroke();
+    if (P.landStage === 1) {
+      const dist = Math.max(0, L.z - (P.landStop || 0));
+      ctx.font = `700 ${11 * s}px ${FONT}`; ctx.fillStyle = col;
+      ctx.fillText(`STOPPMARKE ${Math.round(dist)} M · ${Math.round(p.speed)} M/S`, cx, gy + R + 14 * s);
+    }
+  }
   ctx.restore();
 }

@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { buildShip, SHIPS } from './ships.js';
+import { buildShip, SHIPS, BAY, BAY_LIGHTS } from './ships.js';
 import { createEnvironment, createAsteroids } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
@@ -223,7 +223,132 @@ export class Game {
     this.resize();
     this.activateNav(0);
     this.audio.startEngine();
-    this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Maschinen. Guten Flug, Nachtfalken!' : 'Startfreigabe erteilt. Guten Flug, {cs}!');
+    this.seq = null;
+    this.useBay = !!opts.launch;
+    if (this.useBay) this.startLaunch();
+    else this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Maschinen. Guten Flug, Nachtfalken!' : 'Startfreigabe erteilt. Guten Flug, {cs}!');
+  }
+
+  // ---------- launch from and landing in the carrier's flight deck ----------
+  /** carrier-local point -> world (the carrier keeps moving during both sequences) */
+  bayToWorld(out, x, y, z) { return out.set(x, y, z).applyQuaternion(this.carrier.quat).add(this.carrier.pos); }
+  setBayLights(r, a, gr) {
+    BAY_LIGHTS.red.color.setRGB(r ? 3 : 0.25, r ? 0.15 : 0.02, r ? 0.1 : 0.02);
+    BAY_LIGHTS.amber.color.setRGB(a ? 3 : 0.25, a ? 1.8 : 0.15, a ? 0.1 : 0.02);
+    BAY_LIGHTS.green.color.setRGB(gr ? 0.2 : 0.02, gr ? 3 : 0.25, gr ? 0.6 : 0.06);
+  }
+
+  startLaunch() {
+    this.seq = { kind: 'launch', t: 0, light: 0 };
+    this.pilots.forEach((P, i) => {
+      const s = P.ship;
+      s.seqHold = true; s.speed = 0;
+      // the chase camera would sit inside the back wall: launch is always seen from the cockpit
+      P.viewSaved = P.view; P.view = 'cockpit';
+      P.seqZ = BAY.back + 16 + (this.pilots.length - 1 - i) * 36; P.seqV = 0;
+      this.bayToWorld(s.pos, 0, BAY.y - 0.5, P.seqZ); s.quat.copy(this.carrier.quat); P.camQ.copy(s.quat);
+    });
+    this.setBayLights(true, false, false);
+    this.ui.comm('flug', this.coop ? 'Katapult eins und zwei, Nachtfalken. Triebwerke hochfahren.' : 'Katapult eins, {cs}. Triebwerke hochfahren, Startsequenz läuft.');
+  }
+
+  startLanding() {
+    this.seq = { kind: 'land', t: 0, doneT: 0 };
+    const inv = q3.copy(this.carrier.quat).invert();
+    this.alivePilots().forEach((P, i) => {
+      P.ship.seqHold = true; P.landStage = 0; P.landStop = BAY.back + 18 + i * 36; P.boosting = false;
+      // waypoints in carrier space: swing wide round the hull if needed, then line up ahead of the bow
+      const L = t4.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
+      const A = new THREE.Vector3(0, BAY.y - 0.5, BAY.mouth + 480 + i * 60);
+      const sx = Math.sign(L.x) || 1;
+      P.landWps = L.z > BAY.mouth + 250 && Math.abs(L.x) < 400 ? [A] : [new THREE.Vector3(sx * (320 + i * 40), -90, 200), A];
+    });
+    this.setBayLights(false, false, true);
+    this.ui.comm('flug', 'Landefreigabe erteilt, {cs}. Leitstrahl Bucht eins aktiv – Autopilot übernimmt.');
+    this.setBanner('LANDEANFLUG');
+    this.audio.beep(900, 0.18);
+  }
+
+  /** runs after ships moved: scripted motion relative to the moving carrier */
+  updateSeq(dt) {
+    const q = this.seq;
+    if (!q) return;
+    q.t += dt;
+    const c = this.carrier;
+    if (q.kind === 'launch') {
+      const GO = 2.6;
+      if (q.light === 0 && q.t > 1.2) { q.light = 1; this.setBayLights(false, true, false); this.audio.beep(700, 0.16); }
+      if (q.light === 1 && q.t > GO) { q.light = 2; this.setBayLights(false, false, true); this.audio.warp(); this.audio.beep(1300, 0.2); }
+      let out = 0;
+      for (const P of this.pilots) {
+        const s = P.ship;
+        if (!s.seqHold) { out++; continue; }
+        if (q.t > GO) { P.seqV = Math.min(430, P.seqV + 280 * dt); P.seqZ += P.seqV * dt; P.shake = Math.max(P.shake, 0.35); P.boosting = true; }
+        else P.shake = Math.max(P.shake, 0.06 + q.t * 0.03); // engines spooling up
+        this.bayToWorld(s.pos, 0, BAY.y - 0.5, P.seqZ); s.quat.copy(c.quat);
+        s.speed = P.seqV; P.aimPoint.copy(s.pos).addScaledVector(this.fwd(s, t1), 900);
+        if (P.seqZ > BAY.mouth + 30) { s.seqHold = false; s.speed = c.speed + P.seqV * 0.55; P.throttle = 0.75; P.boosting = false; if (P.viewSaved !== P.view) { P.view = P.viewSaved; this.ui.viewChanged?.(P); } }
+      }
+      if (out === this.pilots.length) {
+        this.seq = null; this.setBayLights(false, false, false);
+        this.ui.comm('flug', this.coop ? 'Beide Maschinen frei. Gute Jagd, Nachtfalken!' : 'Maschine frei. Gute Jagd, {cs}!');
+      }
+      return;
+    }
+    // landing: line up in front of the bow, then fly into the bay against the carrier's motion
+    const inv = q3.copy(c.quat).invert();
+    let parked = 0, flying = 0;
+    for (const P of this.alivePilots()) {
+      const s = P.ship;
+      if (!s.seqHold) continue;
+      flying++;
+      const L = t4.copy(s.pos).sub(c.pos).applyQuaternion(inv);
+      if (P.landStage === 0) {
+        // next waypoint (the last one is the approach point ahead of the bow, on the bay's centre line)
+        const A = P.landWps[0];
+        const d = L.distanceTo(A);
+        t2.copy(A).sub(L).normalize().applyQuaternion(c.quat);
+        m1.lookAt(t2, ZERO, t3.set(0, 1, 0).applyQuaternion(c.quat));
+        q1.setFromRotationMatrix(m1);
+        s.quat.rotateTowards(q1, 1.6 * dt);
+        s.speed = Math.min(260, Math.max(90, d * 0.4));
+        s.pos.addScaledVector(this.fwd(s, t1), s.speed * dt);
+        // reached, or flown past (never circle a waypoint)
+        if (d < 45 || (d < 220 && this.fwd(s, t1).dot(t2) < 0)) { P.landWps.shift(); if (!P.landWps.length) P.landStage = 1; }
+      } else if (P.landStage === 1) {
+        // final approach, nose first: chase a point on the bay's centre line a little ahead, slowing towards the stop mark
+        const T = t5.set(0, BAY.y - 0.5, Math.max(P.landStop, L.z - 70));
+        t2.copy(T).sub(L);
+        const dz = L.z - P.landStop;
+        if (t2.lengthSq() > 1) {
+          t2.normalize().applyQuaternion(c.quat);
+          m1.lookAt(t2, ZERO, t3.set(0, 1, 0).applyQuaternion(c.quat));
+          s.quat.rotateTowards(q1.setFromRotationMatrix(m1), 2.4 * dt);
+        }
+        const align = this.fwd(s, t1).dot(t2);
+        const v = THREE.MathUtils.clamp(18 + dz * 0.45, 18, 150) * (0.35 + 0.65 * Math.max(0, align));
+        s.speed = v;
+        s.pos.addScaledVector(t1, v * dt);
+        // inside the tube the guidance beam holds the ship on the centre line
+        if (dz < BAY.mouth - P.landStop + 40) {
+          const Lc = t4.copy(s.pos).sub(c.pos).applyQuaternion(inv);
+          Lc.x += -Lc.x * Math.min(1, dt * 4); Lc.y += (BAY.y - 0.5 - Lc.y) * Math.min(1, dt * 4);
+          s.pos.copy(Lc).applyQuaternion(c.quat).add(c.pos);
+          s.quat.rotateTowards(q2.copy(c.quat).multiply(q3.setFromAxisAngle(AY, Math.PI)), 3 * dt);
+          q3.copy(c.quat).invert(); // restore the shared inverse used above
+        }
+        const Lz = t4.copy(s.pos).sub(c.pos).applyQuaternion(q3.copy(c.quat).invert()).z;
+        if (Lz <= P.landStop) { P.landStage = 2; this.audio.hit(true); P.shake = 0.4; }
+      } else {
+        parked++; s.speed = 0;
+        s.pos.copy(L.set(0, BAY.y - 0.5, P.landStop)).applyQuaternion(c.quat).add(c.pos);
+      }
+      P.aimPoint.copy(s.pos).addScaledVector(this.fwd(s, t1), 900);
+    }
+    if (flying && parked === flying) {
+      if (!q.doneT) { q.doneT = q.t; this.setBanner('LANDUNG BESTÄTIGT'); this.ui.comm('flug', 'Aufgesetzt. Willkommen zurück an Bord, {cs}.'); this.audio.stopEngine(); }
+      else if (q.t - q.doneT > 2.2) { this.seq = null; this.setBayLights(false, false, false); this.end(true); }
+    }
   }
 
   stop() { this.mode = 'idle'; this.audio.stopEngine(); }
@@ -620,6 +745,14 @@ export class Game {
   updatePilot(P, dt) {
     const p = P.ship, c = P.ctrl, def = p.def;
     c.update?.(dt);
+    if (p.seqHold) {
+      // launch / landing on rails: only pause and view change are accepted
+      c.throttleSet = null;
+      for (const e of c.take()) { if (e === 'pause') this.ui.pause(); else if (e === 'view' && this.seq?.kind !== 'launch') { P.view = P.view === 'cockpit' ? 'chase' : 'cockpit'; this.ui.viewChanged?.(P); } }
+      p.bank *= 0.9; p.mesh.userData.body.rotation.z = p.bank; p.mesh.userData.body.rotation.x = 0;
+      P.aimLocked = false; P.mslLock = 0;
+      return;
+    }
     if (c.throttleSet != null) { P.throttle = c.throttleSet; c.throttleSet = null; }
     P.throttle = Math.min(1, Math.max(0, P.throttle + c.throttleRate * dt * 0.8));
     // small dead zone + expo curve: precise near the centre, full authority at the edge
@@ -783,7 +916,7 @@ export class Game {
 
   autoAvailable() {
     const m = this.mission;
-    if (!m || this.ended || this.failReason || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
+    if (!m || this.seq || this.ended || this.failReason || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
     if (m.phase === 'travel' && (this.nav().type === 'escape' || m.timer != null)) return false;
     const alive = this.alivePilots();
     if (!alive.length || alive.length < this.pilots.length) return false;
@@ -958,7 +1091,13 @@ export class Game {
     const near = (pos, r) => alive.some((P) => P.ship.pos.distanceTo(pos) < r);
     if (m.phase === 'return') {
       if (!this.carrier.alive) return this.fail('Die TUS Aurora wurde zerstört.');
-      if (near(this.carrier.pos, 750)) this.end(true);
+      if (this.seq) return;
+      if (!this.useBay) { if (near(this.carrier.pos, 750)) this.end(true); return; }
+      if (near(this.carrier.pos, 1600)) {
+        const threat = this.ships.some((s) => s.alive && s.team === 1 && !s.def.capital && s.pos.distanceTo(this.carrier.pos) < 3500);
+        if (!threat) this.startLanding();
+        else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Luftraum säubern, dann Landefreigabe.'); }
+      }
       return;
     }
     const nav = this.nav();
@@ -1158,7 +1297,7 @@ export class Game {
       if (!s.isPlayer) this.updateAI(s, dt);
       s.cool -= dt;
       this.fwd(s, t1);
-      s.pos.addScaledVector(t1, s.speed * dt);
+      if (!s.seqHold) s.pos.addScaledVector(t1, s.speed * dt);
       if (s.shieldT > 0) s.shieldT -= dt;
       else if (s.shield < s.maxShield) s.shield = Math.min(s.maxShield, s.shield + s.maxShield * 0.1 * dt);
       const boost = s.isPlayer && s.pilot.boosting;
@@ -1168,6 +1307,7 @@ export class Game {
       this.shipFx(s, dt, boost);
       if (!s.def.capital) this.damageSmoke(s, dt);
     }
+    this.updateSeq(dt);
 
     this.updateBolts(dt);
     this.updateMines(dt);
