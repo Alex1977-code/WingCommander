@@ -138,9 +138,16 @@ function menuEvent(e) {
 document.addEventListener('pointermove', () => {
   if (navMode) { navMode = false; document.querySelectorAll('.btn.focus').forEach((b) => b.classList.remove('focus')); }
 }, { passive: true });
+// scramble a button's label once when the mouse enters it - not again while it moves around inside
+// (pointerover also fires when crossing child elements, which kept restarting the effect)
 document.addEventListener('pointerover', (e) => {
+  if (e.pointerType !== 'mouse') return;
   const b = e.target.closest?.('.btn');
-  if (b && !b._hovered && !b.classList.contains('choice')) { b._hovered = true; scramble(b); setTimeout(() => (b._hovered = false), 400); }
+  if (!b || b.classList.contains('choice')) return;
+  if (e.relatedTarget && b.contains(e.relatedTarget)) return; // still inside the same button
+  if (b._hoverT && performance.now() - b._hoverT < 900) return;   // quick in-and-out at the edge
+  b._hoverT = performance.now();
+  scramble(b);
 });
 
 function setAvatarColor(el, who) { el.style.setProperty('--ac', (CHARS[who] || CHARS.erz).color); }
