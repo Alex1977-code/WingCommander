@@ -12,6 +12,7 @@ import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
+const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
 const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3(), tBox = new THREE.Vector3(), tBump = new THREE.Vector3(), tSeg = new THREE.Vector3();
 /** squared distance from point c to the segment a-b */
 function segDist2(a, b, c) {
@@ -246,6 +247,45 @@ export class Game {
   }
 
   // ---------- launch from and landing in the carrier's flight deck ----------
+  /** is a carrier-local point inside the bay tube / its approach corridor (lined up with the opening)? */
+  inBayCorridor(L, ahead = 90) {
+    return Math.abs(L.x) < BAY.hw - 1.5 && Math.abs(L.y - BAY.y) < BAY.hh - 0.5 && L.z > BAY.back - 5 && L.z < BAY.mouth + ahead;
+  }
+
+  /** flying by hand inside the tube: the walls stop the ship (scraping hurts at speed), the nose eases onto the axis */
+  bayConstrain(P, dt) {
+    const s = P.ship, c = this.carrier, inv = q3.copy(c.quat).invert();
+    const L = tBay.copy(s.pos).sub(c.pos).applyQuaternion(inv);
+    if (L.z > BAY.mouth) return;
+    const mx = BAY.hw - 3.5, my = BAY.hh - 1.6;
+    let hit = false;
+    if (Math.abs(L.x) > mx) { L.x = Math.sign(L.x) * mx; hit = true; }
+    if (Math.abs(L.y - BAY.y) > my) { L.y = BAY.y + Math.sign(L.y - BAY.y) * my; hit = true; }
+    if (L.z < BAY.back + 6) { L.z = BAY.back + 6; hit = true; s.speed = Math.min(s.speed, 20); }
+    if (hit) {
+      s.pos.copy(L).applyQuaternion(c.quat).add(c.pos);
+      if (P.bumpT <= 0 && s.speed > 70) {
+        P.bumpT = 0.4; this.damage(s, 4 + s.speed * 0.03, null, s.pos.clone());
+        this.fx.sparks(s.pos, COL.spark, 14, 60); P.shake = Math.max(P.shake, 0.5);
+      }
+    }
+    const fz = this.fwd(s, t1).applyQuaternion(inv).z;
+    q2.copy(c.quat); if (fz < 0) q2.multiply(q1.setFromAxisAngle(AY, Math.PI));
+    s.quat.rotateTowards(q2, 0.3 * dt); // gentle: the pilot can still steer against it
+  }
+
+  /** a ship flown into the open bay by hand is caught by the tractor beam and set down on its spot */
+  captureInBay(P) {
+    const s = P.ship;
+    this.seq ||= { kind: 'land', t: 0, doneT: 0 };
+    s.seqHold = true; P.landStage = 1; P.landStop = BAY.back + 18 + P.idx * 36; P.boosting = false;
+    if (s.speed > 150) {
+      this.damage(s, 18, null, s.pos.clone()); P.shake = 0.9;
+      this.ui.comm('flug', 'Viel zu schnell, {cs}! Der Traktorstrahl fängt Sie gerade noch ab.');
+    } else this.ui.comm('flug', 'Traktorstrahl erfasst. Sauberer Anflug, {cs}.');
+    this.audio.beep(1100, 0.15);
+  }
+
   /** carrier-local point -> world (the carrier keeps moving during both sequences) */
   bayToWorld(out, x, y, z) { return out.set(x, y, z).applyQuaternion(this.carrier.quat).add(this.carrier.pos); }
   /** energy field across the bay mouth (0 = off) and the glow of the hold-down clamps */
@@ -272,10 +312,11 @@ export class Game {
   }
 
   startLanding() {
-    this.seq = { kind: 'land', t: 0, doneT: 0 };
+    this.seq ||= { kind: 'land', t: 0, doneT: 0 };
     const inv = q3.copy(this.carrier.quat).invert();
     this.alivePilots().forEach((P, i) => {
-      P.ship.seqHold = true; P.landStage = 0; P.landStop = BAY.back + 18 + i * 36; P.boosting = false;
+      if (P.ship.seqHold) return; // already caught by the tractor beam
+      P.ship.seqHold = true; P.landStage = 0; P.landStop = BAY.back + 18 + P.idx * 36; P.boosting = false;
       // waypoints in carrier space: swing wide round the hull if needed, then line up ahead of the bow
       const L = t4.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
       const A = new THREE.Vector3(0, BAY.y - 0.5, BAY.mouth + 480 + i * 60);
@@ -283,8 +324,8 @@ export class Game {
       P.landWps = L.z > BAY.mouth + 250 && Math.abs(L.x) < 400 ? [A] : [new THREE.Vector3(sx * (320 + i * 40), -90, 200), A];
     });
     this.setBayLights(false, false, true); this.setBayField(0); this.setClamps(false);
-    this.ui.comm('flug', 'Landefreigabe erteilt, {cs}. Leitstrahl Bucht eins aktiv – Autopilot übernimmt.');
-    this.setBanner('LANDEANFLUG');
+    this.ui.comm('flug', 'Verstanden, {cs}. Landeautopilot übernimmt.');
+    this.setBanner('LANDEAUTOPILOT');
     this.audio.beep(900, 0.18);
   }
 
@@ -298,19 +339,34 @@ export class Game {
       const GO = 2.6;
       // red: engines pre-heat · amber: clamps release, the ship floats free, the bay field drops · green: own thrust
       if (q.light === 0 && q.t > 1.2) { q.light = 1; this.setBayLights(false, true, false); this.setClamps(false); this.audio.hit(true); this.audio.beep(700, 0.16); }
-      if (q.light === 1 && q.t > GO) { q.light = 2; this.setBayLights(false, false, true); this.audio.warp(); this.audio.beep(1300, 0.2); }
+      if (q.light === 1 && q.t > GO) {
+        q.light = 2; this.setBayLights(false, false, true); this.audio.beep(1300, 0.2);
+        // green: the pilot flies out alone - low thrust, steering inside the tube is up to them
+        for (const P of this.pilots) {
+          const s = P.ship;
+          s.seqHold = false; s.speed = c.speed + 25; P.throttle = 0.25; P.inBay = true;
+          this.ui.setThrottle?.(P.throttle);
+        }
+        this.ui.comm('flug', 'Startfreigabe! Schub geben und raus aus der Bucht, {cs}.');
+      }
       if (q.light >= 1) this.setBayField(Math.max(0, 1 - (q.t - 1.2) / 1.0));
       let out = 0;
+      const invL = q3.copy(c.quat).invert();
       for (const P of this.pilots) {
         const s = P.ship;
-        if (!s.seqHold) { out++; continue; }
-        if (q.t > GO) { P.seqV = Math.min(320, P.seqV + 150 * dt); P.seqZ += P.seqV * dt; P.shake = Math.max(P.shake, 0.18); P.boosting = true; }
-        else P.shake = Math.max(P.shake, 0.04 + q.t * 0.02); // engines spooling up
+        if (!s.seqHold) {
+          const L = t4.copy(s.pos).sub(c.pos).applyQuaternion(invL);
+          if (!s.alive || L.z > BAY.mouth + 30 || q.t > 30 || !this.inBayCorridor(L, 40)) {
+            if (P.inBay) { P.inBay = false; if (P.viewSaved && P.viewSaved !== P.view) { P.view = P.viewSaved; this.ui.viewChanged?.(P); } }
+            out++;
+          }
+          continue;
+        }
+        P.shake = Math.max(P.shake, 0.04 + q.t * 0.02); // engines spooling up
         // after the clamps let go the ship lifts a little and hovers on its thrusters
         const lift = q.t > 1.2 ? Math.min(1, (q.t - 1.2) / 0.8) * 1.4 + Math.sin(q.t * 3) * 0.12 : 0;
         this.bayToWorld(s.pos, 0, BAY.y - 0.5 + lift, P.seqZ); s.quat.copy(c.quat);
         s.speed = P.seqV; P.aimPoint.copy(s.pos).addScaledVector(this.fwd(s, t1), 900);
-        if (P.seqZ > BAY.mouth + 30) { s.seqHold = false; s.speed = c.speed + P.seqV * 0.55; P.throttle = 0.75; P.boosting = false; if (P.viewSaved !== P.view) { P.view = P.viewSaved; this.ui.viewChanged?.(P); } }
       }
       if (out === this.pilots.length) {
         this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.setClamps(true);
@@ -368,7 +424,9 @@ export class Game {
       }
       P.aimPoint.copy(s.pos).addScaledVector(this.fwd(s, t1), 900);
     }
-    if (flying && parked === flying) {
+    // the mission ends once every pilot who is still alive is parked in the bay
+    const all = this.alivePilots();
+    if (all.length && all.every((P) => P.ship.seqHold && P.landStage === 2)) {
       if (!q.doneT) { q.doneT = q.t; this.setBanner('LANDUNG BESTÄTIGT'); this.ui.comm('flug', 'Aufgesetzt. Willkommen zurück an Bord, {cs}.'); this.audio.stopEngine(); }
       else if (q.t - q.doneT > 2.2) { this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.end(true); }
     }
@@ -844,6 +902,10 @@ export class Game {
     for (const cap of this.ships) {
       if (!cap.def.capital || !cap.alive || cap.def.ghost) continue;
       if (p.pos.distanceToSquared(cap.pos) > (cap.radius + 40) ** 2) continue;
+      if (cap === this.carrier && this.useBay) {
+        const L = tLoc.copy(p.pos).sub(cap.pos).applyQuaternion(q3.copy(cap.quat).invert());
+        if (this.inBayCorridor(L)) { this.bayConstrain(P, dt); continue; }
+      }
       const d = this.hullDist(cap, p.pos, t2);
       if (d < 6) this.bump(P, t2, 6 - d);
     }
@@ -942,6 +1004,7 @@ export class Game {
 
   autoAvailable() {
     const m = this.mission;
+    if (m && m.phase === 'return' && m.landClear && !this.ended && this.alivePilots().some((P) => !P.ship.seqHold)) return true;
     if (!m || this.seq || this.ended || this.failReason || m.phase !== 'travel' && m.phase !== 'return' || this.frozen || this.hostileCount() > 0) return false;
     if (m.phase === 'travel' && (this.nav().type === 'escape' || m.timer != null)) return false;
     const alive = this.alivePilots();
@@ -952,6 +1015,7 @@ export class Game {
 
   autopilot() {
     if (!this.autoAvailable()) { this.audio.beep(220); return; }
+    if (this.mission.phase === 'return' && this.mission.landClear) { this.startLanding(); return; }
     this.frozen = true;
     this.audio.warp();
     this.ui.fade(() => {
@@ -1117,12 +1181,26 @@ export class Game {
     const near = (pos, r) => alive.some((P) => P.ship.pos.distanceTo(pos) < r);
     if (m.phase === 'return') {
       if (!this.carrier.alive) return this.fail('Die TUS Aurora wurde zerstört.');
-      if (this.seq) return;
+      if (this.seq?.kind === 'land' && !m.landClear) return;
       if (!this.useBay) { if (near(this.carrier.pos, 750)) this.end(true); return; }
-      if (near(this.carrier.pos, 1600)) {
-        const threat = this.ships.some((s) => s.alive && s.team === 1 && !s.def.capital && s.pos.distanceTo(this.carrier.pos) < 3500);
-        if (!threat) this.startLanding();
-        else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Luftraum säubern, dann Landefreigabe.'); }
+      if (!m.landClear) {
+        if (near(this.carrier.pos, 1800)) {
+          const threat = this.ships.some((s) => s.alive && s.team === 1 && !s.def.capital && s.pos.distanceTo(this.carrier.pos) < 3500);
+          if (!threat) {
+            m.landClear = true;
+            this.setBayLights(false, false, true); this.setBayField(0); this.setClamps(false);
+            this.ui.comm('flug', 'Landefreigabe Bucht eins, {cs}. Folgen Sie dem Leitstrahl unter den Bug und fliegen Sie selbst ein – unter 120 Metern pro Sekunde. Oder AUTO für den Landeautopiloten.');
+            this.setBanner('LANDEFREIGABE · BUCHT 1');
+            this.audio.beep(900, 0.18);
+          } else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Luftraum säubern, dann Landefreigabe.'); }
+        }
+      } else {
+        const inv = q3.copy(this.carrier.quat).invert();
+        for (const P of alive) {
+          if (P.ship.seqHold) continue;
+          const L = tLoc.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
+          if (this.inBayCorridor(L, 0) && L.z < BAY.mouth - 8 && L.z > BAY.back + 10) this.captureInBay(P);
+        }
       }
       return;
     }

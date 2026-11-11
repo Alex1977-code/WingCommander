@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { shipOutline } from './cockpit.js';
+import { BAY } from './ships.js';
 
 const v = new THREE.Vector3();
 const GL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&@$<>/\\|=+*';
@@ -283,6 +284,12 @@ export function drawHud(ctx, g, P) {
 
   // --- launch / landing overlay ---
   if (g.seq && p.seqHold) seqHud(ctx, g, P, w, h, s, t);
+  else if (g.mission?.phase === 'return' && g.mission.landClear && g.carrier?.alive) landHud(ctx, g, P, w, h, s, t);
+  else if (P.inBay) {
+    ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `800 ${12 * s}px ${DISPLAY}`;
+    glowText(ctx, 'START FREI · SCHUB GEBEN · RAUS AUS DER BUCHT', w / 2, h * 0.3, '#4dff8a', 10);
+    ctx.restore();
+  }
 
   // --- cockpit head-up display: speed tape, set-speed caret, throttle and afterburner ---
   if (P.view === 'cockpit') cockpitHud(ctx, P, w, h, s, t);
@@ -597,5 +604,62 @@ function shipStatus(ctx, ship, P, x, y, D, s, t, wing) {
   ctx.fillText(wing ? `${(ship.name || 'FLÜGELMANN').toUpperCase()}` : (ship.def.name || '').toUpperCase(), tx, y + D + 3 * s);
   ctx.fillStyle = alive ? 'rgba(220,240,255,.85)' : 'rgba(160,170,180,.7)';
   ctx.fillText(alive ? `S ${Math.round(sk * 100)}% · H ${Math.round(hk * 100)}%` : 'AUSGEFALLEN', tx, y + D + 13 * s);
+  ctx.restore();
+}
+
+/** hand landing: approach beam (rings ahead of the bay), bay marker, centre-line cross, range and speed */
+function landHud(ctx, g, P, w, h, s, t) {
+  const c = g.carrier, p = P.ship;
+  const q = c.quat, inv = q.clone().invert();
+  const world = (x, y, z) => new THREE.Vector3(x, y, z).applyQuaternion(q).add(c.pos);
+  const L = p.pos.clone().sub(c.pos).applyQuaternion(inv);
+  const dist = L.z - BAY.mouth;
+  const ok = '#4dff8a', warn = '#ffc857', bad = '#ff4d6d', blue = '#7fd6ff';
+  ctx.save();
+  // approach beam: rings every 120 m in front of the bay, nearest drawn last
+  for (let k = 6; k >= 1; k--) {
+    const pt = world(0, BAY.y, BAY.mouth + k * 120);
+    const pr = project(P, pt);
+    if (pr.behind) continue;
+    const dCam = P.camera.position.distanceTo(pt);
+    const r = Math.max(3 * s, (16 / dCam) * h * 1.1);
+    const passed = dist < k * 120;
+    ctx.strokeStyle = passed ? 'rgba(127,214,255,.25)' : `rgba(127,214,255,${0.35 + 0.1 * (6 - k)})`;
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath(); ctx.ellipse(pr.x, pr.y, r * 1.6, r, 0, 0, 6.283); ctx.stroke();
+  }
+  // bay marker
+  const m = project(P, world(0, BAY.y, BAY.mouth));
+  if (!m.behind) {
+    const dCam = P.camera.position.distanceTo(world(0, BAY.y, BAY.mouth));
+    const bw = Math.max(14 * s, (BAY.hw / dCam) * h * 1.2), bh = Math.max(6 * s, (BAY.hh / dCam) * h * 1.2);
+    ctx.strokeStyle = ok; ctx.lineWidth = 2 * s; ctx.shadowColor = ok; ctx.shadowBlur = 8;
+    ctx.beginPath();
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(m.x + sx * bw, m.y + sy * (bh - 6 * s)); ctx.lineTo(m.x + sx * bw, m.y + sy * bh); ctx.lineTo(m.x + sx * (bw - 8 * s), m.y + sy * bh); }
+    ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.font = `800 ${9 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillStyle = ok;
+    ctx.fillText('BUCHT 1', m.x, m.y - bh - 4 * s);
+  }
+  // ILS-style needles through the reticle: they show where the bay's centre line is (fly towards them)
+  const cx = w / 2, cy = h * 0.47;
+  const facing = new THREE.Vector3(0, 0, 1).applyQuaternion(p.quat).applyQuaternion(inv).z < -0.85;
+  const fast = p.speed > 120, aligned = Math.abs(L.x) < 6 && Math.abs(L.y - BAY.y) < 3;
+  if (dist > -10 && dist < 2500) {
+    const R = 46 * s, k = Math.max(20, dist * 0.06);
+    const dx = Math.max(-1, Math.min(1, -L.x / k)), dy = Math.max(-1, Math.min(1, (L.y - BAY.y) / k));
+    ctx.strokeStyle = aligned ? ok : warn; ctx.lineWidth = 2.2 * s; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.moveTo(cx + dx * R, cy - R); ctx.lineTo(cx + dx * R, cy + R); ctx.moveTo(cx - R, cy + dy * R); ctx.lineTo(cx + R, cy + dy * R); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(127,214,255,.45)'; ctx.lineWidth = 1;
+    for (const d of [-1, -0.5, 0.5, 1]) { ctx.beginPath(); ctx.arc(cx + d * R, cy + R + 5 * s, 1.6 * s, 0, 6.283); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + R + 5 * s, cy + d * R, 1.6 * s, 0, 6.283); ctx.stroke(); }
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `800 ${10 * s}px ${DISPLAY}`;
+  const title = dist < 0 ? 'IN DER BUCHT' : !facing ? 'AUSRICHTEN · NASE ZUR BUCHT' : fast ? 'ZU SCHNELL · SCHUB RAUS' : aligned ? 'AUF DEM LEITSTRAHL' : 'ANFLUG BUCHT 1';
+  glowText(ctx, title, cx, cy + 66 * s, !facing || fast ? warn : ok, 8);
+  if (dist > -10 && dist < 2500) {
+    ctx.font = `700 ${9.5 * s}px ${FONT}`; ctx.fillStyle = fast ? bad : blue;
+    ctx.fillText(`${Math.max(0, Math.round(dist))} M · ${Math.round(p.speed)} M/S (MAX 120)`, cx, cy + 80 * s);
+  }
   ctx.restore();
 }

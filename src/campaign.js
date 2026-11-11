@@ -1,5 +1,5 @@
 /**
- * Campaign "Sternenfront – Der Perseus-Krieg". Original story, three acts, 20 missions.
+ * Campaign "Sternenfront – Der Perseus-Krieg". Original story, three acts, 21 missions.
  * {cs} = player's callsign. Lines may carry conditions: if / ifNot (flag names), aff: ['kolibri', 2].
  * Lines with `choices` pause the dialog for a decision. Choices may set flags, change affinity,
  * insert reply lines and redirect the campaign (goto).
@@ -663,6 +663,44 @@ export const MISSIONS = [
     win: [
       { who: 'juno', text: 'Der Transporter „Ketten“ fliegt zur Orun-Passage. Kolibri ist an Bord. Sie lebt, {cs}.' },
       { who: 'brandt', text: 'Gute Arbeit. Kommen Sie zurück. Ich muss mit der Admiralität sprechen.' },
+    ],
+    next: 'b2',
+  },
+  {
+    id: 'b2', act: 'II', title: 'Belagerung', sector: 'Mahlstrom-Rand · Position der Aurora', ship: 'falke', wingman: 'juno', sky: SKY.mahlstrom,
+    briefing: [
+      { who: 'brandt', text: 'Die Aszendenz hat unsere Spur aus dem Mahlstrom aufgenommen. Die Aurora liegt mit halber Energie fest – die Reparatur am Sprungantrieb dauert.' },
+      { who: 'brandt', text: 'Sie werden in Wellen kommen, bis wir springen oder fallen. Halten Sie sie von der Aurora fern, {cs}. Jede einzelne Welle.' },
+      { who: 'juno', text: 'Rook hätte gesagt: zuerst die Bomber, dann die Prahler. Ich bleibe an deinem Flügel.' },
+    ],
+    objectives: ['Die TUS Aurora gegen alle Angriffswellen verteidigen', 'Torpedobomber vor dem Abwurf abfangen', 'Nach dem Gefecht selbst in der Aurora landen'],
+    protect: 'carrier',
+    navs: [
+      { name: 'Aurora', pos: A(0, 0, 900), anchor: true, objective: 'Verteidige die TUS Aurora',
+        waves: [
+          [['dorn', 4]],
+          [['dorn', 3], ['klinge', 2]],
+          [['hammer', 2], ['dorn', 3]],
+          [['klinge', 4]],
+          [['hammer', 3], ['klinge', 2]],
+          [['dorn', 4], ['klinge', 3]],
+          [['hammer', 4], ['dorn', 2]],
+          [['hammer', 3], ['klinge', 4]],
+        ],
+        onArrive: [{ who: 'flug', text: 'Kontakte im Anflug! Erste Welle, Nachtfalken – die Aurora gehört euch.' }],
+        onWave: [null,
+          { who: 'flug', text: 'Zweite Welle! Abfangjäger mit Geleitschutz.' },
+          { who: 'juno', text: 'Bomber! Ich nehme den linken, {cs}!' },
+          { who: 'brandt', text: 'Reparatur bei vierzig Prozent. Halten Sie durch.' },
+          { who: 'flug', text: 'Torpedobomber auf Angriffskurs aufs Hangardeck!' },
+          { who: 'juno', text: 'Die hören einfach nicht auf… Gut. Wir auch nicht.' },
+          { who: 'brandt', text: 'Sprungantrieb bei neunzig Prozent!' },
+          { who: 'flug', text: 'Letzte Welle! Das ist alles, was sie haben!' }],
+        onClear: [{ who: 'brandt', text: 'Radar ist frei, Sprungantrieb geladen. Nachtfalken: landen. Wir springen, sobald Sie an Bord sind.' }] },
+    ],
+    win: [
+      { who: 'brandt', text: 'Acht Wellen. Und die Aurora steht noch. Das wird man bis nach Orun hören.' },
+      { who: 'juno', text: 'Für Rook. Und jetzt holen wir Kolibri zurück.' },
     ],
     next: 'm11',
   },

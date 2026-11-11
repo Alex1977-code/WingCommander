@@ -20,7 +20,7 @@ export const SHIPS = {
   tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [15, 13, 48], dmg: 5, turrets: [[0, 14, 0]] },
   habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
   relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
-  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 230, box: [40, 22, 205], dmg: 7, turrets: [[14, 13.6, 90], [-14, 13.6, 90], [14, 16.6, -60], [-14, 16.6, -60], [0, 23.5, -20], [0, -30.2, 60]] },
+  aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 230, box: [40, 17, 205], dmg: 7, turrets: [[14, 13.6, 90], [-14, 13.6, 90], [14, 16.6, -60], [-14, 16.6, -60], [0, 23.5, -20], [0, -30.2, 60]] },
   transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [15, 13, 48], dmg: 6, turrets: [[0, 14, 0]] },
   zerstoerer: { name: 'Zerstörer', team: 1, capital: true, hp: 2100, speed: 18, radius: 135, box: [24, 20, 125], dmg: 8, score: 2000, turrets: [[20, 14, 70], [-20, 14, 70], [0, 22, -20], [0, -18, 20], [0, 18, -90]] },
   dreadnought: { name: 'Apotheose', team: 1, capital: true, hp: 5200, speed: 9, radius: 260, box: [50, 40, 245], dmg: 9, score: 5000, turrets: [[44, 20, 150], [-44, 20, 150], [44, 20, 0], [-44, 20, 0], [0, 44, 60], [0, -40, 60], [0, 44, -120], [0, -40, -120]] },
@@ -65,7 +65,52 @@ function textures() {
       }
     }
   });
-  TEX = { panel, windows };
+  // fighter plating: rows of plates with dark seams, rivet lines, access hatches and grime; bump map from the seams
+  const PLATE = 512, seed = [];
+  for (let i = 0; i < 40; i++) seed.push([Math.random(), Math.random(), Math.random()]);
+  const plates = (g, s, bump) => {
+    g.fillStyle = bump ? '#808080' : '#bcbcbc'; g.fillRect(0, 0, s, s);
+    const rows = 8;
+    for (let r = 0; r < rows; r++) {
+      let x = 0;
+      const y = (r * s) / rows, h = s / rows;
+      while (x < s) {
+        const w = 40 + seed[(r * 7 + (x | 0)) % 40][0] * 110;
+        const v = bump ? 128 + (seed[(r + (x | 0)) % 40][1] - 0.5) * 30 : 165 + seed[(r * 3 + (x | 0)) % 40][1] * 70;
+        g.fillStyle = `rgb(${v | 0},${v | 0},${v | 0})`; g.fillRect(x + 1, y + 1, w - 2, h - 2);
+        // seams
+        g.fillStyle = bump ? '#202020' : 'rgba(20,22,26,.75)'; g.fillRect(x, y, 2, h); g.fillRect(x, y, w, 2);
+        // rivet lines along the seams
+        g.fillStyle = bump ? '#d0d0d0' : 'rgba(255,255,255,.35)';
+        for (let k = 6; k < w - 4; k += 9) g.fillRect(x + k, y + 5, 2, 2);
+        // occasional access hatch with a latch
+        if (seed[(r * 5 + (x | 0)) % 40][2] > 0.72) {
+          const hx = x + w * 0.25, hy = y + h * 0.3, hw = w * 0.45, hh = h * 0.45;
+          g.strokeStyle = bump ? '#303030' : 'rgba(15,15,18,.7)'; g.lineWidth = 1.5; g.strokeRect(hx, hy, hw, hh);
+          g.fillStyle = bump ? '#e0e0e0' : 'rgba(230,200,60,.55)'; g.fillRect(hx + hw - 6, hy + hh / 2 - 2, 4, 4);
+        }
+        x += w;
+      }
+    }
+    if (!bump) {
+      for (let i = 0; i < 40; i++) { const x = Math.random() * s, y = Math.random() * s, r = 10 + Math.random() * 40; const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(40,35,30,.25)'); gr.addColorStop(1, 'rgba(40,35,30,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2); }
+      for (let i = 0; i < 120; i++) { g.strokeStyle = `rgba(255,255,255,${0.05 + Math.random() * 0.15})`; g.lineWidth = 0.7; const x = Math.random() * s, y = Math.random() * s; g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 8); g.stroke(); }
+    }
+  };
+  const plate = canvasTex(PLATE, (g, s) => plates(g, s, false));
+  const plateBump = canvasTex(PLATE, (g, s) => plates(g, s, true), false);
+  for (const t of [plate, plateBump]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 2); }
+  // squadron codes / alien glyphs for the hull sides
+  const decalTex = (draw) => { const c = document.createElement('canvas'); c.width = 256; c.height = 64; draw(c.getContext('2d')); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const codeUnion = decalTex((g) => {
+    g.fillStyle = 'rgba(200,88,26,.95)'; g.fillRect(0, 22, 18, 20); g.fillRect(22, 22, 8, 20);
+    g.font = '800 44px Rajdhani, sans-serif'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(235,238,240,.95)'; g.fillText('NF·07', 40, 34);
+  });
+  const glyphAsz = decalTex((g) => {
+    g.strokeStyle = 'rgba(255,90,200,1)'; g.lineWidth = 4; g.lineCap = 'round';
+    for (let i = 0; i < 6; i++) { const x = 20 + i * 38; g.beginPath(); g.moveTo(x, 12); g.lineTo(x + 14, 32); g.lineTo(x, 52); if (i % 2) { g.moveTo(x + 22, 14); g.lineTo(x + 22, 50); } g.stroke(); }
+  });
+  TEX = { panel, windows, plate, plateBump, codeUnion, glyphAsz };
   return TEX;
 }
 
@@ -97,6 +142,12 @@ function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   const disc = new THREE.CircleGeometry(r * 0.85, 12);
   disc.rotateY(Math.PI);
   mk(group, disc, glowMat, x, y, z - r * 0.9);
+  // nozzle lip and inner vanes
+  mk(group, new THREE.TorusGeometry(r * 1.0, r * 0.09, 6, 18), darkMat, x, y, z - r * 1.1);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2, vane = mk(group, new THREE.BoxGeometry(r * 0.08, r * 0.55, r * 0.9), darkMat, x + Math.cos(a) * r * 0.55, y + Math.sin(a) * r * 0.55, z - r * 0.5);
+    vane.rotation.z = a + Math.PI / 2;
+  }
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: color.clone().multiplyScalar(0.45), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
   s.position.set(x, y, z - r * 1.3);
   s.scale.setScalar(r * 4);
@@ -114,7 +165,8 @@ const PAL = {
 function mats(p) {
   const t = textures();
   return {
-    hull: new THREE.MeshStandardMaterial({ color: p.hull, map: t.panel, metalness: 0.75, roughness: 0.38 }),
+    hull: new THREE.MeshStandardMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 1.4, metalness: 0.72, roughness: 0.42 }),
+    decal: new THREE.MeshStandardMaterial({ map: p === PAL.union ? t.codeUnion : t.glyphAsz, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, roughness: 0.6, metalness: 0.2, emissive: p === PAL.union ? 0x000000 : 0xffffff, emissiveMap: p === PAL.union ? null : t.glyphAsz, emissiveIntensity: 0.8 }),
     dark: new THREE.MeshStandardMaterial({ color: p.dark, metalness: 0.8, roughness: 0.5 }),
     accent: new THREE.MeshStandardMaterial({ color: p.accent, metalness: 0.5, roughness: 0.4 }),
     canopy: new THREE.MeshStandardMaterial({ color: p.canopy, metalness: 1, roughness: 0.05 }),
@@ -244,6 +296,45 @@ function fighter(o) {
   if (o.pal !== PAL.union) {
     mk(g, new THREE.BoxGeometry(0.18, 0.18, L * 0.5), m.line, 0, o.bodyR * o.flat * 1.0, -L * 0.2);
   }
+
+  // --- finer detail: gun barrels, canopy frame, vents, antennas, decals, navigation lights ---
+  for (const [px, py, pz] of g.userData.pods || []) {
+    const bl = new THREE.CylinderGeometry(0.11, 0.13, Math.min(2.6, o.root * 0.35), 8); bl.rotateX(Math.PI / 2);
+    mk(g, bl, m.dark, px, py, pz + Math.min(1.3, o.root * 0.17));
+    const mz = new THREE.CylinderGeometry(0.19, 0.19, 0.25, 8); mz.rotateX(Math.PI / 2);
+    mk(g, mz, m.dark, px, py, pz + Math.min(2.6, o.root * 0.35));
+    mk(g, new THREE.BoxGeometry(0.42, 0.08, o.root * 0.45), m.hull, px, py + 0.32, pz);      // cooling fin
+  }
+  for (const hx of hulls) {
+    const cy = o.bodyR * o.flat * 0.6, cz = L * 0.12, rx = o.bodyR * 0.48, ry = o.bodyR * 0.44;
+    for (const dz of [-0.055, 0.02, 0.085]) {
+      const arch = mk(g, new THREE.TorusGeometry(1, 0.05, 4, 16, Math.PI), m.dark, hx, cy, cz + dz * L * (1 - Math.abs(dz) * 3));
+      arch.scale.set(rx * (1 - Math.abs(dz) * 3), ry * (1 - Math.abs(dz) * 3.5), 1);
+    }
+    mk(g, new THREE.BoxGeometry(0.1, 0.08, L * 0.24), m.dark, hx, cy + ry * 0.98, cz);       // centre strut
+    // hull decals on both flanks of the forward fuselage
+    for (const sx of [-1, 1]) {
+      const d = mk(g, new THREE.PlaneGeometry(L * 0.2, L * 0.05), m.decal, hx + sx * (o.bodyR * o.wide * 0.98 + 0.27), 0.1, L * 0.2);
+      d.rotation.y = sx * Math.PI / 2;
+    }
+  }
+  // vents: louvres on both sides of the engine block
+  for (const sx of [-1, 1]) for (let i = 0; i < 6; i++) {
+    const lv = mk(g, new THREE.BoxGeometry(0.08, bh * 0.08, L * 0.16), m.dark, sx * (bw / 2 + 0.04), bh * 0.3 - i * bh * 0.11, -L * 0.33);
+    lv.rotation.z = sx * 0.4;
+  }
+  // whip antennas
+  for (const sx of [-1, 1]) {
+    const an = mk(g, new THREE.CylinderGeometry(0.025, 0.04, 2.2, 4), m.dark, sx * bw * 0.32, bh * 0.5 + 1, -L * 0.42);
+    an.rotation.x = -0.5;
+  }
+  // navigation lights: red port (+x), green starboard, white tail strobe
+  for (const sgn of [1, -1]) {
+    const tipX = sgn * (wx + o.span * Math.cos(o.dihedral || 0) + 0.7);
+    const tipY = (o.wingY || 0) + o.span * Math.sin(o.dihedral || 0);
+    blinker(g, tipX, tipY, o.wingZ - o.sweep - o.root * 0.1, sgn > 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 1.1, sgn > 0 ? 0 : 0.5, 1.8);
+  }
+  blinker(g, 0, bh * 0.6, -L * 0.5, new THREE.Color(3, 3, 3), 0.8, 0.25, 2.2);
   g.name = 'body';
   root.userData = {};
   return root;
@@ -539,6 +630,29 @@ function capital(type) {
     B(30.6, 2, 60, strip, 0, 50, -74);
     B(90, 70, 60, dark, 0, 0, -240);
     for (const [ex, ey] of [[-26, 16], [26, 16], [-26, -16], [26, -16], [0, 0]]) engine(g, engines, ex, ey, -270, 12, glow, dark, pal.glow);
+  }
+  // surface detail on the warships and freighters: equipment blocks, vents, sensor domes, antennas, window strips
+  const det = {
+    zerstoerer: [[0, 11, -12, 12, -95, 100, 34, 13.2]],
+    dreadnought: [[0, 28, -34, 34, -200, 150, 70, 35.2], [0, -28, -34, 34, -200, 150, 40, 35.2]],
+    transport: [[0, 10, -10, 10, -25, 35, 14, 11.2]], tanker: [[0, 18, -6, 6, -22, 26, 8, 11.2]], prison: [[0, 10, -10, 10, -25, 35, 14, 11.2]],
+  }[type];
+  if (det) {
+    const winMat = new THREE.MeshBasicMaterial({ color: union ? new THREE.Color(2.2, 1.8, 1.1) : new THREE.Color(2.4, 0.4, 1.4) });
+    for (const [, yTop, x0, x1, z0, z1, n, hw] of det) {
+      const up = Math.sign(yTop);
+      for (let i = 0; i < n; i++) {
+        const w = 1.5 + Math.random() * 5, h = 0.8 + Math.random() * 3, d = 2 + Math.random() * 9;
+        const x = x0 + Math.random() * (x1 - x0), z = z0 + Math.random() * (z1 - z0);
+        const r = Math.random();
+        if (r < 0.62) B(w, h, d, Math.random() < 0.5 ? dark : hull, x, yTop + up * h / 2, z);
+        else if (r < 0.78) { const dm = mk(g, new THREE.SphereGeometry(1.2 + Math.random() * 1.8, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), hull, x, yTop, z); if (up < 0) dm.rotation.x = Math.PI; }
+        else if (r < 0.9) mk(g, new THREE.CylinderGeometry(0.15, 0.25, 4 + Math.random() * 8, 5), dark, x, yTop + up * 3, z);
+        else for (let k = 0; k < 4; k++) B(w, 0.3, 0.6, dark, x, yTop + up * 0.6, z + k * 1.2); // vent grille
+      }
+      // lit window strips along the flanks
+      for (const sx of [-1, 1]) for (let k = 0; k < 3; k++) B(0.4, 0.5, (z1 - z0) * (0.3 + Math.random() * 0.4), winMat, sx * hw, yTop - up * (3 + k * 3), z0 + (z1 - z0) * (0.2 + Math.random() * 0.3));
+    }
   }
   for (const [x, y, z] of SHIPS[type].turrets) {
     const tm = mk(g, turretGeo, dark, x, y, z);

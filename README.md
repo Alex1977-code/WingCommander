@@ -1,7 +1,7 @@
 # Sternenfront – Der Perseus-Krieg
 
 Ein mobiles 3D-Weltraumkampfspiel im Stil klassischer Space-Combat-Sims: Trägerschiff, Flügelmann,
-Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 20 Missionen. Eigenes Universum, eigene Story,
+Einsatzbesprechungen, Zwischensequenzen und eine Story-Kampagne mit 21 Missionen. Eigenes Universum, eigene Story,
 eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt sich als App installieren
 („Zum Startbildschirm hinzufügen“); einmal geladen, funktioniert es auch offline.
 
@@ -9,7 +9,7 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
 
 - **3D-Grafik mit Three.js**: PBR-Materialien, Nebel-Skybox per Shader, Planeten mit Atmosphäre,
   Bloom, Partikel-Explosionen, Asteroidenfelder – alles prozedural, keine Asset-Downloads
-- **Kampagne in 3 Akten**: 20 Missionen mit eigener Story (Mentor, Verräter, Gefangennahme, Rettung, Finale)
+- **Kampagne in 3 Akten**: 21 Missionen mit eigener Story (Mentor, Verräter, Gefangennahme, Rettung, Finale)
   - 11 Zwischensequenzen in der 3D-Engine mit Kamerafahrten, Untertiteln und Titelkarten
   - Verzweigungen: Manche Niederlagen führen die Geschichte anders weiter statt zum Neustart
   - Bordszenen mit Entscheidungen, die Sympathie, Flügelmann-Können und den Verlauf beeinflussen

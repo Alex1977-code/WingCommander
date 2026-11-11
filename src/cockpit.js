@@ -545,7 +545,7 @@ export class Cockpit {
     thr.add(lever);
     thr.position.copy(S(-0.5, -1.48, 0.32));
     thr.rotation.y = 0.25;
-    this.rig.add(thr); this.lever = lever;
+    this.rig.add(thr); this.lever = lever; this.thrGroup = thr;
     // forearms: from each wrist back to an elbow below the field of view
     this.arms = {};
     const armGeo = new THREE.CylinderGeometry(0.028, 0.038, 1, 16, 1, true); armGeo.translate(0, 0.5 + 0.035, 0);
@@ -623,6 +623,8 @@ export class Cockpit {
     if (this.stick) this.stick.visible = st;
     // with the yoke both hands are on the horns: no third hand on the throttle
     if (this.thrHand) this.thrHand.visible = st;
+    // the yoke's left horn sweeps through the throttle's place: with the yoke the throttle sits on the centre pedestal (off screen)
+    if (this.thrGroup) this.thrGroup.visible = st;
     if (this.arms) {
       this.arms.stick.visible = this.arms.thr.visible = st; this.arms.yokeL.visible = this.arms.yokeR.visible = !st;
       for (const a of Object.values(this.arms)) a.userData.cuff.visible = a.visible;
