@@ -46,13 +46,29 @@ function disposeObj(o) {
   });
 }
 let MISSILE = null, MINE = null;
+/**
+ * Plasma torpedoes instead of chemical missiles (no smoke in vacuum): a bright magnetically
+ * contained core, a pulsing halo and an ion tail, in the launching side's colour.
+ */
+const PLASMA = {
+  ally: { core: new THREE.Color(1.6, 2.6, 3.8), halo: new THREE.Color(0.5, 1.2, 2.6), trail: new THREE.Color(0.35, 0.9, 2.2) },
+  foe: { core: new THREE.Color(3.8, 0.9, 1.9), halo: new THREE.Color(2.6, 0.35, 0.9), trail: new THREE.Color(2.2, 0.3, 0.8) },
+  heavy: { core: new THREE.Color(3.2, 1.4, 3.8), halo: new THREE.Color(1.9, 0.5, 2.8), trail: new THREE.Color(1.5, 0.4, 2.2) },
+};
 function missileRes() {
   if (MISSILE) return MISSILE;
-  const mk = (len) => { const g = new THREE.CylinderGeometry(0.35, 0.35, len, 6); g.rotateX(Math.PI / 2); g.userData.shared = true; return g; };
-  const sprite = (c) => { const m = new THREE.SpriteMaterial({ map: glowTexture(), color: c, blending: THREE.AdditiveBlending, depthWrite: false }); m.userData.shared = true; return m; };
-  const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.4 });
-  mat.userData.shared = true;
-  MISSILE = { body: mk(4.5), torp: mk(7), mat, glowAlly: sprite(new THREE.Color(3, 2.4, 1.2)), glowFoe: sprite(new THREE.Color(4, 0.6, 0.6)) };
+  const shared = (o) => { o.userData.shared = true; return o; };
+  const core = shared(new THREE.IcosahedronGeometry(1.2, 1));
+  const tail = shared(new THREE.ConeGeometry(0.8, 10, 10, 1, true)); tail.rotateX(-Math.PI / 2); tail.translate(0, 0, -5);
+  const mats = {};
+  for (const [k, c] of Object.entries(PLASMA)) {
+    mats[k] = {
+      core: shared(new THREE.MeshBasicMaterial({ color: c.core, toneMapped: false })),
+      tail: shared(new THREE.MeshBasicMaterial({ color: c.halo.clone().multiplyScalar(0.35), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+      halo: shared(new THREE.SpriteMaterial({ map: glowTexture(), color: c.halo, blending: THREE.AdditiveBlending, depthWrite: false })),
+    };
+  }
+  MISSILE = { core, tail, mats };
   return MISSILE;
 }
 function disposeComposer(c) {
@@ -232,6 +248,9 @@ export class Game {
   // ---------- launch from and landing in the carrier's flight deck ----------
   /** carrier-local point -> world (the carrier keeps moving during both sequences) */
   bayToWorld(out, x, y, z) { return out.set(x, y, z).applyQuaternion(this.carrier.quat).add(this.carrier.pos); }
+  /** energy field across the bay mouth (0 = off) and the glow of the hold-down clamps */
+  setBayField(k) { BAY_LIGHTS.field.opacity = 0.32 * k; BAY_LIGHTS.field.visible = k > 0.01; }
+  setClamps(on) { BAY_LIGHTS.clamp.color.setRGB(on ? 2.4 : 0.15, on ? 1.1 : 0.12, on ? 0.2 : 0.1); }
   setBayLights(r, a, gr) {
     BAY_LIGHTS.red.color.setRGB(r ? 3 : 0.25, r ? 0.15 : 0.02, r ? 0.1 : 0.02);
     BAY_LIGHTS.amber.color.setRGB(a ? 3 : 0.25, a ? 1.8 : 0.15, a ? 0.1 : 0.02);
@@ -248,8 +267,8 @@ export class Game {
       P.seqZ = BAY.back + 16 + (this.pilots.length - 1 - i) * 36; P.seqV = 0;
       this.bayToWorld(s.pos, 0, BAY.y - 0.5, P.seqZ); s.quat.copy(this.carrier.quat); P.camQ.copy(s.quat);
     });
-    this.setBayLights(true, false, false);
-    this.ui.comm('flug', this.coop ? 'Katapult eins und zwei, Nachtfalken. Triebwerke hochfahren.' : 'Katapult eins, {cs}. Triebwerke hochfahren, Startsequenz läuft.');
+    this.setBayLights(true, false, false); this.setBayField(1); this.setClamps(true);
+    this.ui.comm('flug', this.coop ? 'Stellplatz eins und zwei, Nachtfalken: Triebwerke vorglühen, Haltemagnete lösen auf mein Zeichen.' : 'Stellplatz eins, {cs}: Triebwerke vorglühen, Haltemagnete lösen auf mein Zeichen.');
   }
 
   startLanding() {
@@ -263,7 +282,7 @@ export class Game {
       const sx = Math.sign(L.x) || 1;
       P.landWps = L.z > BAY.mouth + 250 && Math.abs(L.x) < 400 ? [A] : [new THREE.Vector3(sx * (320 + i * 40), -90, 200), A];
     });
-    this.setBayLights(false, false, true);
+    this.setBayLights(false, false, true); this.setBayField(0); this.setClamps(false);
     this.ui.comm('flug', 'Landefreigabe erteilt, {cs}. Leitstrahl Bucht eins aktiv – Autopilot übernimmt.');
     this.setBanner('LANDEANFLUG');
     this.audio.beep(900, 0.18);
@@ -277,21 +296,25 @@ export class Game {
     const c = this.carrier;
     if (q.kind === 'launch') {
       const GO = 2.6;
-      if (q.light === 0 && q.t > 1.2) { q.light = 1; this.setBayLights(false, true, false); this.audio.beep(700, 0.16); }
+      // red: engines pre-heat · amber: clamps release, the ship floats free, the bay field drops · green: own thrust
+      if (q.light === 0 && q.t > 1.2) { q.light = 1; this.setBayLights(false, true, false); this.setClamps(false); this.audio.hit(true); this.audio.beep(700, 0.16); }
       if (q.light === 1 && q.t > GO) { q.light = 2; this.setBayLights(false, false, true); this.audio.warp(); this.audio.beep(1300, 0.2); }
+      if (q.light >= 1) this.setBayField(Math.max(0, 1 - (q.t - 1.2) / 1.0));
       let out = 0;
       for (const P of this.pilots) {
         const s = P.ship;
         if (!s.seqHold) { out++; continue; }
-        if (q.t > GO) { P.seqV = Math.min(430, P.seqV + 280 * dt); P.seqZ += P.seqV * dt; P.shake = Math.max(P.shake, 0.35); P.boosting = true; }
-        else P.shake = Math.max(P.shake, 0.06 + q.t * 0.03); // engines spooling up
-        this.bayToWorld(s.pos, 0, BAY.y - 0.5, P.seqZ); s.quat.copy(c.quat);
+        if (q.t > GO) { P.seqV = Math.min(320, P.seqV + 150 * dt); P.seqZ += P.seqV * dt; P.shake = Math.max(P.shake, 0.18); P.boosting = true; }
+        else P.shake = Math.max(P.shake, 0.04 + q.t * 0.02); // engines spooling up
+        // after the clamps let go the ship lifts a little and hovers on its thrusters
+        const lift = q.t > 1.2 ? Math.min(1, (q.t - 1.2) / 0.8) * 1.4 + Math.sin(q.t * 3) * 0.12 : 0;
+        this.bayToWorld(s.pos, 0, BAY.y - 0.5 + lift, P.seqZ); s.quat.copy(c.quat);
         s.speed = P.seqV; P.aimPoint.copy(s.pos).addScaledVector(this.fwd(s, t1), 900);
         if (P.seqZ > BAY.mouth + 30) { s.seqHold = false; s.speed = c.speed + P.seqV * 0.55; P.throttle = 0.75; P.boosting = false; if (P.viewSaved !== P.view) { P.view = P.viewSaved; this.ui.viewChanged?.(P); } }
       }
       if (out === this.pilots.length) {
-        this.seq = null; this.setBayLights(false, false, false);
-        this.ui.comm('flug', this.coop ? 'Beide Maschinen frei. Gute Jagd, Nachtfalken!' : 'Maschine frei. Gute Jagd, {cs}!');
+        this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.setClamps(true);
+        this.ui.comm('flug', this.coop ? 'Beide Maschinen frei. Schleusenfeld wieder aktiv. Gute Jagd, Nachtfalken!' : 'Maschine frei, Schleusenfeld wieder aktiv. Gute Jagd, {cs}!');
       }
       return;
     }
@@ -338,7 +361,7 @@ export class Game {
           q3.copy(c.quat).invert(); // restore the shared inverse used above
         }
         const Lz = t4.copy(s.pos).sub(c.pos).applyQuaternion(q3.copy(c.quat).invert()).z;
-        if (Lz <= P.landStop) { P.landStage = 2; this.audio.hit(true); P.shake = 0.4; }
+        if (Lz <= P.landStop) { P.landStage = 2; this.audio.hit(true); P.shake = 0.3; this.setClamps(true); }
       } else {
         parked++; s.speed = 0;
         s.pos.copy(L.set(0, BAY.y - 0.5, P.landStop)).applyQuaternion(c.quat).add(c.pos);
@@ -347,7 +370,7 @@ export class Game {
     }
     if (flying && parked === flying) {
       if (!q.doneT) { q.doneT = q.t; this.setBanner('LANDUNG BESTÄTIGT'); this.ui.comm('flug', 'Aufgesetzt. Willkommen zurück an Bord, {cs}.'); this.audio.stopEngine(); }
-      else if (q.t - q.doneT > 2.2) { this.seq = null; this.setBayLights(false, false, false); this.end(true); }
+      else if (q.t - q.doneT > 2.2) { this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.end(true); }
     }
   }
 
@@ -420,10 +443,13 @@ export class Game {
 
   launchMissile(s, target, torpedo = false) {
     const R = missileRes();
+    const kind = torpedo ? 'heavy' : s.team === 0 ? 'ally' : 'foe', M = R.mats[kind];
     const mesh = new THREE.Group();
-    mesh.add(new THREE.Mesh(torpedo ? R.torp : R.body, R.mat));
-    const glow = new THREE.Sprite(s.team === 0 ? R.glowAlly : R.glowFoe);
-    glow.scale.setScalar(torpedo ? 16 : 10); glow.position.z = -3;
+    const core = new THREE.Mesh(R.core, M.core); core.scale.setScalar(torpedo ? 1.7 : 1); mesh.add(core);
+    const tail = new THREE.Mesh(R.tail, M.tail); tail.scale.setScalar(torpedo ? 1.6 : 1); mesh.add(tail);
+    const glow = new THREE.Sprite(M.halo);
+    glow.scale.setScalar(torpedo ? 26 : 17);
+    glow.userData.base = torpedo ? 26 : 17;
     mesh.add(glow);
     mesh.position.set(0, -1.6, 2).applyQuaternion(s.quat).add(s.pos);
     mesh.quaternion.copy(s.quat);
@@ -432,9 +458,9 @@ export class Game {
     this.missiles.push({
       mesh, pos: mesh.position, quat: mesh.quaternion, target, team: s.team, owner: s,
       speed: torpedo ? 300 : Math.max(380, s.speed + 150), maxSpeed: torpedo ? 300 : 620, turn: torpedo ? 0.7 : (s.team === 0 ? 2.6 : 1.35),
-      life: torpedo ? 14 : 7, dmg: torpedo ? 170 : 75, torpedo,
+      life: torpedo ? 14 : 7, dmg: torpedo ? 170 : 75, torpedo, kind, glow, phase: Math.random() * 6,
     });
-    if (this.ear(s.pos) < 1200) this.audio.missile();
+    if (this.ear(s.pos) < 1200) this.audio.torpedo(torpedo, Math.max(0.3, 1 - this.ear(s.pos) / 1200));
   }
 
   damage(s, dmg, by, point) {
@@ -798,7 +824,7 @@ export class Game {
       if (P.mslLock > 0 && P.lockToneT <= 0 && P.idx === 0) {
         if (P.mslLock >= 1) { this.audio.beep(1480, 0.07); P.lockToneT = 0.16; } else { this.audio.beep(600 + P.mslLock * 500, 0.05); P.lockToneT = 0.34 - P.mslLock * 0.22; }
       }
-      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`RAKETE AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
+      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`TORPEDO AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
     } else P.mslLock = 0;
     if (c.firing) this.fire(p, P.aimLocked ? t3 : t1);
 
@@ -846,8 +872,8 @@ export class Game {
     // only a locked seeker guides the missile; without lock it flies straight ahead
     const locked = P.target?.alive && P.mslLock >= 1;
     this.launchMissile(p, locked ? P.target : null);
-    P.cockpit?.log(`RAKETE ${p.def.missiles - p.missiles} AB → ${locked ? P.target.name : 'UNGELENKT'}`, '#ffc857');
-    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – RAKETE UNGELENKT');
+    P.cockpit?.log(`TORPEDO ${p.def.missiles - p.missiles} AB → ${locked ? P.target.name : 'UNGELENKT'}`, '#ffc857');
+    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – TORPEDO UNGELENKT');
     P.mslLock = 0;
   }
 
@@ -1567,8 +1593,12 @@ export class Game {
       t1.copy(FWD).applyQuaternion(m.quat);
       const mPrev = tBump.copy(m.pos);
       m.pos.addScaledVector(t1, m.speed * dt);
-      this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-3, 3), rnd(-3, 3), rnd(-3, 3), 1.8, 1.2, 0.7, m.torpedo ? 5 : 3, 0.6, 0.4);
-      if ((m.smokeT = (m.smokeT || 0) - dt) <= 0) { m.smokeT = 0.03; this.fx.smoke(m.pos, 1.6, 1.4, null, 0.55, 0.35); }
+      // ion tail (no smoke in vacuum): short-lived glowing particles plus the odd crackling spark
+      const pc = PLASMA[m.kind].trail;
+      this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-2, 2), rnd(-2, 2), rnd(-2, 2), pc.r, pc.g, pc.b, m.torpedo ? 4.5 : 2.6, 0.45, 0.6);
+      if (Math.random() < dt * 14) this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-30, 30), rnd(-30, 30), rnd(-30, 30), pc.r * 1.5, pc.g * 1.5, pc.b * 1.5, 1.2, 0.18, 2);
+      m.phase += dt * 32;
+      m.glow.scale.setScalar(m.glow.userData.base * (0.85 + Math.sin(m.phase) * 0.15 + Math.random() * 0.06));
       let boom = m.life <= 0;
       if (!boom) {
         for (const s of this.ships) {
@@ -1583,8 +1613,16 @@ export class Game {
       }
       if (!boom) for (const a of this.asteroids) if (m.pos.distanceToSquared(a.pos) < a.radius * a.radius) { boom = true; break; }
       if (boom) {
-        this.fx.explode(m.pos, m.torpedo ? 1.6 : 0.8);
-        this.audio.explosion(Math.max(0, 0.6 - this.ear(m.pos) / 2500));
+        // plasma burst: a white-hot flash, an expanding shock ring and a spray of charged sparks
+        // (smaller when it bursts right at a player's ship, so the camera isn't blinded)
+        const pc = PLASMA[m.kind].core, close = this.pilots.some((P) => P.camera.position.distanceTo(m.pos) < 40);
+        const k = (m.torpedo ? 1.8 : 1) * (close ? 0.35 : 1);
+        this.fx.flash(m.pos, 20 * k, pc, 0.28);
+        this.fx.flash(m.pos, 8 * k, new THREE.Color(3, 3, 3), 0.1);
+        this.fx.ring(m.pos, 24 * k, PLASMA[m.kind].halo, 0.55);
+        this.fx.sparks(m.pos, pc, Math.round(18 * (m.torpedo ? 1.8 : 1)), 140);
+        this.fx.light(m.pos, 4 * k, 0.35, new THREE.Color(pc.r / 4, pc.g / 4, pc.b / 4).getHex());
+        this.audio.plasmaHit(Math.max(0, 0.7 - this.ear(m.pos) / 2500));
         this.scene.remove(m.mesh);
         disposeObj(m.mesh);
         this.missiles.splice(i, 1);

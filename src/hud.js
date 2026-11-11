@@ -254,7 +254,7 @@ export function drawHud(ctx, g, P) {
         }
         ctx.shadowBlur = 0;
         ctx.font = `800 ${9 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
-        ctx.fillText(locked ? 'RAKETE ◆ AUFGESCHALTET' : `SUCHKOPF ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
+        ctx.fillText(locked ? 'TORPEDO ◆ AUFGESCHALTET' : `SUCHKOPF ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
       }
     } else arrow(ctx, P, tg.pos, C.foe, s);
   }
@@ -299,7 +299,7 @@ export function drawHud(ctx, g, P) {
   ctx.fillStyle = '#dff4ff'; ctx.font = `700 ${12 * s}px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(`${Math.round(p.speed)} M/S`, px, by + (bh + 4 * s) * 3 + 2 * s);
   ctx.fillStyle = C.warn;
-  ctx.fillText(`RAK ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
+  ctx.fillText(`TORP ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
   // --- target panel (top-right) ---
   if (tg && tg.alive) {
@@ -384,7 +384,7 @@ export function drawHud(ctx, g, P) {
   // warnings
   if (P.missileWarn && Math.sin(t * 16) > 0) {
     ctx.font = `800 ${14 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    glowText(ctx, '⚠ RAKETENWARNUNG', w / 2, P.view === 'cockpit' ? h * 0.47 + 78 * s : h * 0.28, C.foe, 14); // below the reticle in the cockpit, clear of the roll scale
+    glowText(ctx, '⚠ TORPEDOWARNUNG', w / 2, P.view === 'cockpit' ? h * 0.47 + 78 * s : h * 0.28, C.foe, 14); // below the reticle in the cockpit, clear of the roll scale
   }
   if (g.banner && g.bannerT > 0) {
     const a = Math.min(1, g.bannerT);
@@ -493,7 +493,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
   ctx.restore();
 }
 
-/** catapult signal lights + countdown, or the landing guidance (centre-line cross and range to the stop mark) */
+/** launch signal lights + countdown (engines pre-heat, clamps release, own thrust), or the landing guidance (centre-line cross and range to the stop mark) */
 function seqHud(ctx, g, P, w, h, s, t) {
   const q = g.seq;
   ctx.save();
@@ -510,7 +510,7 @@ function seqHud(ctx, g, P, w, h, s, t) {
     }
     ctx.shadowBlur = 0;
     ctx.font = `800 ${13 * s}px ${DISPLAY}`; ctx.fillStyle = cols[lit];
-    const txt = lit === 2 ? 'KATAPULT · START!' : `KATAPULT BEREIT · ${Math.max(1, Math.ceil(GO - q.t))}`;
+    const txt = lit === 2 ? 'START FREI · TRIEBWERK VOLL' : lit === 1 ? `HALTEMAGNETE GELÖST · SCHLEUSENFELD AUS · ${Math.max(1, Math.ceil(GO - q.t))}` : `TRIEBWERKE VORGLÜHEN · ${Math.max(1, Math.ceil(GO - q.t))}`;
     glowText(ctx, txt, cx, y + 30 * s, cols[lit], 10);
   } else {
     const c = g.carrier, p = P.ship;

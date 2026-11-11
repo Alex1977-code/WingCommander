@@ -280,6 +280,10 @@ export const BAY_LIGHTS = {
   red: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.02, 0.02) }),
   amber: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.15, 0.02) }),
   green: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.02, 0.25, 0.06) }),
+  // atmosphere-retaining energy field across the bay mouth (switched off to fly through)
+  field: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.7, 1.4), transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+  // magnetic hold-down clamps under the parked fighters
+  clamp: new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.1, 0.2) }),
 };
 for (const m of Object.values(BAY_LIGHTS)) m.userData.keep = true;
 
@@ -354,6 +358,12 @@ function carrier(g, engines, M) {
   mk(g, uvBox(hw * 2, 0.7, 0.7), glow, 0, by + hh - 0.4, mouth); mk(g, uvBox(hw * 2, 0.7, 0.7), glow, 0, by - hh + 0.4, mouth);
   for (const sx of [-1, 1]) mk(g, uvBox(0.7, hh * 2, 0.7), glow, sx * (hw - 0.4), by, mouth);
   [BAY_LIGHTS.red, BAY_LIGHTS.amber, BAY_LIGHTS.green].forEach((m, i) => mk(g, uvBox(2.2, 1.2, 0.6), m, (i - 1) * 3.2, by + hh - 1.6, mouth - 2));
+  mk(g, new THREE.PlaneGeometry(hw * 2 - 1, hh * 2 - 1), BAY_LIGHTS.field, 0, by, mouth - 0.5);
+  // two parking spots with magnetic clamps (one per pilot)
+  for (const z of [back + 16, back + 52]) for (const sx of [-1, 1]) {
+    mk(g, uvBox(2.4, 1.2, 5), dark, sx * 2.6, by - hh + 0.6, z);
+    mk(g, uvBox(2.0, 0.25, 4.2), BAY_LIGHTS.clamp, sx * 2.6, by - hh + 1.25, z);
+  }
   for (let z = back + 4; z < mouth; z += 9) for (const sx of [-1, 1]) mk(g, uvBox(1.4, 0.4, 3), strip, sx * 13, by - hh - 2.1, z); // deck lights underneath
   // outboard engine nacelles on swept pylons
   const nacProf = [[-86, 0.01], [-86, 6], [-80, 9.5], [-40, 10.5], [40, 10.5], [70, 9], [86, 5], [90, 0.01]].map(([z, r]) => new THREE.Vector2(r, z));

@@ -352,7 +352,20 @@ export class Audio {
     if (shield) { this.tone('sine', 1100, 260, 0.22, 0.28, 0.3); this.tone('triangle', 2200, 900, 0.12, 0.1, 0.2); }
     else { this.noise(0.25, 0.5, 2400, 160); this.tone('square', 150, 45, 0.18, 0.25, 0.1); }
   }
-  missile() { this.noise(0.12, 0.3, 900, 300, 1, 'lowpass', 0); this.noise(1.0, 0.32, 500, 3600, 2.2, 'bandpass', 0.3); }
+  missile() { this.torpedo(false, 1); }
+  /** plasma torpedo release: a magnetic thump and a rising electric whine */
+  torpedo(heavy = false, vol = 1) {
+    this.tone('sine', heavy ? 70 : 110, 40, 0.25, 0.32 * vol, 0.2);
+    this.tone('sawtooth', heavy ? 160 : 260, heavy ? 900 : 1600, 0.35, 0.09 * vol, 0.35);
+    this.noise(0.4, 0.14 * vol, 2400, 5200, 3, 'bandpass', 0.3);
+  }
+  /** plasma impact: crackling discharge over a soft thud */
+  plasmaHit(vol = 0.6) {
+    if (vol <= 0.01) return;
+    this.tone('sine', 140, 45, 0.45, 0.4 * vol, 0.4);
+    this.noise(0.5, 0.35 * vol, 6000, 900, 1.4, 'bandpass', 0.6);
+    this.tone('square', 1800, 300, 0.18, 0.05 * vol, 0.3);
+  }
   beep(f = 880, vol = 0.14) { this.tone('sine', f, f, 0.08, vol, 0.05); }
   lock() { this.tone('square', 1500, 1500, 0.05, 0.07, 0); setTimeout(() => this.tone('square', 1900, 1900, 0.05, 0.07, 0), 70); }
   warn() { this.tone('square', 720, 480, 0.18, 0.14, 0.1); }

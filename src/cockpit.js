@@ -307,7 +307,7 @@ const IDLE_LINES = [
 
 // ---------------------------------------------------------------------------
 const LAMPS = [
-  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['RAKETE', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
+  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['TORPEDO', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
   ['ZIEL', 'target'], ['LOCK', 'lock'], ['WAFFEN', 'guns'], ['MINE', 'mine'], ['AUTO', 'auto'],
 ];
 const LAMP_RGB = { off: [40, 36, 30], green: [70, 255, 150], amber: [255, 190, 60], red: [255, 60, 70] };
@@ -1207,7 +1207,7 @@ export class Cockpit {
       bar(36, `SCHILD ${Math.round(sk * 100)}%`, sk, sk > 0.2 ? G : R);
       bar(84, `HÜLLE ${Math.round(hk * 100)}%`, hk, hk > 0.3 ? G : R);
       bar(132, 'NACHBRENNER', P.energy, A);
-      g.fillStyle = A; g.fillText(`RAK ${p.missiles}   ${Math.round(p.speed)} M/S`, W * 0.58, 184);
+      g.fillStyle = A; g.fillText(`TORP ${p.missiles}   ${Math.round(p.speed)} M/S`, W * 0.58, 184);
     } else if (m.kind === 'RAD') {
       this.drawRadar(g, W, H, P, game);
     } else {
@@ -1280,7 +1280,7 @@ export class Cockpit {
     // lock state
     const blink = Math.sin(now / 90) > 0;
     g.font = `700 14px ${FONT}`;
-    if (P.mslLock >= 1) { g.fillStyle = blink ? R : '#3a0a12'; g.fillText('RAK LOCK', 10, H - 46); }
+    if (P.mslLock >= 1) { g.fillStyle = blink ? R : '#3a0a12'; g.fillText('TORP LOCK', 10, H - 46); }
     else if (P.mslLock > 0) { g.fillStyle = A; g.fillText(`SUCHKOPF ${Math.round(P.mslLock * 100)}%`, 10, H - 46); }
     if (P.aimLocked) { g.fillStyle = blink ? G : '#04110b'; g.fillText('KANONE LOCK', 10, H - 26); }
   }
