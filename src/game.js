@@ -1345,6 +1345,11 @@ export class Game {
       const p = P.ship;
       if (p.alive) {
         let fov;
+        // wide phone screens (19.5:9 and wider) would get 120°+ horizontally and stretch everything
+        // towards the edges: cap the horizontal field of view, the vertical one follows the aspect
+        const aspect = P.camera.aspect || 1.6;
+        const capV = (hDeg) => (2 * Math.atan(Math.tan((hDeg * Math.PI) / 360) / aspect) * 180) / Math.PI;
+        P.cockpitFov = Math.round(Math.min(P.baseFov + 10, capV(100)));
         if (P.view === 'cockpit') {
           // pilot's eye: locked to the ship, horizon leans into turns, slight head lag
           P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 22));
@@ -1352,13 +1357,13 @@ export class Game {
           P.camera.position.copy(t1.set(eye[0], eye[1], eye[2]).applyQuaternion(p.quat).add(p.pos));
           q1.setFromAxisAngle(AZ, p.bank * 0.45);
           P.camera.quaternion.copy(P.camQ).multiply(q1).multiply(FLIP);
-          fov = P.baseFov + 10 + (p.speed / p.def.boost) * 10;
+          fov = P.cockpitFov + (p.speed / p.def.boost) * 4;
         } else {
           P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 5.5));
           const back = 27 + (p.speed / p.def.boost) * 9;
           P.camera.position.copy(t1.set(0, 7.5, -back).applyQuaternion(P.camQ).add(p.pos));
           P.camera.quaternion.copy(P.camQ).multiply(FLIP);
-          fov = P.baseFov + (p.speed / p.def.boost) * 16;
+          fov = Math.min(P.baseFov, capV(104)) + (p.speed / p.def.boost) * 10;
         }
         if (Math.abs(fov - P.camera.fov) > 0.05) { P.camera.fov += (fov - P.camera.fov) * Math.min(1, dt * 4); P.camera.updateProjectionMatrix(); }
       }

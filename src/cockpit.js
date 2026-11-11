@@ -424,7 +424,10 @@ export class Cockpit {
     const tube = (pts, r, mat, parent = this.rig) => { const m = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 32, r, 10), mat); parent.add(m); return m; };
 
     // --- curved wrap-around console ---
-    const R = 0.62, H = 0.32, lean = -0.21;
+    // console radius: on wide screens the vertical field of view is smaller, so the console moves a little
+    // further away until everything from its top edge (33 % below centre) down to the button rows fits
+    const halfV = (fov * DEG) / 2, avail = halfV - Math.atan(0.33 * Math.tan(halfV));
+    const R = 0.62 * Math.max(1, 0.4 / avail), H = 0.32, lean = -0.21;
     const panel = new THREE.Group();
     const span = Math.min(170, 120 + aspect * 18) * DEG;
     panel.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R * 1.04, H, 64, 1, true, Math.PI - span / 2, span), this.dark));
@@ -666,7 +669,7 @@ export class Cockpit {
     };
     // left pod: three rows of seven-segment readouts
     const pl = pod(-34, 0.17, 0.074, 0.05);
-    this.elems.seg = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.06), this.segPanel.mat); this.elems.seg.position.z = 0.0065; pl.add(this.elems.seg);
+    this.elems.seg = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.0656), this.segPanel.mat); this.elems.seg.position.z = 0.0065; pl.add(this.elems.seg);
     this.podL = pl;
     // right pod: LED bar graphs, keypad and guarded toggle switches on top
     const pr = pod(34, 0.17, 0.074, 0.05);
@@ -751,7 +754,7 @@ export class Cockpit {
   // ---------------------------------------------------------------------------
   update(P, game, dt, camera) {
     this.camera.fov = camera.fov; this.camera.aspect = camera.aspect; this.camera.updateProjectionMatrix();
-    this.build(camera.aspect, Math.round((P.baseFov || 60) + 10));
+    this.build(camera.aspect, P.cockpitFov || Math.round((P.baseFov || 60) + 10));
     const p = P.ship;
     v.copy(game.env.sunDir).applyQuaternion(q.copy(camera.quaternion).invert());
     this.sun.position.copy(v); this.sun.target.position.set(0, 0, 0);
