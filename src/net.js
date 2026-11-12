@@ -18,12 +18,14 @@ export function peerOptions() {
   return { host, port: +port || 9000, path: '/' + (path.join(':') || ''), secure: location.protocol === 'https:' && !['localhost', '127.0.0.1'].includes(host), debug: 0 };
 }
 
-function wrapPeerConn(conn) {
+function wrapPeerConn(conn, peer = null) {
+  // the phone side owns its Peer: destroy it with the connection, or every reconnect leaves a broker socket open
+  if (peer) conn.on('close', () => peer.destroy());
   return {
     send: (m) => conn.open && conn.send(m),
     onMessage: (cb) => conn.on('data', cb),
     onClose: (cb) => { conn.on('close', cb); conn.on('error', cb); },
-    close: () => conn.close(),
+    close: () => { conn.close(); peer?.destroy(); },
   };
 }
 
@@ -99,7 +101,7 @@ export async function connectPad(code, name) {
     peer.on('error', failure);
     peer.on('open', () => {
       const conn = peer.connect(PREFIX + code.toUpperCase(), { metadata: { name: String(name).slice(0, 24) }, serialization: 'json', reliable: true });
-      conn.on('open', () => { if (settled) return; settled = true; clearTimeout(timer); resolve(wrapPeerConn(conn)); });
+      conn.on('open', () => { if (settled) return; settled = true; clearTimeout(timer); resolve(wrapPeerConn(conn, peer)); });
       conn.on('error', failure);
     });
   });

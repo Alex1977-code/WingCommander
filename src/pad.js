@@ -71,7 +71,7 @@ export function startPadPage(code, existingTransport) {
       if (m.t === 'mode') setMode(m.mode === 'flight' ? 'flight' : 'menu');
       if (m.t === 'buzz') buzz(Math.min(200, m.ms | 0));
     });
-    t.onClose(() => { tr = null; setStatus('Verbindung getrennt – Seite neu laden', false); setMode('connect'); });
+    t.onClose(() => { if (tr !== t) return; tr = null; setStatus('Verbindung getrennt – Seite neu laden', false); setMode('connect'); });
   };
 
   let connecting = false;
@@ -108,18 +108,21 @@ export function startPadPage(code, existingTransport) {
     e.preventDefault(); tr?.send({ t: 'e', e: b.dataset.e }); buzz(10);
     b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120);
   }));
+  const holds = [];
   document.querySelectorAll('[data-h]').forEach((b) => {
     const k = b.dataset.h;
-    b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); state[k] = true; dirty = true; b.classList.add('down'); buzz(6); });
-    const up = () => { state[k] = false; dirty = true; b.classList.remove('down'); };
-    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
+    const ids = new Set(); // held while any finger is on it
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); ids.add(e.pointerId); state[k] = true; dirty = true; b.classList.add('down'); buzz(6); });
+    const up = (e) => { ids.delete(e.pointerId); if (ids.size) return; state[k] = false; dirty = true; b.classList.remove('down'); };
+    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
+    holds.push(() => { ids.clear(); state[k] = false; b.classList.remove('down'); });
   });
 
   // stick
   const zone = $('pad-stick'), knob = $('pad-knob');
   let sid = null, ox = 0, oy = 0;
   const R = 60;
-  zone.addEventListener('pointerdown', (e) => { sid = e.pointerId; ox = e.clientX; oy = e.clientY; zone.setPointerCapture(sid); e.preventDefault(); });
+  zone.addEventListener('pointerdown', (e) => { if (sid !== null) return; sid = e.pointerId; ox = e.clientX; oy = e.clientY; zone.setPointerCapture(sid); e.preventDefault(); });
   zone.addEventListener('pointermove', (e) => {
     if (e.pointerId !== sid) return;
     let dx = (e.clientX - ox) / R, dy = (e.clientY - oy) / R;
@@ -151,8 +154,11 @@ export function startPadPage(code, existingTransport) {
   }, 33);
 
   // leaving the page (screen lock, app switch) lets go of everything instead of leaving fire held
-  const letGo = () => { state.x = state.y = 0; state.f = state.b = false; sid = null; knob.style.transform = ''; tr?.send({ t: 's', x: 0, y: 0, f: false, b: false, th: +state.th.toFixed(3) }); };
+  const letGo = () => { holds.forEach((f) => f()); state.x = state.y = 0; state.f = state.b = false; sid = null; knob.style.transform = ''; tr?.send({ t: 's', x: 0, y: 0, f: false, b: false, th: +state.th.toFixed(3) }); };
   document.addEventListener('visibilitychange', () => { if (document.hidden) letGo(); });
+  // safety net: no finger on the screen any more → nothing can still be held
+  window.addEventListener('touchend', (e) => { if (!e.touches.length && (sid !== null || state.f || state.b)) { letGo(); dirty = true; } }, true);
+  window.addEventListener('touchcancel', (e) => { if (!e.touches.length) { letGo(); dirty = true; } }, true);
   window.addEventListener('pagehide', letGo);
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   // keep screen on while controlling

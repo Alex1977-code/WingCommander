@@ -164,7 +164,7 @@ function textures() {
   const decalTex = (draw) => { const c = document.createElement('canvas'); c.width = 256; c.height = 64; draw(c.getContext('2d')); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
   const codeUnion = decalTex((g) => {
     g.fillStyle = 'rgba(200,88,26,.95)'; g.fillRect(0, 22, 18, 20); g.fillRect(22, 22, 8, 20);
-    g.font = '800 44px Rajdhani, sans-serif'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(235,238,240,.95)'; g.fillText('NF·07', 40, 34);
+    g.font = '700 44px Rajdhani, sans-serif'; g.textBaseline = 'middle'; g.fillStyle = 'rgba(235,238,240,.95)'; g.fillText('NF·07', 40, 34);
     // faded and chipped stencil
     g.globalCompositeOperation = 'destination-out';
     for (let i = 0; i < 260; i++) { g.globalAlpha = Math.random() * 0.9; g.fillRect(Math.random() * 256, Math.random() * 64, 1 + Math.random() * 5, 1 + Math.random() * 3); }
@@ -458,7 +458,7 @@ function registryTexture() {
   const c = document.createElement('canvas'); c.width = 1024; c.height = 160;
   const g = c.getContext('2d');
   g.clearRect(0, 0, 1024, 160);
-  g.fillStyle = 'rgba(232,236,240,.92)'; g.font = '800 92px Rajdhani, sans-serif'; g.textBaseline = 'middle';
+  g.fillStyle = 'rgba(232,236,240,.92)'; g.font = '700 92px Rajdhani, sans-serif'; g.textBaseline = 'middle';
   g.fillText('TUS AURORA', 150, 70);
   g.font = '700 44px Rajdhani, sans-serif'; g.fillStyle = 'rgba(232,120,40,.95)'; g.fillText('CV-07 · TERRANISCHE UNION', 152, 132);
   // union emblem: ring with a stylised star

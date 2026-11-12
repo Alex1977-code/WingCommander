@@ -267,8 +267,10 @@ function shipWire(type) {
     });
     if (segs.length / 6 < 2500) break; // keep big ships light enough to redraw at 10 Hz
   }
-  const pos = new Float32Array(segs.length);
-  for (let i = 0; i < segs.length; i++) pos[i] = segs[i] / maxR;
+  // still too many edges (dreadnought): keep every n-th segment
+  const n = segs.length / 6, step = Math.max(1, Math.ceil(n / 2500));
+  const pos = new Float32Array(Math.ceil(n / step) * 6);
+  for (let s = 0, o = 0; s < n; s += step) for (let k = 0; k < 6; k++) pos[o++] = segs[s * 6 + k] / maxR;
   return (WIRES[type] = { pos });
 }
 
@@ -307,7 +309,7 @@ const IDLE_LINES = [
 
 // ---------------------------------------------------------------------------
 const LAMPS = [
-  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['LANZE', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
+  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['SUCHER', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
   ['ZIEL', 'target'], ['LOCK', 'lock'], ['WAFFEN', 'guns'], ['MINE', 'mine'], ['AUTO', 'auto'],
 ];
 const LAMP_RGB = { off: [40, 36, 30], green: [70, 255, 150], amber: [255, 190, 60], red: [255, 60, 70] };
@@ -749,7 +751,7 @@ export class Cockpit {
   /** add a line to the scrolling message screens */
   log(text, color = '#6dffb0', screen = 0) {
     const L = this.logs[screen];
-    L.lines.push({ text: text.toUpperCase().slice(0, 30), color, t: performance.now() });
+    L.lines.push({ text: text.toUpperCase().slice(0, 34), color, t: performance.now() });
     if (L.lines.length > 14) L.lines.shift();
   }
 
@@ -1032,7 +1034,11 @@ export class Cockpit {
       g.globalAlpha = (0.55 + Math.random() * 0.45) * Math.max(0.35, 1 - age / 14);
       g.fillStyle = ln.color;
       const dx = Math.random() < 0.03 ? rnd(-6, 6) : 0;
-      g.fillText(ln.text.slice(0, shown) + (shown < ln.text.length ? '▌' : ''), 8 + dx, y);
+      // long lines are squeezed to the screen width instead of being cut off
+      if (ln.w == null) ln.w = g.measureText(ln.text).width;
+      const sq = Math.min(1, (W - 16) / Math.max(1, ln.w));
+      if (sq < 1) { g.save(); g.translate(8 + dx, y); g.scale(sq, 1); g.fillText(ln.text.slice(0, shown) + (shown < ln.text.length ? '▌' : ''), 0, 0); g.restore(); }
+      else g.fillText(ln.text.slice(0, shown) + (shown < ln.text.length ? '▌' : ''), 8 + dx, y);
     }
     g.globalAlpha = 1;
     g.fillStyle = 'rgba(0,0,0,.35)'; for (let y = 0; y < H; y += 3) g.fillRect(0, y, W, 1);

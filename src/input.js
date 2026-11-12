@@ -98,8 +98,8 @@ export class TouchKeys {
         if (!e.repeat || e.code.startsWith('Arrow')) hub.menu(MENU[e.code]);
         if (e.target instanceof HTMLButtonElement || e.target === document.body) e.preventDefault();
       }
+      this.keys[e.code] = true; // also on repeats: a key held through a mission start or a blur comes back
       if (e.repeat) return;
-      this.keys[e.code] = true;
       if (e.code === 'KeyM' || e.code === 'Enter') this.events.push('missile');
       if (e.code === 'KeyT') this.events.push('target');
       if (e.code === 'KeyJ') this.events.push('auto');
@@ -111,7 +111,7 @@ export class TouchKeys {
     // safety net: when no finger is on the screen any more, nothing can still be held
     const allUp = () => {
       this.fireBtn = this.boostBtn = false; for (const ids of this.holdIds || []) ids.clear();
-      $('btn-fire').classList.remove('down'); $('btn-boost').classList.remove('down');
+      $('btn-fire')?.classList.remove('down'); $('btn-boost')?.classList.remove('down');
       if (this.stick.id !== null) { this.stick.id = null; this.stick.x = this.stick.y = 0; base.classList.remove('on'); setKnob(); }
     };
     window.addEventListener('touchend', (e) => { if (!e.touches.length) allUp(); }, true);
@@ -225,12 +225,14 @@ export class RemoteDevice {
 
 /** Combines several controllers into one (used when multiple devices steer the same ship). */
 export class Merged {
-  constructor(list) { this.src = typeof list === 'function' ? list : () => list; this.throttleSet = null; this.throttleRate = 0; }
-  get list() { return this.src().filter(Boolean); }
+  constructor(list) { this.src = typeof list === 'function' ? list : () => list; this.throttleSet = null; this.throttleRate = 0; this._list = null; this._ev = []; }
+  // the device list is resolved once per frame in update(); firing/boosting are read many times per frame
+  get list() { return this._list || this.src().filter(Boolean); }
   update() {
     let x = 0, y = 0;
     this.throttleSet = null; this.throttleRate = 0;
-    for (const c of this.list) {
+    this._list = this.src().filter(Boolean);
+    for (const c of this._list) {
       x += c.x; y += c.y;
       if (c.throttleSet != null) { this.throttleSet = c.throttleSet; c.throttleSet = null; }
       this.throttleRate += c.throttleRate;
@@ -239,7 +241,7 @@ export class Merged {
   }
   get firing() { return this.list.some((c) => c.firing); }
   get boosting() { return this.list.some((c) => c.boosting); }
-  take() { return this.list.flatMap((c) => c.take()); }
+  take() { const out = []; for (const c of this.list) { const e = c.take(); for (let i = 0; i < e.length; i++) out.push(e[i]); } return out; }
   reset() { this.list.forEach((c) => c.reset()); }
   buzz(ms) { this.list.forEach((c) => c.buzz?.(ms)); }
 }
@@ -266,7 +268,10 @@ export class InputHub {
   }
   scanPads() {
     const pads = this.pads();
-    let dirty = false;
+    // drop vanished pads first, so a pad that reconnects at a new index can take over player 2
+    const before = this.devices.length;
+    this.devices = this.devices.filter((d) => { const keep = d.kind !== 'gamepad' || pads[d.index]; if (!keep) d.release(); return keep; });
+    let dirty = before !== this.devices.length;
     for (const p of pads) {
       if (!p || p.mapping !== 'standard') continue; // non-standard 'pads' on phones are sensors, not controllers
       if (!this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index)) {
@@ -274,12 +279,19 @@ export class InputHub {
         this.adopt(d); this.devices.push(d); dirty = true;
       }
     }
-    const before = this.devices.length;
-    this.devices = this.devices.filter((d) => { const keep = d.kind !== 'gamepad' || pads[d.index]; if (!keep) d.release(); return keep; });
-    if (dirty || before !== this.devices.length) this.changed();
+    if (dirty) this.changed();
   }
   /** a device that joins while player 2's controller is gone takes over player 2 */
-  adopt(d) { if (this.activeP2 && !this.devices.includes(this.activeP2)) this.activeP2 = d; }
+  adopt(d) {
+    const p2 = this.activeP2;
+    if (!p2) return;
+    // a phone that has been silent for a while is gone (its WebRTC close can take ~30 s to arrive)
+    if (p2.kind === 'remote' && performance.now() - (p2.lastMsg || 0) > 3000 && this.devices.includes(p2)) {
+      p2.release(); this.devices = this.devices.filter((x) => x !== p2);
+      try { p2.transport?.close?.(); } catch { /* already closed */ }
+    }
+    if (!this.devices.includes(p2)) this.activeP2 = d;
+  }
   addRemote(transport, name) {
     const d = new RemoteDevice(this, transport, name);
     d.lastMsg = performance.now();
@@ -293,7 +305,7 @@ export class InputHub {
   /** Poll gamepads each frame. */
   poll(dt) {
     const pads = this.pads();
-    if (pads.some((p) => p && !this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index))) this.scanPads();
+    if (pads.some((p) => p && p.mapping === 'standard' && !this.devices.some((d) => d.kind === 'gamepad' && d.index === p.index))) this.scanPads();
     const now = performance.now();
     for (const d of this.devices) {
       if (d.kind === 'gamepad') d.poll(dt, pads);

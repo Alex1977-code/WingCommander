@@ -22,6 +22,7 @@ function segDist2(a, b, c) {
   return tBox.copy(a).addScaledVector(tSeg, k).distanceToSquared(c);
 }
 const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), q3 = new THREE.Quaternion();
+const qBay = new THREE.Quaternion(); // the carrier's inverse rotation for bay code (q3 is reused by damage())
 const t5 = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
 const ZERO = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, 1);
@@ -127,6 +128,12 @@ export class Game {
     c.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.55, 0.9));
     c.addPass(new OutputPass());
     return c;
+  }
+
+  /** pixel ratio the 3D picture is actually drawn at (the bloom composer caps it at 1.5) */
+  drawRatio() {
+    const pr = this.renderer.getPixelRatio();
+    return this.quality === 'high' ? Math.min(pr, 1.5) : pr;
   }
 
   resize() {
@@ -250,6 +257,8 @@ export class Game {
     this.activateNav(0);
     this.audio.startEngine();
     this.seq = null;
+    // bay lamps are shared materials: never carry a launch/landing state into the next mission
+    this.setBayLights(false, false, false); this.setBayField(1); this.setClamps(true);
     this.useBay = !!opts.launch;
     if (this.useBay) this.startLaunch();
     else this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Maschinen. Guten Flug, Nachtfalken!' : 'Startfreigabe erteilt. Guten Flug, {cs}!');
@@ -258,12 +267,12 @@ export class Game {
   // ---------- launch from and landing in the carrier's flight deck ----------
   /** is a carrier-local point inside the bay tube / its approach corridor (lined up with the opening)? */
   inBayCorridor(L, ahead = 90) {
-    return Math.abs(L.x) < BAY.hw - 1.5 && Math.abs(L.y - BAY.y) < BAY.hh - 0.5 && L.z > BAY.back - 5 && L.z < BAY.mouth + ahead;
+    return Math.abs(L.x) < BAY.hw - 1.5 && Math.abs(L.y - BAY.y) < BAY.hh - 0.5 && L.z > BAY.back + 1 && L.z < BAY.mouth + ahead;
   }
 
   /** flying by hand inside the tube: the walls stop the ship (scraping hurts at speed), the nose eases onto the axis */
   bayConstrain(P, dt) {
-    const s = P.ship, c = this.carrier, inv = q3.copy(c.quat).invert();
+    const s = P.ship, c = this.carrier, inv = qBay.copy(c.quat).invert();
     const L = tBay.copy(s.pos).sub(c.pos).applyQuaternion(inv);
     if (L.z > BAY.mouth) return;
     const mx = BAY.hw - 3.5, my = BAY.hh - 1.6;
@@ -287,13 +296,16 @@ export class Game {
   captureInBay(P) {
     const s = P.ship;
     this.seq ||= { kind: 'land', t: 0, doneT: 0 };
-    s.seqHold = true; P.landStage = 1; P.landStop = BAY.back + 18 + P.idx * 36; P.boosting = false;
+    s.seqHold = true; P.landStage = 1; P.landStop = this.nextBayStop(); P.boosting = false;
     if (s.speed > 150) {
       this.damage(s, 18, null, s.pos.clone()); P.shake = 0.9;
       this.ui.comm('flug', 'Viel zu schnell, {cs}! Der Traktorstrahl fängt Sie gerade noch ab.');
     } else this.ui.comm('flug', 'Traktorstrahl erfasst. Sauberer Anflug, {cs}.');
     this.audio.beep(1100, 0.15);
   }
+
+  /** parking spots are handed out by arrival: the first ship in takes the deepest, so nobody flies through a parked ship */
+  nextBayStop() { this.seq.stops = (this.seq.stops || 0) + 1; return BAY.back + 18 + (this.seq.stops - 1) * 36; }
 
   /** carrier-local point -> world (the carrier keeps moving during both sequences) */
   bayToWorld(out, x, y, z) { return out.set(x, y, z).applyQuaternion(this.carrier.quat).add(this.carrier.pos); }
@@ -323,12 +335,14 @@ export class Game {
   startLanding() {
     this.cancelLances();
     this.seq ||= { kind: 'land', t: 0, doneT: 0 };
-    const inv = q3.copy(this.carrier.quat).invert();
+    const inv = qBay.copy(this.carrier.quat).invert();
     this.alivePilots().forEach((P, i) => {
       if (P.ship.seqHold) return; // already caught by the tractor beam
-      P.ship.seqHold = true; P.landStage = 0; P.landStop = BAY.back + 18 + P.idx * 36; P.boosting = false;
+      P.ship.seqHold = true; P.landStage = 0; P.landStop = this.nextBayStop(); P.boosting = false;
       // waypoints in carrier space: swing wide round the hull if needed, then line up ahead of the bow
       const L = t4.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
+      // already lined up in front of the opening and pointing in: straight to the final approach
+      if (this.inBayCorridor(L, 250) && this.fwd(P.ship, t5).applyQuaternion(inv).z < 0) { P.landWps = []; P.landStage = 1; return; }
       const A = new THREE.Vector3(0, BAY.y - 0.5, BAY.mouth + 480 + i * 60);
       const sx = Math.sign(L.x) || 1;
       P.landWps = L.z > BAY.mouth + 250 && Math.abs(L.x) < 400 ? [A] : [new THREE.Vector3(sx * (320 + i * 40), -90, 200), A];
@@ -436,10 +450,10 @@ export class Game {
     }
     // the mission ends once every pilot who is still alive is parked in the bay
     const all = this.alivePilots();
-    if (all.length && all.every((P) => P.ship.seqHold && P.landStage === 2)) {
+    if (all.length && !this.failReason && all.every((P) => P.ship.seqHold && P.landStage === 2)) {
       if (!q.doneT) { q.doneT = q.t; this.setBanner('LANDUNG BESTÄTIGT'); this.ui.comm('flug', 'Aufgesetzt. Willkommen zurück an Bord, {cs}.'); this.audio.stopEngine(); }
       else if (q.t - q.doneT > 2.2) { this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.end(true); }
-    }
+    } else if (q.doneT) { q.doneT = 0; this.audio.startEngine(); } // a wingman respawned meanwhile: wait for them too
   }
 
   stop() { this.mode = 'idle'; this.audio.stopEngine(); }
@@ -453,6 +467,8 @@ export class Game {
     for (const P of this.pilots) if (P.ship.alive) d = Math.min(d, P.ship.pos.distanceTo(pos));
     return d === Infinity && this.pilots[0] ? this.pilots[0].ship.pos.distanceTo(pos) : d;
   }
+  /** drain a controller that can't fly right now, but still let it pause the game */
+  keepPause(P) { if (P.ctrl.take().includes('pause')) this.ui.pause(); }
   leadPilot() { return this.alivePilots()[0] || this.pilots[0]; }
 
   // ---------- entities ----------
@@ -773,7 +789,11 @@ export class Game {
     const mate = this.alivePilots()[0];
     const s = P.ship;
     P.lance = null; P.mslLock = 0; P.mslTgt = null; // a charge from the previous life must not fire now
-    if (mate) {
+    s.seqHold = false; P.landStage = undefined; P.landWps = null; P.inBay = false; // no leftover landing state
+    if (mate && mate.ship.seqHold && this.carrier?.alive) {
+      // the mate is parked or landing: come back in front of the bay, facing the carrier's course
+      this.bayToWorld(s.pos, 0, BAY.y, BAY.mouth + 700); s.quat.copy(this.carrier.quat);
+    } else if (mate) {
       s.pos.copy(t1.set(30, 4, -60).applyQuaternion(mate.ship.quat).add(mate.ship.pos));
       s.quat.copy(mate.ship.quat);
     } else {
@@ -1372,7 +1392,7 @@ export class Game {
           } else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Luftraum säubern, dann Landefreigabe.'); }
         }
       } else {
-        const inv = q3.copy(this.carrier.quat).invert();
+        const inv = qBay.copy(this.carrier.quat).invert();
         for (const P of alive) {
           if (P.ship.seqHold) continue;
           const L = tLoc.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
@@ -1530,21 +1550,21 @@ export class Game {
       this.env.update(this.camera);
       r.setScissorTest(false);
       r.setViewport(0, 0, this.w, this.h);
-      setParticleScale(this.fx, this.h * r.getPixelRatio());
+      setParticleScale(this.fx, this.h * this.drawRatio());
       if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
       return;
     }
     // while paused the picture is static: draw it once, then stop rendering
     if (this.paused) { if (this.pausedDrawn) return; this.pausedDrawn = true; } else this.pausedDrawn = false;
     if (!this.paused && !this.frozen) this.update(dt);
-    else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); if (P.ctrl.throttleSet != null) P.throttle = P.ctrl.throttleSet; P.ctrl.take(); }
+    else if (this.frozen) for (const P of this.pilots) { P.ctrl.update?.(dt); if (P.ctrl.throttleSet != null) P.throttle = P.ctrl.throttleSet; this.keepPause(P); }
     const split = this.pilots.length > 1;
     r.setScissorTest(split);
     this.hud.clearRect(0, 0, this.w, this.h);
     for (const P of this.pilots) {
       const y = this.h - P.vy - P.vh; // WebGL origin is bottom-left
       r.setViewport(P.vx, y, P.vw, P.vh);
-      setParticleScale(this.fx, P.vh * r.getPixelRatio());
+      setParticleScale(this.fx, P.vh * this.drawRatio());
       if (split) r.setScissor(P.vx, y, P.vw, P.vh);
       this.env.update(P.camera);
       const inCockpit = P.view === 'cockpit' && P.ship.alive;
@@ -1570,7 +1590,7 @@ export class Game {
     for (const P of this.pilots) {
       P.bumpT -= dt;
       if (P.ship.alive) this.updatePilot(P, dt);
-      else { P.ctrl.update?.(dt); P.ctrl.take(); }
+      else { P.ctrl.update?.(dt); this.keepPause(P); }
     }
 
     for (const s of this.ships) {
@@ -1618,7 +1638,7 @@ export class Game {
     this.fx.update(dt);
     this.bannerT -= dt;
     this.ui.setAuto(this.autoAvailable());
-    const P0 = this.pilots[0];
+    const P0 = this.leadPilot(); // the engine sound follows a living pilot
     this.audio.setEngine(P0.ship.alive ? P0.ship.speed / P0.ship.def.boost : 0, P0.boosting);
     this.ui.setThrottle?.(P0.throttle);
 
@@ -1689,6 +1709,11 @@ export class Game {
       }
       return;
     }
+    // trail points at a fixed 60 per second, whatever the display rate: on 120/144 Hz screens
+    // per-frame emission would fill the particle pool and cut explosions short
+    s.trailAcc = Math.min(3, (s.trailAcc || 0) + dt * 60);
+    if (s.trailAcc < 1) return;
+    s.trailAcc -= 1;
     const col = s.team === 0 ? TRAIL_ALLY : TRAIL_FOE;
     for (const e of s.mesh.userData.engines) {
       e.getWorldPosition(t5);

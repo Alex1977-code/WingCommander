@@ -84,6 +84,9 @@ function show(id) {
   current = id;
   if (id !== prev) shownAt = performance.now();
   if (id !== null) { clearTimeout(cineT1); clearTimeout(cineT2); $('cine').classList.add('hidden'); }
+  // a text field left focused on a screen that is now hidden would swallow every key press
+  const ae = document.activeElement;
+  if (ae instanceof HTMLInputElement && !(id && $(id)?.contains(ae))) ae.blur();
   for (const s of screens) s.classList.toggle('hidden', s.id !== id);
   $('cut').classList.toggle('hidden', id !== 'cut');
   $('flight').classList.toggle('hidden', !(id === null || id === 's-pause'));
@@ -128,6 +131,7 @@ function menuEvent(e) {
   else if (e === 'ok') { const b = list[focusIdx]; if (b) { audio.ui('ok'); b.click(); } }
   else if (e === 'back' || e === 'start') {
     const sc = $(current);
+    if (!sc) return; // the page became a phone controller
     if (current === 's-pause') return resume();
     if (current === 's-dialog') return;
     const back = sc.querySelector('[data-back]') || (current === 's-brief' ? $('b-back') : null);

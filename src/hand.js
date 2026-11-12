@@ -189,18 +189,18 @@ function* mesh(pose, h = 0.0016) {
   // one quad per grid edge crossing the surface, wound so the face points outwards
   const idx = [];
   const quad = (a, b, c, d, flip) => { if (a < 0 || b < 0 || c < 0 || d < 0) return; if (flip) idx.push(a, d, c, a, c, b); else idx.push(a, b, c, a, c, d); };
-  for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+  for (let k = 1; k < nz - 1; k++) { yield; for (let j = 1; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
     const v0 = val[id(i, j, k)], v1 = val[id(i + 1, j, k)];
     if ((v0 < 0) !== (v1 < 0)) quad(cell[cid(i, j - 1, k - 1)], cell[cid(i, j, k - 1)], cell[cid(i, j, k)], cell[cid(i, j - 1, k)], !(v0 < 0));
-  }
-  for (let k = 1; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+  } }
+  for (let k = 1; k < nz - 1; k++) { yield; for (let j = 0; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
     const v0 = val[id(i, j, k)], v1 = val[id(i, j + 1, k)];
     if ((v0 < 0) !== (v1 < 0)) quad(cell[cid(i - 1, j, k - 1)], cell[cid(i - 1, j, k)], cell[cid(i, j, k)], cell[cid(i, j, k - 1)], !(v0 < 0));
-  }
-  for (let k = 0; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+  } }
+  for (let k = 0; k < nz - 1; k++) { yield; for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
     const v0 = val[id(i, j, k)], v1 = val[id(i, j, k + 1)];
     if ((v0 < 0) !== (v1 < 0)) quad(cell[cid(i - 1, j - 1, k)], cell[cid(i, j - 1, k)], cell[cid(i, j, k)], cell[cid(i - 1, j, k)], !(v0 < 0));
-  }
+  } }
   return { F, pos, idx };
 }
 

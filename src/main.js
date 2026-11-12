@@ -13,7 +13,9 @@ if (q.has('pad')) {
   document.body.classList.add('pad-mode'); // no "rotate your device" overlay while the controller page loads
   import('./pad.js').then((m) => m.startPadPage(q.get('pad'))).catch(failed);
 } else {
-  import('./app.js').catch(failed);
+  // ship decals are painted into cached canvas textures: wait (briefly) for the bundled font first
+  const fontReady = document.fonts?.load ? Promise.race([document.fonts.load('700 44px Rajdhani'), new Promise((r) => setTimeout(r, 1500))]).catch(() => {}) : Promise.resolve();
+  fontReady.then(() => import('./app.js')).catch(failed);
 }
 
 // installable app: cache files for offline play (not in the single-file build)
