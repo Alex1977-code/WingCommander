@@ -109,7 +109,8 @@ class Music {
       this.out.gain.cancelScheduledValues(ctx.currentTime);
       this.out.gain.setTargetAtTime(1, ctx.currentTime, 0.6);
     }
-    if (!this.mood) return;
+    // while fading out for a mood change, start no new notes: they would ring on into the next mood
+    if (this.pending || !this.mood) return;
     // after a main-thread stall (scene load, GC) or while music is off, skip ahead instead of firing every missed note at once
     if (this.time < ctx.currentTime || !this.a.musicOn) { this.time = ctx.currentTime + 0.05; if (!this.a.musicOn) return; }
     const sd = 60 / this.mood.bpm / 4;
@@ -323,6 +324,7 @@ export class Audio {
     g.gain.exponentialRampToValueAtTime(0.0005, t + dur);
     s.connect(f); f.connect(g); g.connect(dest || this.sfx);
     if (wet) g.connect(wet);
+    s.loop = true; // the 2 s buffer is shorter than long rumbles; loop instead of cutting them off with a click
     s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.02);
   }
   noise(dur, vol, f0, f1, q = 0.8, type = 'lowpass', wet = 0.3) {
