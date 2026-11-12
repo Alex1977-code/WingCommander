@@ -105,7 +105,7 @@ export function drawHud(ctx, g, P) {
     if (!q.behind) {
       const cx = w / 2, cy = h / 2, dx = cx - q.x, dy = cy - q.y;
       const off = Math.max(0, Math.max(Math.abs(q.x - cx) / (w * 0.75), Math.abs(q.y - cy) / (h * 0.75)) - 0.6);
-      const k = Math.max(0, 1 - off * 2.5);
+      const k = Math.max(0, 1 - off * 2.5) * (g.env.sunVisible?.() ?? 1); // no flare while the planet eclipses the sun
       if (k > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
