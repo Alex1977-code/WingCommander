@@ -210,7 +210,7 @@ export function drawHud(ctx, g, P) {
       brackets(ctx, q.x, q.y, r * (2.2 - lockIn * 1.2), C.foe, 2 * s, (1 - lockIn) * 1.2);
       ctx.fillStyle = C.foe; ctx.font = `700 ${10 * s}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.fillText(`${Math.round(d)} M`, q.x, q.y - r - 3 * s);
-      if (!tg.def.capital && d < 1400) {
+      if (!tg.def.capital && d < 1400 && P.leadTgt === tg && !p.seqHold) {
         const l = project(P, P.leadPoint);
         if (!l.behind) {
           // gun solution: lead pipper with a range arc that fills as the target comes into gun range
@@ -292,7 +292,8 @@ export function drawHud(ctx, g, P) {
   }
 
   // --- cockpit head-up display: speed tape, set-speed caret, throttle and afterburner ---
-  if (P.view === 'cockpit') cockpitHud(ctx, P, w, h, s, t);
+  // during the launch countdown the ship is clamped: the launch lights take the tapes' place
+  if (P.view === 'cockpit' && !(g.seq?.kind === 'launch' && p.seqHold)) cockpitHud(ctx, P, w, h, s, t);
 
   // --- status panel (top-left) ---
   const px = 12 * s + safeL, py = (solo ? 40 : 10) * s, bw = 118 * s, bh = 13 * s;
@@ -320,7 +321,7 @@ export function drawHud(ctx, g, P) {
 
   // --- target panel (top-right) ---
   if (tg && tg.alive) {
-    const tw = 128 * s, tx = w - tw - 12 * s - safeR, ty = (solo || P.vy === 0 ? 58 : 26) * s;
+    const tw = 128 * s, tx = w - tw - 12 * s - safeR, ty = (w < 420 ? 100 : solo || P.vy === 0 ? 58 : 26) * s; // narrow pane: below the status bars
     ctx.font = `800 ${10 * s}px ${DISPLAY}`; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
     glowText(ctx, decoded(tg.name.toUpperCase(), P.targetT || 0, 40), tx + tw, ty - 3 * s, C.foe, 8);
     if (tg.maxShield > 0) bar(ctx, tx, ty, tw, bh, tg.shield / tg.maxShield, 'rgba(70,170,255,.85)', 'SCHILD', s);
@@ -432,8 +433,9 @@ export function drawHud(ctx, g, P) {
 }
 
 function arrow(ctx, P, pos, color, s) {
-  v.copy(pos).sub(P.ship.pos).applyQuaternion(P.invQ);
-  const a = Math.atan2(-v.y, -v.x);
+  // in camera space, like the on-screen test (the cockpit camera rolls, the chase camera lags)
+  v.copy(pos).applyMatrix4(P.camera.matrixWorldInverse);
+  const a = Math.atan2(-v.y, v.x);
   const r = Math.min(P.vw, P.vh) * 0.3;
   const x = P.vw / 2 + Math.cos(a) * r, y = P.vh / 2 + Math.sin(a) * r;
   ctx.save();
@@ -447,7 +449,8 @@ function arrow(ctx, P, pos, color, s) {
 function cockpitHud(ctx, P, w, h, s, t) {
   const p = P.ship, def = p.def;
   const col = 'rgba(125,255,176,.9)', dimc = 'rgba(125,255,176,.35)';
-  const cy = h * 0.47, th = 105 * s, x0 = w / 2 - 98 * s;
+  const half = Math.max(40 * s, Math.min(98 * s, w / 2 - 62 * s)); // narrow split-screen panes
+  const cy = h * 0.47, th = 105 * s, x0 = w / 2 - half;
   ctx.save();
   ctx.shadowColor = '#6dffb0'; ctx.shadowBlur = 6;
   ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.3 * s;
@@ -485,7 +488,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
   if (P.boosting && Math.sin(t * 10) > -0.3) { ctx.fillStyle = '#7fd6ff'; ctx.fillText('NACHBRENNER', x0 - bw - 2 * s, cy + th / 2 + 9 * s); }
 
   // throttle / energy scale on the right
-  const x1 = w / 2 + 98 * s;
+  const x1 = w / 2 + half;
   ctx.strokeStyle = col; ctx.fillStyle = col;
   ctx.beginPath(); ctx.moveTo(x1, cy - th / 2); ctx.lineTo(x1, cy + th / 2); ctx.stroke();
   for (let i = 0; i <= 10; i++) { const y = cy + th / 2 - (i / 10) * th; ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x1 + (i % 5 ? 5 : 10) * s, y); ctx.stroke(); }
@@ -539,9 +542,9 @@ function seqHud(ctx, g, P, w, h, s, t) {
     const R = 44 * s, gy = h * 0.5;
     ctx.strokeStyle = 'rgba(127,214,255,.5)'; ctx.lineWidth = 1.5;
     ctx.strokeRect(cx - R, gy - R, R * 2, R * 2);
-    const dx = Math.max(-1, Math.min(1, L.x / 30)), dy = Math.max(-1, Math.min(1, (L.y - (-24)) / 20));
+    const dx = Math.max(-1, Math.min(1, L.x / 30)), dy = Math.max(-1, Math.min(1, (L.y - BAY.y) / 20));
     ctx.strokeStyle = '#ffc857'; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.moveTo(cx - dx * R, gy - R); ctx.lineTo(cx - dx * R, gy + R); ctx.moveTo(cx - R, gy - dy * R); ctx.lineTo(cx + R, gy - dy * R); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - dx * R, gy - R); ctx.lineTo(cx - dx * R, gy + R); ctx.moveTo(cx - R, gy + dy * R); ctx.lineTo(cx + R, gy + dy * R); ctx.stroke();
     if (P.landStage === 1) {
       const dist = Math.max(0, L.z - (P.landStop || 0));
       ctx.font = `700 ${11 * s}px ${FONT}`; ctx.fillStyle = col;

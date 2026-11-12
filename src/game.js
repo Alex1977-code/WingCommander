@@ -1036,6 +1036,7 @@ export class Game {
       const dist = tg.pos.distanceTo(p.pos);
       this.fwd(tg, t2);
       P.leadPoint.copy(tg.pos).addScaledVector(t2, tg.speed * dist / BOLT_SPEED);
+      P.leadTgt = tg;
       t3.copy(P.leadPoint).sub(p.pos).normalize();
       if (!tg.def.capital && dist < 1100 && t3.dot(t1) > 0.9975) P.aimLocked = true;
     }
