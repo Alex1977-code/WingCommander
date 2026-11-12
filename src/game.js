@@ -41,7 +41,8 @@ const TRAIL_ALLY = { r: 0.35, g: 0.9, b: 2.2 }, TRAIL_FOE = { r: 2.2, g: 0.25, b
 /** Free GPU resources of a removed object (geometries + materials; textures are shared caches). */
 function disposeObj(o) {
   o.traverse?.((c) => {
-    if (c.geometry && !c.geometry.userData?.shared) c.geometry.dispose();
+    // sprites all share three's one built-in quad geometry: never free it
+    if (c.geometry && !c.isSprite && !c.geometry.userData?.shared) c.geometry.dispose();
     const m = c.material;
     if (m && !m.userData?.shared) (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
   });
@@ -320,6 +321,7 @@ export class Game {
   }
 
   startLanding() {
+    this.cancelLances();
     this.seq ||= { kind: 'land', t: 0, doneT: 0 };
     const inv = q3.copy(this.carrier.quat).invert();
     this.alivePilots().forEach((P, i) => {
@@ -546,7 +548,7 @@ export class Game {
     for (const s of this.ships) {
       if (!s.alive || s.team === team || s.def.ghost) continue;
       if (s.def.capital) {
-        const iv = sphere(s.pos, s.radius + 6);
+        const iv = sphere(s.pos, Math.max(s.radius, s.def.modelR || 0) + 6); // prows and towers reach past radius
         if (!iv || iv[0] >= best) continue;
         for (let t = iv[0], end = Math.min(iv[1], best); t <= end; t += 4) {
           tL3.copy(from).addScaledVector(dir, t);
@@ -658,7 +660,6 @@ export class Game {
     const L = P.lance;
     if (!L) return;
     const p = P.ship;
-    if (!p.alive) { P.lance = null; return; }
     L.t -= dt;
     tL0.set(0, -1.4, (p.def.radius || 8) * 0.7).applyQuaternion(p.quat).add(p.pos);
     const k = 1 - Math.max(0, L.t) / LANCE.charge;
@@ -771,6 +772,7 @@ export class Game {
   respawn(P) {
     const mate = this.alivePilots()[0];
     const s = P.ship;
+    P.lance = null; P.mslLock = 0; P.mslTgt = null; // a charge from the previous life must not fire now
     if (mate) {
       s.pos.copy(t1.set(30, 4, -60).applyQuaternion(mate.ship.quat).add(mate.ship.pos));
       s.quat.copy(mate.ship.quat);
@@ -1181,8 +1183,14 @@ export class Game {
     return !!np && alive.every((P) => P.ship.pos.distanceTo(np) > 2600);
   }
 
+  /** Abort lance charges (autopilot, landing): the charge goes back into the capacitors. */
+  cancelLances() {
+    for (const P of this.pilots) if (P.lance) { P.lance = null; P.ship.missiles++; }
+  }
+
   autopilot() {
     if (!this.autoAvailable()) { this.audio.beep(220); return; }
+    this.cancelLances();
     if (this.mission.phase === 'return' && this.mission.landClear) { this.startLanding(); return; }
     this.frozen = true;
     this.audio.warp();
@@ -1851,7 +1859,7 @@ export class Game {
         for (const s of this.ships) {
           if (!s.alive || s.team === m.team || s.def.ghost) continue;
           if (s.def.capital) {
-            if (m.pos.distanceToSquared(s.pos) > (s.radius + 10) ** 2) continue;
+            if (m.pos.distanceToSquared(s.pos) > (Math.max(s.radius, s.def.modelR || 0) + 10) ** 2) continue;
             if (this.hullDist(s, m.pos, t2) < 5) { this.damage(s, m.dmg * (m.torpedo ? 1 : 2.4), m.owner, m.pos); boom = true; break; }
           } else if (segDist2(mPrev, m.pos, s.pos) < (s.radius + 7) ** 2) { // swept: fast missiles must not tunnel through
             this.damage(s, m.dmg, m.owner, m.pos); boom = true; break;
