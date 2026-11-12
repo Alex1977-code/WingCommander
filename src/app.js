@@ -195,7 +195,7 @@ const ui = {
   fade(cb) {
     const f = $('fade');
     f.classList.remove('dark'); f.classList.add('on');
-    setTimeout(() => { cb(); f.classList.remove('on'); }, 500);
+    setTimeout(() => { cb(); if (!busy) f.classList.remove('on'); }, 500); // a menu fade started meanwhile keeps it dark
   },
   pause() {
     if (game.mode !== 'flight' || game.ended) return;
@@ -268,11 +268,18 @@ function fadeDark(cb) {
   }, 550);
 }
 // swallow clicks during transitions so nothing starts twice
-document.addEventListener('click', (e) => { if (busy) { e.stopPropagation(); e.preventDefault(); } }, true);
+// also a moment after a screen appears, so a quick double tap can't hit the next screen's button (e.g. start the mission unread)
+document.addEventListener('click', (e) => { if (busy || (current && performance.now() - shownAt < 250)) { e.stopPropagation(); e.preventDefault(); } }, true);
 // mouse-clicked buttons must not keep focus, or Enter/Space would trigger them a second time
 document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('button'); if (b) setTimeout(() => b.blur(), 0); });
 
-const game = new Game($('view'), $('hud'), audio, ui);
+// no WebGL (old device, blocked in the hosting frame): say so instead of leaving a black page
+const game = (() => {
+  try { return new Game($('view'), $('hud'), audio, ui); } catch (e) {
+    document.body.innerHTML = '<div style="position:fixed;inset:0;display:grid;place-content:center;text-align:center;padding:24px;background:#05070d;color:#cfe8ff;font:600 16px system-ui,sans-serif">3D-Grafik (WebGL) ist auf diesem Gerät oder in diesem Fenster nicht verfügbar.<br>Bitte in einem aktuellen Browser öffnen.</div>';
+    throw e;
+  }
+})();
 setTimeout(warmHands, 1500); // sculpt the cockpit hands while the title screen idles
 game.invert = settings.invert;
 game.sens = settings.sens;
@@ -617,7 +624,7 @@ function title() {
   decode($('logo-sub'), 'Der Perseus-Krieg', { cps: 30, delay: 600 });
   document.querySelectorAll('#s-title .menu .btn').forEach((b, i) => {
     b.dataset.label ||= b.textContent;
-    if (!b.classList.contains('hidden')) { b._scr?.cancel(); b._scr = decode(b, b.dataset.label, { cps: 50, delay: 300 + i * 90, pad: true }); }
+    if (!b.classList.contains('hidden')) { b._scr?.cancel(); b._lockW = false; b.style.width = b.style.height = ''; b._scr = decode(b, b.dataset.label, { cps: 50, delay: 300 + i * 90, pad: true }); }
   });
 }
 $('m-continue').onclick = () => { audio.unlock(); if (save.finished) playEnding(); else startMissionFlow(); };

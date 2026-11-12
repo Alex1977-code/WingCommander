@@ -818,7 +818,8 @@ export class Game {
       if (!o.alive || o.team === s.team || o.team === 3) continue;
       let d = o.pos.distanceTo(s.pos);
       if (d > 6000) continue;
-      if (wantCap) d *= o.def.capital ? 0.05 : 1;
+      // bombers go for capital ships - but don't fly kilometres back to the carrier unless it's the one under attack
+      if (wantCap) d *= o.def.capital && (o !== this.carrier || d < 2500 || this.def?.protect === 'carrier') ? 0.05 : 1;
       else if (o.def.capital) d *= s.team === 0 ? 2.2 : 4;
       // enemy fighters seek out the players - the dogfights are theirs
       if (o.isPlayer) d *= s.team === 1 && !wantCap ? 0.28 : 0.75;
@@ -1330,11 +1331,12 @@ export class Game {
     // objective-driven navs end the local fight: remaining enemies retreat
     if (nav.type && nav.type !== 'clear' || (last && this.def.noReturn)) {
       for (const s of this.ships) if (s.alive && s.team === 1) this.jumpOut(s);
-      for (const mi of this.missiles) if (mi.team === 1) mi.life = 0;
     }
+    // seekers and fusion charges still in flight must not undo an objective that is already met
+    for (const mi of this.missiles) if (mi.team === 1) mi.life = 0;
     for (const p of this.pickups) if (!p.got) { this.scene.remove(p.mesh); disposeObj(p.mesh); }
     this.pickups = []; m.dockWave = false; m.courier = null;
-    m.timer = null; m.docking = false; m.prog = 0;
+    m.timer = null; m.docking = false; m.prog = 0; m.capSeen = false;
     m.navIdx++;
     if (m.navIdx < this.def.navs.length) { m.phase = 'travel'; this.activateNav(m.navIdx); this.setBanner('SEKTOR GESICHERT'); }
     else if (this.def.noReturn) {
@@ -1402,6 +1404,10 @@ export class Game {
       return;
     }
     const nav = this.nav();
+    if (m.timer != null && nav.limit && !nav.type && m.phase === 'fight' && m.capSeen && !this.ships.some((o) => o.alive && o.team === 1 && o.def.capital)) {
+      m.timer = null; // e.g. the gate station is gone: the collapse it was driving stops
+    }
+    if (m.phase === 'fight' && !m.capSeen) m.capSeen = this.ships.some((o) => o.alive && o.team === 1 && o.def.capital);
     if (m.timer != null) {
       m.timer -= dt;
       if (m.timer <= 0) { m.timer = 0; return this.fail(nav.timerFail || nav.limitFail || 'Die Zeit ist abgelaufen.'); }
@@ -1419,6 +1425,7 @@ export class Game {
         if (nav.type === 'pickup') this.spawnPickups(nav);
         if (nav.type === 'convoy') {
           const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 320));
+          m.convoyFollow = nav.convoy.to ? null : to; // docking point moves with the carrier
           m.convoy = nav.convoy.types.map((type, i) => {
             const c = this.spawn(type, nav._pos.clone().add(new THREE.Vector3(i * 90 - 45, i * 20, i * 60)), to.clone().sub(nav._pos).normalize());
             c.dest = to; c.cruise = nav.convoy.speed || c.def.speed; c.speed = 0; c.name = `${SHIPS[type].name} ${i + 1}`;
@@ -1483,6 +1490,7 @@ export class Game {
         if (!alive.length) return this.fail(nav.failText || 'Der Konvoi wurde vernichtet.');
         if (alive.length < (m.convoyAlive ?? m.convoy.length)) { this.setBanner('KONVOISCHIFF VERLOREN'); this.audio.warn(); }
         m.convoyAlive = alive.length;
+        if (m.convoyFollow && this.carrier?.alive) m.convoyFollow.copy(this.carrier.pos).add(tLoc.set(0, -40, 320));
         done = alive.every((c) => c.pos.distanceTo(c.dest) < 300);
         break;
       }

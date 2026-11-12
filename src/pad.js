@@ -61,7 +61,8 @@ export function startPadPage(code, existingTransport) {
     tr = t;
     setStatus('Verbunden', true);
     setMode('menu');
-    t.send({ t: 'hello', name: localStorage.getItem('sf.padname') || 'Handy' });
+    let nm = 'Handy'; try { nm = localStorage.getItem('sf.padname') || nm; } catch { /* storage blocked */ }
+    t.send({ t: 'hello', name: nm });
     t.onMessage((m) => {
       if (m.t === 'role') {
         const el = $('pad-role');
