@@ -81,8 +81,8 @@ function disposeComposer(c) {
 }
 
 /**
- * Ion lance: the Union fighters' secondary weapon. A capacitor bank dumps one charge into a
- * particle beam; with a seeker lock the ship's field emitters bend the beam onto the target.
+ * Neutron cannon (internally "lance"): the Union fighters' secondary weapon. A capacitor bank dumps one charge into a
+ * particle beam; with a seeker lock the targeting computer swings the beam onto the target.
  */
 const LANCE = { range: 2600, charge: 0.32, life: 0.42, dmg: 75, capDmg: 180 };
 const LANCE_COL = { core: new THREE.Color(2.6, 3.2, 4), glow: new THREE.Color(0.35, 0.85, 2.4), arc: new THREE.Color(1.4, 2.4, 4) };
@@ -582,7 +582,7 @@ export class Game {
     return best < maxD ? { d: best, ship: hit } : null;
   }
 
-  /** Discharge an ion lance from ship `s`; a living `target` bends the beam onto it. */
+  /** Discharge the neutron cannon of ship `s`; a living `target` bends the beam onto it. */
   fireLance(s, target = null) {
     const from = new THREE.Vector3(0, -1.4, (s.def.radius || 8) * 0.7).applyQuaternion(s.quat).add(s.pos);
     const fwd = this.fwd(s, new THREE.Vector3());
@@ -683,7 +683,7 @@ export class Game {
     if (L.t > 0) return;
     P.lance = null;
     const hit = this.fireLance(p, L.target?.alive ? L.target : null);
-    P.cockpit?.log(`LANZE ${p.def.missiles - p.missiles} → ${hit ? hit.name : L.target ? 'VERFEHLT' : 'UNGELENKT'}`, hit ? '#7fd8ff' : '#ffc857');
+    P.cockpit?.log(`NEUTRON ${p.def.missiles - p.missiles} → ${hit ? hit.name : L.target ? 'VERFEHLT' : 'UNGELENKT'}`, hit ? '#7fd8ff' : '#ffc857');
     P.shake = Math.max(P.shake, 0.25);
   }
 
@@ -1073,7 +1073,7 @@ export class Game {
       if (P.mslLock > 0 && P.lockToneT <= 0 && P.idx === 0) {
         if (P.mslLock >= 1) { this.audio.beep(1480, 0.07); P.lockToneT = 0.16; } else { this.audio.beep(600 + P.mslLock * 500, 0.05); P.lockToneT = 0.34 - P.mslLock * 0.22; }
       }
-      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`LANZE AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
+      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`NEUTRON AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
     } else P.mslLock = 0;
     if (c.firing) this.fire(p, P.aimLocked ? t3 : t1);
     this.updateLance(P, dt);
@@ -1127,7 +1127,7 @@ export class Game {
     const locked = P.target?.alive && P.mslLock >= 1;
     P.lance = { t: LANCE.charge, target: locked ? P.target : null };
     if (P.idx === 0 || !this.coop) this.audio.lanceCharge();
-    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – LANZE UNGELENKT');
+    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – NEUTRONENSTRAHL UNGELENKT');
     P.mslLock = 0;
   }
 
