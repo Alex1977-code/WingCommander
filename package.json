@@ -1,0 +1,27 @@
+{
+  "name": "sternenfront",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sternenfront – ein mobiles 3D-Weltraumkampfspiel mit Story-Kampagne",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:lan": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "build:artifact": "vite build --mode artifact && node scripts/artifact.mjs",
+    "peer": "peerjs --port 9000"
+  },
+  "dependencies": {
+    "@fontsource-variable/orbitron": "^5.3.0",
+    "@fontsource/rajdhani": "^5.3.0",
+    "peerjs": "^1.5.4",
+    "qrcode": "^1.5.4",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "peer": "^1.0.2",
+    "vite": "^7.3.7",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}
