@@ -48,7 +48,7 @@ function disposeObj(o) {
 }
 let MISSILE = null, MINE = null;
 /**
- * Plasma torpedoes instead of chemical missiles (no smoke in vacuum): a bright magnetically
+ * Aszendenz plasma seekers and bombers' fusion charges (no smoke in vacuum): a bright magnetically
  * contained core, a pulsing halo and an ion tail, in the launching side's colour.
  */
 const PLASMA = {
@@ -78,6 +78,14 @@ function disposeComposer(c) {
   c.dispose();
 }
 
+/**
+ * Ion lance: the Union fighters' secondary weapon. A capacitor bank dumps one charge into a
+ * particle beam; with a seeker lock the ship's field emitters bend the beam onto the target.
+ */
+const LANCE = { range: 2600, charge: 0.32, life: 0.42, dmg: 75, capDmg: 180 };
+const LANCE_COL = { core: new THREE.Color(2.6, 3.2, 4), glow: new THREE.Color(0.35, 0.85, 2.4), arc: new THREE.Color(1.4, 2.4, 4) };
+const tL0 = new THREE.Vector3(), tL1 = new THREE.Vector3(), tL2 = new THREE.Vector3(), tL3 = new THREE.Vector3(), tLn = new THREE.Vector3();
+
 const ENEMY_TOUGH = 1.7;
 const MSL_CONE = Math.cos((22 * Math.PI) / 180);
 
@@ -95,7 +103,7 @@ export class Game {
     this.mode = 'idle';
     this.paused = false;
     this.pilots = [];
-    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = [];
+    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = [];
     this.boltPool = [];
     this.boltGeo = new THREE.BoxGeometry(0.55, 0.55, 18);
     this.boltGeo.userData.shared = true;
@@ -171,7 +179,7 @@ export class Game {
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
     this.fx = new Fx(this.scene, this.quality);
-    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = [];
+    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = [];
     this.composer = this.makeComposer(this.camera);
     this.resize();
   }
@@ -519,6 +527,147 @@ export class Game {
       life: torpedo ? 14 : 7, dmg: torpedo ? 170 : 75, torpedo, kind, glow, phase: Math.random() * 6,
     });
     if (this.ear(s.pos) < 1200) this.audio.torpedo(torpedo, Math.max(0.3, 1 - this.ear(s.pos) / 1200));
+  }
+
+  /**
+   * First thing a beam from `from` along unit `dir` hits within `maxD`: an enemy of `team` (capital
+   * hulls are marched for their real surface) or an asteroid. Returns { d, ship } or null.
+   */
+  lanceRay(from, dir, maxD, team) {
+    let best = maxD, hit = null;
+    const sphere = (c, r) => {
+      tL2.copy(c).sub(from);
+      const tc = tL2.dot(dir), d2 = tL2.lengthSq() - tc * tc;
+      if (d2 > r * r) return null;
+      const h = Math.sqrt(r * r - d2);
+      if (tc + h < 0) return null;
+      return [Math.max(0, tc - h), tc + h];
+    };
+    for (const s of this.ships) {
+      if (!s.alive || s.team === team || s.def.ghost) continue;
+      if (s.def.capital) {
+        const iv = sphere(s.pos, s.radius + 6);
+        if (!iv || iv[0] >= best) continue;
+        for (let t = iv[0], end = Math.min(iv[1], best); t <= end; t += 4) {
+          tL3.copy(from).addScaledVector(dir, t);
+          if (this.hullDist(s, tL3, tLn) < 2.5) { best = t; hit = s; break; }
+        }
+      } else {
+        const iv = sphere(s.pos, s.radius + 5);
+        if (iv && iv[0] < best) { best = iv[0]; hit = s; }
+      }
+    }
+    for (const a of this.asteroids) {
+      const iv = sphere(a.pos, a.radius * 0.92);
+      if (iv && iv[0] < best) { best = iv[0]; hit = null; }
+    }
+    return best < maxD ? { d: best, ship: hit } : null;
+  }
+
+  /** Discharge an ion lance from ship `s`; a living `target` bends the beam onto it. */
+  fireLance(s, target = null) {
+    const from = new THREE.Vector3(0, -1.4, (s.def.radius || 8) * 0.7).applyQuaternion(s.quat).add(s.pos);
+    const fwd = this.fwd(s, new THREE.Vector3());
+    let dir = fwd.clone();
+    if (target?.alive) {
+      tL0.copy(target.pos).sub(from);
+      if (tL0.length() < LANCE.range + target.radius) dir.copy(tL0).normalize();
+    }
+    const hit = this.lanceRay(from, dir, LANCE.range, s.team);
+    const end = from.clone().addScaledVector(dir, hit ? hit.d : LANCE.range);
+    if (hit?.ship) {
+      const h = hit.ship;
+      if (!h.def.capital) end.copy(h.pos).addScaledVector(tL1.randomDirection(), h.radius * 0.25);
+      const dmg = h.def.capital ? LANCE.capDmg : LANCE.dmg;
+      this.damage(h, s.isPlayer || s.team !== 0 ? dmg : dmg * 0.35, s, end);
+    }
+    if (s.isPlayer) this.stats.shots += 2;
+    this.addBeam(from, fwd, end, !!hit);
+    if (this.ear(from) < 1500) this.audio.lance(Math.max(0.3, 1 - this.ear(from) / 1500));
+    return hit?.ship || null;
+  }
+
+  /** Beam visual: a curve that leaves the emitter straight ahead and bends onto the hit point. */
+  addBeam(from, fwd, end, impact) {
+    const len = from.distanceTo(end);
+    const ctrl = from.clone().addScaledVector(fwd, len * 0.45);
+    const curve = new THREE.QuadraticBezierCurve3(from.clone(), ctrl, end.clone());
+    const seg = Math.max(8, Math.min(40, Math.round(len / 40)));
+    const mk = (r, color, op) => new THREE.Mesh(
+      new THREE.TubeGeometry(curve, seg, r, 6, false),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+    );
+    const g = new THREE.Group();
+    const core = mk(0.5, LANCE_COL.core, 1), glow = mk(2.2, LANCE_COL.glow, 0.6), haze = mk(6, LANCE_COL.glow, 0.16);
+    // crackling arc wound round the beam, re-rolled every few frames
+    const n = seg * 3 + 1;
+    const arcGeo = new THREE.BufferGeometry();
+    arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    const arc = new THREE.Line(arcGeo, new THREE.LineBasicMaterial({ color: LANCE_COL.arc, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    arc.frustumCulled = false;
+    g.add(haze, glow, core, arc);
+    this.scene.add(g);
+    const pts = curve.getSpacedPoints(n - 1);
+    const b = { g, core, glow, haze, arc, pts, life: LANCE.life, rollT: 0 };
+    this.rollArc(b);
+    this.beams.push(b);
+    // emitter flash and, where it strikes, a white-hot ion burst
+    this.fx.flash(from, 7, LANCE_COL.core, 0.12);
+    if (impact) {
+      const close = this.pilots.some((P) => P.camera.position.distanceTo(end) < 40), k = close ? 0.35 : 1;
+      this.fx.flash(end, 22 * k, LANCE_COL.core, 0.3);
+      this.fx.flash(end, 9 * k, new THREE.Color(3, 3, 3), 0.1);
+      this.fx.ring(end, 26 * k, LANCE_COL.glow, 0.5);
+      this.fx.sparks(end, LANCE_COL.arc, 24, 160);
+      this.fx.light(end, 4 * k, 0.35, 0x66bbff);
+      this.audio.plasmaHit(Math.max(0, 0.7 - this.ear(end) / 2500));
+    }
+  }
+
+  rollArc(b) {
+    const a = b.arc.geometry.attributes.position, pts = b.pts, n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const p = pts[i], j = i === 0 || i === n - 1 ? 0 : rnd(0.6, 2.4);
+      tL1.randomDirection().multiplyScalar(j);
+      a.setXYZ(i, p.x + tL1.x, p.y + tL1.y, p.z + tL1.z);
+    }
+    a.needsUpdate = true;
+  }
+
+  updateBeams(dt) {
+    for (let i = this.beams.length - 1; i >= 0; i--) {
+      const b = this.beams[i];
+      b.life -= dt;
+      const k = Math.max(0, b.life / LANCE.life);
+      b.core.material.opacity = Math.min(1, k * 1.6);
+      b.glow.material.opacity = 0.6 * k * (0.8 + Math.random() * 0.3);
+      b.haze.material.opacity = 0.16 * k;
+      b.arc.material.opacity = k > 0.25 ? 0.9 : k * 3.6;
+      b.rollT -= dt;
+      if (b.rollT <= 0) { b.rollT = 0.035; this.rollArc(b); }
+      if (b.life <= 0) {
+        this.scene.remove(b.g);
+        disposeObj(b.g);
+        this.beams.splice(i, 1);
+      }
+    }
+  }
+
+  /** Charge and then discharge a pilot's lance (the charge keeps the lock taken on the trigger). */
+  updateLance(P, dt) {
+    const L = P.lance;
+    if (!L) return;
+    const p = P.ship;
+    if (!p.alive) { P.lance = null; return; }
+    L.t -= dt;
+    tL0.set(0, -1.4, (p.def.radius || 8) * 0.7).applyQuaternion(p.quat).add(p.pos);
+    const k = 1 - Math.max(0, L.t) / LANCE.charge;
+    this.fx.particle(tL0.x, tL0.y, tL0.z, rnd(-3, 3), rnd(-3, 3), rnd(-3, 3), 0.6 + k, 1.2 + k, 3, 1 + k * 2.4, 0.08, 0);
+    if (L.t > 0) return;
+    P.lance = null;
+    const hit = this.fireLance(p, L.target?.alive ? L.target : null);
+    P.cockpit?.log(`LANZE ${p.def.missiles - p.missiles} → ${hit ? hit.name : L.target ? 'VERFEHLT' : 'UNGELENKT'}`, hit ? '#7fd8ff' : '#ffc857');
+    P.shake = Math.max(P.shake, 0.25);
   }
 
   damage(s, dmg, by, point) {
@@ -888,7 +1037,7 @@ export class Game {
       t3.copy(P.leadPoint).sub(p.pos).normalize();
       if (!tg.def.capital && dist < 1100 && t3.dot(t1) > 0.9975) P.aimLocked = true;
     }
-    // missile seeker: the target has to stay inside a 22° cone within 2.6 km for 1.4 s to lock
+    // lance seeker: the target has to stay inside a 22° cone within 2.6 km for 1.4 s to lock
     if (tg !== P.mslTgt) { P.mslTgt = tg; P.mslLock = 0; }
     if (tg && tg.alive && p.missiles > 0) {
       t2.copy(tg.pos).sub(p.pos);
@@ -900,9 +1049,10 @@ export class Game {
       if (P.mslLock > 0 && P.lockToneT <= 0 && P.idx === 0) {
         if (P.mslLock >= 1) { this.audio.beep(1480, 0.07); P.lockToneT = 0.16; } else { this.audio.beep(600 + P.mslLock * 500, 0.05); P.lockToneT = 0.34 - P.mslLock * 0.22; }
       }
-      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`TORPEDO AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
+      if (was < 1 && P.mslLock >= 1) P.cockpit?.log(`LANZE AUFGESCHALTET · ${tg.name}`, '#ff4d6d');
     } else P.mslLock = 0;
     if (c.firing) this.fire(p, P.aimLocked ? t3 : t1);
+    this.updateLance(P, dt);
 
     for (const e of c.take()) {
       if (e === 'missile') this.playerMissile(P);
@@ -947,13 +1097,13 @@ export class Game {
 
   playerMissile(P) {
     const p = P.ship;
-    if (p.missiles <= 0 || !p.alive) { this.audio.beep(220); return; }
+    if (p.missiles <= 0 || !p.alive || P.lance) { if (!P.lance) this.audio.beep(220); return; }
     p.missiles--;
-    // only a locked seeker guides the missile; without lock it flies straight ahead
+    // only a locked seeker steers the beam; without lock it fires straight along the nose
     const locked = P.target?.alive && P.mslLock >= 1;
-    this.launchMissile(p, locked ? P.target : null);
-    P.cockpit?.log(`TORPEDO ${p.def.missiles - p.missiles} AB → ${locked ? P.target.name : 'UNGELENKT'}`, '#ffc857');
-    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – TORPEDO UNGELENKT');
+    P.lance = { t: LANCE.charge, target: locked ? P.target : null };
+    if (P.idx === 0 || !this.coop) this.audio.lanceCharge();
+    if (!locked) this.setBanner('KEINE AUFSCHALTUNG – LANZE UNGELENKT');
     P.mslLock = 0;
   }
 
@@ -1672,6 +1822,7 @@ export class Game {
   }
 
   updateMissiles(dt) {
+    this.updateBeams(dt);
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i];
       m.life -= dt;

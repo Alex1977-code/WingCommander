@@ -228,7 +228,7 @@ export function drawHud(ctx, g, P) {
             for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2 + Math.PI / 4; ctx.moveTo(l.x + Math.cos(a) * 20 * s * k, l.y + Math.sin(a) * 20 * s * k); ctx.lineTo(l.x + Math.cos(a) * 14 * s, l.y + Math.sin(a) * 14 * s); }
             ctx.stroke();
             ctx.font = `800 ${8 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
-            ctx.fillText('KANONE ◆ TREFFERLÖSUNG', l.x, l.y + 22 * s);
+            ctx.fillText('LASER ◆ TREFFERLÖSUNG', l.x, l.y + 22 * s);
           }
           ctx.shadowBlur = 0;
         }
@@ -256,7 +256,7 @@ export function drawHud(ctx, g, P) {
         }
         ctx.shadowBlur = 0;
         ctx.font = `800 ${9 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
-        ctx.fillText(locked ? 'TORPEDO ◆ AUFGESCHALTET' : `SUCHKOPF ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
+        ctx.fillText(locked ? 'LANZE ◆ AUFGESCHALTET' : `ERFASSUNG ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
       }
     } else arrow(ctx, P, tg.pos, C.foe, s);
   }
@@ -307,7 +307,7 @@ export function drawHud(ctx, g, P) {
   ctx.fillStyle = '#dff4ff'; ctx.font = `700 ${12 * s}px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(`${Math.round(p.speed)} M/S`, px, by + (bh + 4 * s) * 3 + 2 * s);
   ctx.fillStyle = C.warn;
-  ctx.fillText(`TORP ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
+  ctx.fillText(`LANZE ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
   // --- ship status (left) and wingman status (right) as green line schematics ---
   shipStatus(ctx, p, P, px, by + (bh + 4 * s) * 3 + 22 * s, 74 * s, s, t, false);
@@ -401,7 +401,7 @@ export function drawHud(ctx, g, P) {
   // warnings
   if (P.missileWarn && Math.sin(t * 16) > 0) {
     ctx.font = `800 ${14 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    glowText(ctx, '⚠ TORPEDOWARNUNG', w / 2, P.view === 'cockpit' ? h * 0.47 + 78 * s : h * 0.28, C.foe, 14); // below the reticle in the cockpit, clear of the roll scale
+    glowText(ctx, '⚠ PLASMASUCHER', w / 2, P.view === 'cockpit' ? h * 0.47 + 78 * s : h * 0.28, C.foe, 14); // below the reticle in the cockpit, clear of the roll scale
   }
   if (g.banner && g.bannerT > 0) {
     const a = Math.min(1, g.bannerT);

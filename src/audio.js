@@ -352,8 +352,20 @@ export class Audio {
     if (shield) { this.tone('sine', 1100, 260, 0.22, 0.28, 0.3); this.tone('triangle', 2200, 900, 0.12, 0.1, 0.2); }
     else { this.noise(0.25, 0.5, 2400, 160); this.tone('square', 150, 45, 0.18, 0.25, 0.1); }
   }
-  missile() { this.torpedo(false, 1); }
-  /** plasma torpedo release: a magnetic thump and a rising electric whine */
+  missile() { this.lance(1); }
+  /** ion lance capacitors charging: a fast rising whine */
+  lanceCharge(vol = 1) {
+    this.tone('sine', 380, 2600, 0.32, 0.07 * vol, 0.1);
+    this.tone('square', 190, 1300, 0.32, 0.025 * vol, 0);
+  }
+  /** ion lance discharge: a hard electric crack, a falling sizzle and a low body thump */
+  lance(vol = 1) {
+    this.noise(0.06, 0.32 * vol, 9000, 4000, 0.8, 'highpass', 0.2);
+    this.tone('sawtooth', 2600, 160, 0.42, 0.14 * vol, 0.4);
+    this.noise(0.45, 0.2 * vol, 7000, 900, 1.6, 'bandpass', 0.5);
+    this.tone('sine', 120, 38, 0.35, 0.36 * vol, 0.3);
+  }
+  /** Aszendenz plasma seeker / fusion charge release: a magnetic thump and a rising electric whine */
   torpedo(heavy = false, vol = 1) {
     this.tone('sine', heavy ? 70 : 110, 40, 0.25, 0.32 * vol, 0.2);
     this.tone('sawtooth', heavy ? 160 : 260, heavy ? 900 : 1600, 0.35, 0.09 * vol, 0.35);

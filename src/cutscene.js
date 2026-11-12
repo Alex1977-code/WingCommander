@@ -98,7 +98,7 @@ export function installCutscenes(Game) {
       switch (e.a) {
         case 'speed': s.cut.speedTo = e.v; break;
         case 'fire': s.cut.fire = { at: c.cast[e.at], until: c.T + (e.dur || 2), cool: 0 }; break;
-        case 'missile': this.launchMissile(s, c.cast[e.at]); break;
+        case 'missile': if (s.team === 0) this.fireLance(s, c.cast[e.at]); else this.launchMissile(s, c.cast[e.at]); break;
         case 'turn': s.cut.turn = { dir: new THREE.Vector3(...e.dir).normalize(), rate: e.rate || 0.6 }; break;
         case 'shake': c.shake = Math.max(c.shake, e.v || 1); break;
         case 'show': s.mesh.visible = true; s.alive = true; s.cutHidden = false; break;

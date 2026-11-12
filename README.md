@@ -17,10 +17,10 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
   - Missionstypen: Patrouille, Geleitschutz, Konvoi-Eskorte, Rettung, Aufklärung, Bergung, Abfangen, Durchhalten,
     Flucht, Befreiung, Minenfelder, Angriff auf Zerstörer, Stationen und das Kommandoschiff
 - **Kampf**: 3 fliegbare Jäger, 4 Feindtypen inkl. Ass-Pilot, Zerstörer und Kommandoschiff mit Geschütztürmen,
-  Lenkraketen, Schilde, Nachbrenner, Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
-- **Touch-Steuerung**: virtueller Stick, Feuer/Rakete/Boost/Ziel, Schubregler – dazu Tastatur am Desktop
+  Pulslaser und Ionenlanze (gelenkter Teilchenstrahl), Plasmasucher und Fusionsladungen der Aszendenz, Schilde, Nachbrenner, Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
+- **Touch-Steuerung**: virtueller Stick, Feuer/Lanze/Boost/Ziel, Schubregler – dazu Tastatur am Desktop
 - **Effekte**: Explosionen mit Lichtblitz, Feuerball, Rauch und Wrackteilen; Schutzschild-Blasen, Triebwerksspuren,
-  Raketenrauch, brennende Großkampfschiffe, Linsenreflexe der Sonne
+  Ionenspuren, brennende Großkampfschiffe, Linsenreflexe der Sonne
 - **Musik und Sound**: eigener Synth-Score in d-Moll mit Hauptthema, der sich anpasst (Menü, Besprechung, Reise,
   Kampf, Spannung, Trauer, Sieg); geschichtete Soundeffekte mit Hall – alles live per WebAudio erzeugt
 - **Sci-Fi-Präsentation**: Texte entschlüsseln sich aus Zufallszeichen, Hologramm-Porträts der Figuren,
@@ -69,7 +69,7 @@ GitHub Pages braucht der eigene Dienst ein TLS-Zertifikat.
 | --- | --- | --- | --- |
 | Steuern | linke Bildschirmhälfte | linker Stick | WASD / Pfeiltasten |
 | Feuern | FEUER | RT / A | Leertaste |
-| Rakete | RAKETE | X / RB | M / Enter |
+| Ionenlanze | LANZE | X / RB | M / Enter |
 | Nachbrenner | BOOST | LT / LB | Shift |
 | Ziel wechseln | ZIEL | Y | T |
 | Autopilot | AUTOPILOT | Select | J |

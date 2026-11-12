@@ -363,7 +363,7 @@ export const MISSIONS = [
       { name: 'Samariter', pos: A(2000, 0, 8000), anchor: true, objective: 'Beschütze die Samariter',
         waves: [[['dorn', 3]], [['klinge', 2], ['dorn', 2]], [['hammer', 2], ['dorn', 2]]],
         onArrive: [{ who: 'samariter', text: 'Nachtfalken, hier Samariter. Kontakte auf dem Schirm. Bitte beeilen Sie sich!' }],
-        onWave: [null, { who: 'kolibri', text: 'Klingen im Anflug! Schneller als die Dorns – bleib in Bewegung!' }, { who: 'kolibri', text: 'Bomber! Wenn die ihre Torpedos loswerden, war es das für die Samariter!' }],
+        onWave: [null, { who: 'kolibri', text: 'Klingen im Anflug! Schneller als die Dorns – bleib in Bewegung!' }, { who: 'kolibri', text: 'Bomber! Wenn die ihre Fusionsladungen loswerden, war es das für die Samariter!' }],
         onClear: [{ who: 'samariter', text: 'Sprungantrieb geladen. Wir sind gleich weg!' }] },
     ],
     win: [
@@ -466,7 +466,7 @@ export const MISSIONS = [
     id: 'm5', act: 'I', title: 'Alarmstart', sector: 'Tessa-System · Position der Aurora', ship: 'falke', wingman: 'kolibri', sky: SKY.alarm,
     preCut: 'ambush',
     briefing: [
-      { who: 'brandt', text: 'Bomberwellen im Anflug auf die Aurora. Unsere Geschütze halten die Jäger auf Abstand, aber nicht die Torpedos.' },
+      { who: 'brandt', text: 'Bomberwellen im Anflug auf die Aurora. Unsere Geschütze halten die Jäger auf Abstand, aber nicht die Fusionsladungen der Bomber.' },
       { who: 'kolibri', text: 'Wenn die Aurora fällt, haben wir kein Zuhause mehr. Bomber zuerst, {cs}. Alles andere ist Dekoration.' },
     ],
     objectives: ['Die TUS Aurora verteidigen', 'Alle Bomberwellen vernichten'],
@@ -501,7 +501,7 @@ export const MISSIONS = [
     ] },
     briefing: [
       { who: 'brandt', text: 'Zeit zurückzuschlagen. Die „Brutstätte“ ist eine Station, in der die Aszendenz Gefangene… umwandelt.' },
-      { who: 'brandt', text: 'Sie fliegen den schweren Jagdbomber Greif. Zehn Plasmatorpedos. Brechen Sie den Abwehrring, dann zerstören Sie den Kern der Station.' },
+      { who: 'brandt', text: 'Sie fliegen den schweren Jagdbomber Greif. Zehn Lanzenladungen. Brechen Sie den Abwehrring, dann zerstören Sie den Kern der Station.' },
       { who: 'rook', text: 'Stationen weichen nicht aus, aber sie schießen zurück. Anflug, Salve, abdrehen – und wieder von vorn.' },
     ],
     objectives: ['Den Abwehrring bei Nav 1 durchbrechen', 'Die Brutstätte zerstören', 'Zur TUS Aurora zurückkehren'],
@@ -510,7 +510,7 @@ export const MISSIONS = [
         onArrive: [{ who: 'rook', text: 'Der Ring. Mach kurzen Prozess, die Station hört mit.' }],
         onClear: [{ who: 'rook', text: 'Durch. Jetzt der große Brocken.' }] },
       { name: 'Brutstätte', pos: A(-1500, 300, 14000), objective: 'Zerstöre die Brutstätte', waves: [[['station', 1], ['dorn', 4]], [['hammer', 2], ['klinge', 2]]],
-        onArrive: [{ who: 'rook', text: 'Da ist sie. Alle Torpedos auf den Kern, {cs}!' }],
+        onArrive: [{ who: 'rook', text: 'Da ist sie. Alle Lanzen auf den Kern, {cs}!' }],
         onClear: [{ who: 'rook', text: 'Sie brennt! Raus hier!' }] },
     ],
     win: [
@@ -673,7 +673,7 @@ export const MISSIONS = [
       { who: 'brandt', text: 'Sie werden in Wellen kommen, bis wir springen oder fallen. Halten Sie sie von der Aurora fern, {cs}. Jede einzelne Welle.' },
       { who: 'juno', text: 'Rook hätte gesagt: zuerst die Bomber, dann die Prahler. Ich bleibe an deinem Flügel.' },
     ],
-    objectives: ['Die TUS Aurora gegen alle Angriffswellen verteidigen', 'Torpedobomber vor dem Abwurf abfangen', 'Nach dem Gefecht selbst in der Aurora landen'],
+    objectives: ['Die TUS Aurora gegen alle Angriffswellen verteidigen', 'Bomber abfangen, bevor sie ihre Fusionsladungen auslösen', 'Nach dem Gefecht selbst in der Aurora landen'],
     protect: 'carrier',
     navs: [
       { name: 'Aurora', pos: A(0, 0, 900), anchor: true, objective: 'Verteidige die TUS Aurora',
@@ -692,7 +692,7 @@ export const MISSIONS = [
           { who: 'flug', text: 'Zweite Welle! Abfangjäger mit Geleitschutz.' },
           { who: 'juno', text: 'Bomber! Ich nehme den linken, {cs}!' },
           { who: 'brandt', text: 'Reparatur bei vierzig Prozent. Halten Sie durch.' },
-          { who: 'flug', text: 'Torpedobomber auf Angriffskurs aufs Hangardeck!' },
+          { who: 'flug', text: 'Bomber mit Fusionsladungen auf Angriffskurs aufs Hangardeck!' },
           { who: 'juno', text: 'Die hören einfach nicht auf… Gut. Wir auch nicht.' },
           { who: 'brandt', text: 'Sprungantrieb bei neunzig Prozent!' },
           { who: 'flug', text: 'Letzte Welle! Das ist alles, was sie haben!' }],
@@ -757,18 +757,18 @@ export const MISSIONS = [
     postCut: 'gate',
     briefing: [
       { who: 'brandt', text: 'Der Zerstörer „Dogma“ bewacht das Sprungtor der Orun-Passage. Solange er dort steht, kommt unsere Flotte nicht durch.' },
-      { who: 'brandt', text: 'Brechen Sie den Geleitschutz, dann versenken Sie die Dogma. Torpedos sind gegen Großkampfschiffe besonders wirksam.' },
+      { who: 'brandt', text: 'Brechen Sie den Geleitschutz, dann vernichten Sie die Dogma. Die Ionenlanze schlägt durch die Panzerung von Großkampfschiffen besonders gut.' },
       { who: 'kolibri', text: 'Rook hat immer gesagt: Nie geradeaus auf einen Zerstörer zu. Anflug, Salve, abdrehen.', ifNot: 'kolibriLost' },
       { who: 'juno', text: 'Ich habe die Dogma schon einmal gesehen. Sie hat die Ares halbiert. Lass sie das nicht noch einmal tun.', if: 'kolibriLost' },
     ],
-    objectives: ['Den Geleitschutz bei Nav 1 vernichten', 'Den Zerstörer „Dogma“ versenken'],
+    objectives: ['Den Geleitschutz bei Nav 1 vernichten', 'Den Zerstörer „Dogma“ vernichten'],
     noReturn: true,
     navs: [
       { name: 'Nav 1', pos: A(2500, -200, 7500), waves: [[['klinge', 3], ['dorn', 2]]],
         onArrive: [{ who: 'flug', text: 'Vorpostenstaffel. Kurzen Prozess, die Dogma hört mit.' }],
         onClear: [{ who: 'flug', text: 'Weg ist frei. Ziel: die Dogma.' }] },
-      { name: 'Dogma', pos: A(-2000, 300, 14500), objective: 'Versenke den Zerstörer „Dogma“', waves: [[['zerstoerer', 1], ['dorn', 4]], [['klinge', 2]]],
-        onArrive: [{ who: 'flug', text: 'Da ist sie. Alle Torpedos auf die Dogma!' }],
+      { name: 'Dogma', pos: A(-2000, 300, 14500), objective: 'Vernichte den Zerstörer „Dogma“', waves: [[['zerstoerer', 1], ['dorn', 4]], [['klinge', 2]]],
+        onArrive: [{ who: 'flug', text: 'Da ist sie. Alle Lanzen auf die Dogma!' }],
         onClear: [{ who: 'brandt', text: 'Dogma ist zerstört! Das Tor ist offen! Flotte, vorrücken!' }] },
     ],
     win: [
@@ -897,7 +897,7 @@ export const MISSIONS = [
         onClear: [{ who: 'flug', text: 'Schirm durchbrochen! Die Apotheose liegt direkt voraus.' }] },
       { name: 'Apotheose', pos: A(1000, -200, 15000), objective: 'Vernichte die „Apotheose“', final: true,
         waves: [[['dreadnought', 1], ['dorn', 4]], [['archon', 1], ['klinge', 2]]],
-        onArrive: [{ who: 'flug', text: 'Heilige… das Ding ist größer als die Aurora. Alle Torpedos auf das Kommandoschiff!' }],
+        onArrive: [{ who: 'flug', text: 'Heilige… das Ding ist größer als die Aurora. Alle Lanzen auf das Kommandoschiff!' }],
         onWave: [null, { who: 'veyl', text: 'Du hast mein Schiff verbrannt. Komm, kleiner Falke. Zeig mir, wie Fleisch stirbt.' }],
         onClear: [
           { who: 'veyl', text: 'Tobias…? Bist du das? Es ist so hell hier… Es tut… nicht mehr weh…', if: 'hopeAric' },
