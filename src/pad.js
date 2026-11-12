@@ -34,7 +34,7 @@ const html = `
       <button data-e="view" class="pbtn sm">SICHT</button>
       <button data-e="auto" class="pbtn sm">AUTO</button>
       <button data-e="target" class="pbtn">ZIEL</button>
-      <button data-e="missile" class="pbtn msl">LANZE</button>
+      <button data-e="missile" class="pbtn msl">NEUTRON</button>
       <button data-h="b" class="pbtn">BOOST</button>
       <button data-h="f" class="pbtn big fire">FEUER</button>
     </div>

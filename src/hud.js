@@ -256,7 +256,7 @@ export function drawHud(ctx, g, P) {
         }
         ctx.shadowBlur = 0;
         ctx.font = `800 ${9 * s}px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = col;
-        ctx.fillText(locked ? 'LANZE ◆ AUFGESCHALTET' : `ERFASSUNG ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
+        ctx.fillText(locked ? 'NEUTRON ◆ AUFGESCHALTET' : `ERFASSUNG ${Math.round(P.mslLock * 100)}%`, locked ? qx : sx, (locked ? qy : sy) + rr + 6 * s);
       }
     } else arrow(ctx, P, tg.pos, C.foe, s);
   }
@@ -308,7 +308,7 @@ export function drawHud(ctx, g, P) {
   ctx.fillStyle = '#dff4ff'; ctx.font = `700 ${12 * s}px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(`${Math.round(p.speed)} M/S`, px, by + (bh + 4 * s) * 3 + 2 * s);
   ctx.fillStyle = C.warn;
-  ctx.fillText(`LANZE ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
+  ctx.fillText(`NEUTRON ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
   // --- ship status (left) and wingman status (right) as green line schematics ---
   shipStatus(ctx, p, P, px, by + (bh + 4 * s) * 3 + 22 * s, 74 * s, s, t, false);
@@ -353,9 +353,21 @@ export function drawHud(ctx, g, P) {
     bar(ctx, w / 2 - bw2 / 2, oy + 28 * s, bw2, 10 * s, k, k < 0.35 ? 'rgba(255,70,90,.9)' : 'rgba(110,230,160,.8)', g.protect.name.toUpperCase(), s * 0.85);
   }
 
-  // --- radar (bottom-center; in the cockpit the radar lives on the right MFD) ---
+  // --- radar (in the cockpit the radar lives on the right MFD) ---
+  // chase view: bottom-left, clear of the own ship at bottom-centre; on touch screens it sits in the gap
+  // between the virtual stick and the ship's wing
   if (P.view !== 'cockpit') {
-  const R = (solo ? 50 : 40) * s, rx = solo ? w / 2 : w - R - 14 * s - safeR, ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
+  let R = (solo ? 50 : 40) * s, rx = w - R - 14 * s - safeR;
+  if (solo) {
+    const touchUi = document.body.classList.contains('touch');
+    const safeL = g.safeL || 0;
+    if (touchUi) {
+      const left = safeL + 158, right = w / 2 - h * 0.21; // stick ring's right edge … ship's left wingtip
+      R = Math.max(30 * s, Math.min(R, (right - left - 12) / 2));
+      rx = (left + right) / 2;
+    } else rx = safeL + R + 16 * s;
+  }
+  const ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
   ctx.fillStyle = 'rgba(6,14,24,.6)';
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.fill();
   // sweep

@@ -69,12 +69,12 @@ function tutorial() {
   const pad = hub.devices.some((d) => d.kind === 'gamepad'), touch = document.body.classList.contains('touch');
   const steer = pad ? 'Linker Stick' : touch ? 'Linke Bildschirmhälfte' : 'W, A, S, D oder Pfeiltasten';
   const fire = pad ? 'RT' : touch ? 'FEUER' : 'Leertaste';
-  const msl = pad ? 'X' : touch ? 'LANZE' : 'M';
+  const msl = pad ? 'X' : touch ? 'NEUTRON' : 'M';
   const boost = pad ? 'LT' : touch ? 'BOOST' : 'Shift';
   const tips = [
     `Kurze Auffrischung, {cs}: ${steer} steuert. ${settings.invert ? 'Ziehen hebt die Nase, wie im Flugzeug.' : 'Nach oben drücken hebt die Nase.'}`,
     `${fire} feuert die Pulslaser. Zielst du auf den Kreis vor dem Gegner, wird dein Fadenkreuz grün und du triffst.`,
-    `${msl} entlädt die Ionenlanze – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann lenkt das Feld den Strahl ins Ziel. ${boost} zündet den Nachbrenner. Und wenn der Navpunkt weit weg ist: Autopilot.`,
+    `${msl} feuert die Neutronenkanone – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann richtet sie den Strahl aufs Ziel. ${boost} zündet den Nachbrenner. Und wenn der Navpunkt weit weg ist: Autopilot.`,
   ];
   tips.forEach((t) => ui.comm('rook', t));
   save.tutorialDone = true; store(SAVE_KEY, save);
@@ -505,7 +505,7 @@ function fillBriefing() {
   setLabel($('b-kicker'), kickerFor(def));
   $('b-obj').innerHTML = def.objectives.map((o) => `<li>${o}</li>`).join('');
   const s = SHIPS[def.ship];
-  $('b-ship').textContent = `${s.name} – ${s.guns.length} Pulslaser · ${s.missiles} Lanzenladungen · Schild ${s.shield} · Hülle ${s.hp}`;
+  $('b-ship').textContent = `${s.name} – ${s.guns.length} Pulslaser · Neutronenkanone mit ${s.missiles} Schuss · Schild ${s.shield} · Hülle ${s.hp}`;
   const w = wingFor(def);
   const wing = w ? CHARS[w].name : 'Keiner';
   $('b-wing').textContent = coopActive() ? `${settings.callsign2} (Spieler 2) und ${wing}` : wing;
