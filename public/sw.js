@@ -1,5 +1,5 @@
 // Offline support for the installed app: network first (always fresh), cache as fallback.
-const CACHE = 'sternenfront-v2';
+const CACHE = 'sternenfront-v3';
 const MAX_ENTRIES = 60; // old hashed builds are evicted oldest-first instead of piling up
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -20,8 +20,9 @@ async function remember(req, res) {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  // pages always revalidate with the server (no stale copy from the HTTP cache), so a new build shows at once
   e.respondWith(
-    fetch(req)
+    fetch(req, req.mode === 'navigate' ? { cache: 'no-cache' } : undefined)
       .then((res) => {
         if (res.ok) e.waitUntil(remember(req, res.clone()));
         return res;

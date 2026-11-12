@@ -20,5 +20,28 @@ if (q.has('pad')) {
 
 // installable app: cache files for offline play (not in the single-file build)
 if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && 'serviceWorker' in navigator && window.isSecureContext) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {}));
+}
+
+// always the latest version: a tab or installed app left open (phones resume apps for days) checks
+// whether a newer build was published and reloads itself - but only on the title screen, never
+// in the middle of a mission or a story scene
+if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && !q.has('pad')) {
+  const mine = document.querySelector('script[type="module"][src*="assets/"]')?.getAttribute('src');
+  let newer = false;
+  const safe = () => { const t = document.getElementById('s-title'); return !!t && !t.classList.contains('hidden'); };
+  const apply = () => { if (newer && safe() && !document.hidden) location.reload(); };
+  const check = async () => {
+    if (newer || !mine || !navigator.onLine) return apply();
+    try {
+      const html = await (await fetch(`./?v=${Date.now()}`, { cache: 'no-store' })).text();
+      const cur = /<script[^>]+type="module"[^>]+src="([^"]*assets\/[^"]+)"/.exec(html)?.[1];
+      if (cur && cur !== mine) newer = true;
+    } catch { /* offline: try again later */ }
+    apply();
+  };
+  setTimeout(check, 8000);
+  setInterval(check, 10 * 60 * 1000);
+  setInterval(apply, 3000); // reload as soon as the player is back on the title screen
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
 }
