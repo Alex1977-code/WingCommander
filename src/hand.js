@@ -143,7 +143,7 @@ function bounds(pose) {
   return bb.expandByScalar(0.005);
 }
 
-function* mesh(pose, h = 0.0016) {
+function* mesh(pose, h = 0.0019) { // ~30% fewer triangles than 0.0016, still smooth (normals come from the SDF)
   const F = makeField(pose);
   const bb = bounds(pose);
   const nx = Math.ceil((bb.max.x - bb.min.x) / h) + 1, ny = Math.ceil((bb.max.y - bb.min.y) / h) + 1, nz = Math.ceil((bb.max.z - bb.min.z) / h) + 1;
@@ -214,7 +214,7 @@ function* build(pose) {
   const n = pos.length / 3, nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
   const e = 0.0004, c = new THREE.Color(), p = new THREE.Vector3(), nv = new THREE.Vector3(), tmp = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
-    if (!(i % 1500)) yield;
+    if (!(i % 500)) yield;
     const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
     nv.set(F(x + e, y, z) - F(x - e, y, z), F(x, y + e, z) - F(x, y - e, z), F(x, y, z + e) - F(x, y, z - e)).normalize();
     nor[i * 3] = nv.x; nor[i * 3 + 1] = nv.y; nor[i * 3 + 2] = nv.z;

@@ -241,8 +241,9 @@ export class Merged {
   }
   get firing() { return this.list.some((c) => c.firing); }
   get boosting() { return this.list.some((c) => c.boosting); }
-  take() { const out = []; for (const c of this.list) { const e = c.take(); for (let i = 0; i < e.length; i++) out.push(e[i]); } return out; }
-  reset() { this.list.forEach((c) => c.reset()); }
+  // (resolved fresh: while paused update() doesn't run, and a device may have joined meanwhile)
+  take() { const out = []; for (const c of this.src().filter(Boolean)) { const e = c.take(); for (let i = 0; i < e.length; i++) out.push(e[i]); } return out; }
+  reset() { this.src().filter(Boolean).forEach((c) => c.reset()); }
   buzz(ms) { this.list.forEach((c) => c.buzz?.(ms)); }
 }
 
@@ -291,13 +292,19 @@ export class InputHub {
       try { p2.transport?.close?.(); } catch { /* already closed */ }
     }
     if (!this.devices.includes(p2)) this.activeP2 = d;
+    else this.p2Next = d; // takes over if the current player 2 turns out to be gone
   }
   addRemote(transport, name) {
     const d = new RemoteDevice(this, transport, name);
     d.lastMsg = performance.now();
     this.adopt(d);
     this.devices.push(d);
-    transport.onClose(() => { d.release(); this.devices = this.devices.filter((x) => x !== d); this.changed(); });
+    transport.onClose(() => {
+      d.release(); this.devices = this.devices.filter((x) => x !== d);
+      // player 2's old phone finally reports closed: the phone that reconnected meanwhile takes over
+      if (d === this.activeP2 && this.p2Next && this.devices.includes(this.p2Next)) { this.activeP2 = this.p2Next; this.p2Next = null; }
+      this.changed();
+    });
     this.changed();
     return d;
   }

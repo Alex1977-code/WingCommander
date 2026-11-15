@@ -15,7 +15,7 @@ if (q.has('pad')) {
 } else {
   // ship decals are painted into cached canvas textures: wait (briefly) for the bundled font first
   const fontReady = document.fonts?.load ? Promise.race([document.fonts.load('700 44px Rajdhani'), new Promise((r) => setTimeout(r, 1500))]).catch(() => {}) : Promise.resolve();
-  fontReady.then(() => import('./app.js')).catch(failed);
+  fontReady.then(() => import('./app.js')).then(() => document.body.classList.add('ready')).catch((e) => { if (!e?.handled) failed(); });
 }
 
 // installable app: cache files for offline play (not in the single-file build)

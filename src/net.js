@@ -37,7 +37,8 @@ export function wrapPresentation(conn) {
     send: (m) => conn.state === 'connected' && conn.send(JSON.stringify(m)),
     onMessage: (cb) => conn.addEventListener('message', (e) => { try { cb(JSON.parse(e.data)); } catch { /* ignore */ } }),
     onClose: (cb) => closeCbs.push(cb),
-    close: () => conn.terminate?.(),
+    // close only our connection: terminate() on the TV would end the whole presentation (the game)
+    close: () => (conn.close ? conn.close() : conn.terminate?.()),
   };
 }
 

@@ -276,6 +276,7 @@ document.addEventListener('pointerup', (e) => { const b = e.target.closest?.('bu
 // no WebGL (old device, blocked in the hosting frame): say so instead of leaving a black page
 const game = (() => {
   try { return new Game($('view'), $('hud'), audio, ui); } catch (e) {
+    e.handled = true; // main.js must not replace this message with its "loading failed" page
     document.body.innerHTML = '<div style="position:fixed;inset:0;display:grid;place-content:center;text-align:center;padding:24px;background:#05070d;color:#cfe8ff;font:600 16px system-ui,sans-serif">3D-Grafik (WebGL) ist auf diesem Gerät oder in diesem Fenster nicht verfügbar.<br>Bitte in einem aktuellen Browser öffnen.</div>';
     throw e;
   }
@@ -597,9 +598,9 @@ function debrief(result, reason, stats, def, oldRank) {
 }
 
 function playEnding() {
-  save.finished = false; store(SAVE_KEY, save);
   const bitter = !!save.flags.kolibriLost;
-  runDialog(bitter ? ENDINGS.bitter : ENDINGS.good, 'Epilog', bitter ? 'Asche und Sterne' : 'Morgenröte', () => title(), bitter ? 'sad' : 'victory');
+  // the epilog counts as seen only once it has played through (closing the app mid-way keeps it available)
+  runDialog(bitter ? ENDINGS.bitter : ENDINGS.good, 'Epilog', bitter ? 'Asche und Sterne' : 'Morgenröte', () => { save.finished = false; store(SAVE_KEY, save); title(); }, bitter ? 'sad' : 'victory');
 }
 
 $('r-next').onclick = () => {
@@ -628,7 +629,12 @@ function title() {
   });
 }
 $('m-continue').onclick = () => { audio.unlock(); if (save.finished) playEnding(); else startMissionFlow(); };
-$('m-new').onclick = () => { audio.unlock(); $('callsign').value = save.callsign; show('s-name'); };
+$('m-new').onclick = () => {
+  audio.unlock(); $('callsign').value = save.callsign;
+  // starting over replaces the running campaign: say so before the player confirms
+  $('name-warn').classList.toggle('hidden', !save.started);
+  show('s-name');
+};
 $('m-help').onclick = () => { audio.unlock(); show('s-help'); };
 $('m-settings').onclick = () => { audio.unlock(); show('s-settings'); };
 $('m-multi').onclick = () => { audio.unlock(); openMulti(); };

@@ -15,6 +15,12 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildShip } from './ships.js';
 import { gripHandGeometry, throttleHandGeometry } from './hand.js';
 
+/** canvas textures redrawn many times a second: no mipmap chain to rebuild on every upload */
+function live(t) {
+  if (t.generateMipmaps) { t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; }
+  t.needsUpdate = true;
+}
+
 const v = new THREE.Vector3(), v2 = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEG = Math.PI / 180;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -823,7 +829,7 @@ export class Cockpit {
         const f = this.fail[`mfd${i}`];
         if (f === 'dead' || (f === 'flicker' && Math.random() < 0.35)) this.drawStatic(m.g, 320, 240, f === 'dead');
         else { this.drawMFD(m, P, game); if (f === 'flicker') this.tear(m.g, 320, 240); }
-        m.g.drawImage(this.prints, 0, 0); m.tex.needsUpdate = true;
+        m.g.drawImage(this.prints, 0, 0); live(m.tex);
       });
     }
     this.updateButtons(P, game, t);
@@ -834,7 +840,7 @@ export class Cockpit {
       const f = this.fail[`log${this.logs.indexOf(L)}`];
       if (f === 'dead' || (f === 'flicker' && Math.random() < 0.3)) this.drawStatic(L.g, L.c.width, L.c.height, f === 'dead');
       else this.drawLog(L, t);
-      L.tex.needsUpdate = true;
+      live(L.tex);
     }
     // failing electronics keep spitting the odd spark
     for (const k in this.fail) if (Math.random() < dt * (this.fail[k] === 'dead' ? 0.8 : 0.4)) this.sparkAt(k, 4);
@@ -868,7 +874,7 @@ export class Cockpit {
         });
         g.fillStyle = 'rgba(255,255,255,.04)'; g.fillRect(0, 0, W, H * 0.35);
       }
-      tex.needsUpdate = true;
+      live(tex);
       // right pod: two LED bar graphs (shield, afterburner charge)
       const B = this.barPanel, bg = B.g, BW = B.c.width, BH = B.c.height;
       if (fb === 'dead' || (fb === 'flicker' && Math.random() < 0.35)) this.drawStatic(bg, BW, BH, fb === 'dead');
@@ -888,7 +894,7 @@ export class Cockpit {
           dymo(bg, label, x, 186, 26);
         });
       }
-      B.tex.needsUpdate = true;
+      live(B.tex);
     }
     // guarded toggles flip with the systems they control; the covers swing open when armed
     const st = { NB: P.boosting, AUTO: !!game.autoAvailable?.(), WAFFE: !!P.ctrl.firing || !!P.aimLocked, ECM: !!P.missileWarn };
@@ -903,7 +909,7 @@ export class Cockpit {
 
   /** hull hit: the worse the damage, the likelier a panel drops out (and sparks), heavy hits crack the canopy */
   hit(dmg, hk) {
-    if (hk < 0.45 && this.cracks < 4 && Math.random() < 0.18 + dmg * 0.01) { addCrack(this.crack); this.crackTex.needsUpdate = true; this.cracks++; }
+    if (hk < 0.45 && this.cracks < 4 && Math.random() < 0.18 + dmg * 0.01) { addCrack(this.crack); live(this.crackTex); this.cracks++; }
     if (hk > 0.72 || Math.random() > Math.min(0.65, (0.75 - hk) * 0.9 + dmg * 0.01)) return null;
     const keys = Object.keys(this.elems).filter((k) => this.fail[k] !== 'dead');
     if (!keys.length) return null;
@@ -989,7 +995,7 @@ export class Cockpit {
       g.strokeStyle = 'rgba(0,0,0,.8)'; g.lineWidth = 3; g.strokeRect(x, y, w, h);
     });
     g.textAlign = 'left';
-    tex.needsUpdate = true;
+    live(tex);
   }
 
   updateButtons(P, game, t) {

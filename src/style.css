@@ -363,3 +363,7 @@ body.pad-mode { background: radial-gradient(ellipse at 50% 20%, #0c2236, #05070d
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* the title menu has no handlers until the game code has loaded */
+body:not(.ready):not(.pad-mode) #s-title .menu { pointer-events: none; opacity: .55; }
+#name-warn { color: #ffc857; font-size: 13px; margin: 6px 0 0; }
