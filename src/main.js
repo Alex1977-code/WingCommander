@@ -26,17 +26,30 @@ if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && 'serviceWorker' in
 // always the latest version: a tab or installed app left open (phones resume apps for days) checks
 // whether a newer build was published and reloads itself - but only on the title screen, never
 // in the middle of a mission or a story scene
-if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && !q.has('pad')) {
+// (not on the phone controller page, not as a TV / cast receiver, never while phones are connected)
+if (import.meta.env.PROD && !import.meta.env.VITE_ARTIFACT && !q.has('pad') && !q.has('tv') && !q.has('cast')) {
   const mine = document.querySelector('script[type="module"][src*="assets/"]')?.getAttribute('src');
   let newer = false;
-  const safe = () => { const t = document.getElementById('s-title'); return !!t && !t.classList.contains('hidden'); };
-  const apply = () => { if (newer && safe() && !document.hidden) location.reload(); };
+  // a reload that still came back with the old page (CDN lag, flaky network) must not loop
+  let tried = null;
+  try { tried = sessionStorage.getItem('sf.reloadTo'); } catch { /* storage blocked */ }
+  const safe = () => {
+    const t = document.getElementById('s-title');
+    return !!t && !t.classList.contains('hidden') && !(+document.body.dataset.remotes > 0);
+  };
+  let target = null;
+  const apply = () => {
+    if (!newer || !safe() || document.hidden) return;
+    if (tried && tried === target) return; // already reloaded for this build once in this session
+    try { sessionStorage.setItem('sf.reloadTo', target); } catch { /* ignore */ }
+    location.reload();
+  };
   const check = async () => {
     if (newer || !mine || !navigator.onLine) return apply();
     try {
       const html = await (await fetch(`./?v=${Date.now()}`, { cache: 'no-store' })).text();
       const cur = /<script[^>]+type="module"[^>]+src="([^"]*assets\/[^"]+)"/.exec(html)?.[1];
-      if (cur && cur !== mine) newer = true;
+      if (cur && cur !== mine) { newer = true; target = cur; }
     } catch { /* offline: try again later */ }
     apply();
   };

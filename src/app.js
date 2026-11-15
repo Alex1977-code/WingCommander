@@ -686,7 +686,10 @@ function renderSlots() {
   $('mp-slots').innerHTML = rows.join('');
   setLabel($('mp-coop'), `Koop für 2 Spieler: ${settings.coop ? 'An' : 'Aus'}`);
 }
-hub.onChange(() => { renderSlots(); syncPads(); if (current === 's-multi' && hub.devices.length) audio.beep(1500, 0.1); });
+hub.onChange(() => {
+  // phones connected as controllers: the self-update must not reload and cut them off (see main.js)
+  document.body.dataset.remotes = String(hub.devices.filter((d) => d.kind === 'remote').length);
+  renderSlots(); syncPads(); if (current === 's-multi' && hub.devices.length) audio.beep(1500, 0.1); });
 $('mp-coop').onclick = () => { settings.coop = !settings.coop; store(SET_KEY, settings); renderSlots(); syncPads(); };
 $('callsign2').addEventListener('input', () => { settings.callsign2 = $('callsign2').value.trim().replace(/[<>{}]/g, '').slice(0, 12) || 'Orion'; store(SET_KEY, settings); });
 
