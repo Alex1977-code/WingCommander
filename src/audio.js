@@ -2,8 +2,8 @@
  * Fully synthesized audio (WebAudio) – no asset files.
  *  - Sound effects with layered synthesis, a shared reverb and a voice limit.
  *  - Adaptive music: an original orchestral score in the style of 90s TV science fiction
- *    (horns, strings, harp, timpani; a heroic D-major theme and the squadron's D-minor battle
- *    motif) with moods menu · briefing · travel · combat · tension · sad · victory, cross-faded.
+ *    (brass-led: horn section, trumpets, trombones and tuba, with strings, choir, harp and
+ *    timpani; a heroic D-major theme and the squadron's D-minor battle motif) with moods menu · briefing · travel · combat · tension · sad · victory, cross-faded.
  */
 
 const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
@@ -80,16 +80,20 @@ const FANFARE_CHORDS = [chord('D3', 'A3', 'D4', 'F#4'), chord('C3', 'G3', 'C4', 
  * Mood recipes. Volumes per layer (0 = off):
  *  strings – sustained ensemble chord · basses – low strings on the root · harp / celesta – arpeggios
  *  ostinato – driving low-string figure · lead/leadVol – melody instrument · timp – timpani
- *  stabs – brass chord hits · snare – military snare · swell – cymbal swell into each phrase
+ *  brass – horn-section chords · lowBrass – trombones + tuba on the roots · stabs – brass chord hits
+ *  choir – wordless "ah" choir · drum – concert bass drum · snare – military snare
+ *  swell / crash – cymbals into and on each phrase
+ *  tuttiEvery – every n-th pass of the theme is played tutti: trumpets on the tune, horns an octave
+ *  below, full brass chords, choir, bass drum and crash (the big, epic statement)
  */
 const MOODS = {
-  menu: { bpm: 72, bars: HERO_CHORDS, melody: HERO, lead: 'horn', leadVol: 0.11, strings: 0.05, basses: 0.05, harp: 0.03, celesta: 0.018, timp: 0.35, swell: 0.05 },
-  briefing: { bpm: 84, bars: BRIEF_CHORDS, melody: BRIEF, lead: 'flute', leadVol: 0.06, melodyEvery: 2, strings: 0.035, basses: 0.04, ostinato: 0.03, celesta: 0.02, timp: 0.15 },
-  travel: { bpm: 96, bars: HERO_CHORDS, melody: HERO, lead: 'horn', leadVol: 0.085, melodyEvery: 2, strings: 0.04, basses: 0.045, harp: 0.035, celesta: 0.012, timp: 0.2, swell: 0.035 },
-  combat: { bpm: 132, bars: BATTLE_CHORDS, melody: BATTLE, lead: 'trumpet', leadVol: 0.08, melodyEvery: 2, strings: 0.03, ostinato: 0.06, stabs: 0.05, timp: 0.5, snare: 0.16, swell: 0.04 },
-  tension: { bpm: 70, bars: [chord('D2', 'A2', 'Eb3', 'A3'), chord('D2', 'G2', 'C#3', 'G3'), chord('D2', 'A2', 'Eb3', 'Bb3'), chord('Bb1', 'F2', 'B2', 'E3')], tremolo: 0.045, basses: 0.06, timp: 0.4, timpRumble: true, swell: 0.03, hornSwell: 0.05 },
-  sad: { bpm: 58, bars: LAMENT_CHORDS, melody: LAMENT, lead: 'horn', leadVol: 0.1, strings: 0.05, basses: 0.04, harp: 0.012 },
-  victory: { bpm: 104, bars: FANFARE_CHORDS, melody: FANFARE, lead: 'trumpet', leadVol: 0.1, strings: 0.05, basses: 0.05, harp: 0.03, timp: 0.45, swell: 0.05, crash: 0.09, hornHarmony: 0.06 },
+  menu: { bpm: 70, bars: HERO_CHORDS, melody: HERO, lead: 'horns', leadVol: 0.1, tuttiEvery: 2, strings: 0.045, basses: 0.05, harp: 0.026, celesta: 0.014, brass: 0.04, lowBrass: 0.055, choir: 0.03, drum: 0.5, timp: 0.4, swell: 0.055, crash: 0.08 },
+  briefing: { bpm: 84, bars: BRIEF_CHORDS, melody: BRIEF, lead: 'flute', leadVol: 0.06, melodyEvery: 2, strings: 0.035, basses: 0.04, ostinato: 0.03, celesta: 0.02, brass: 0.02, timp: 0.15 },
+  travel: { bpm: 92, bars: HERO_CHORDS, melody: HERO, lead: 'horns', leadVol: 0.085, melodyEvery: 2, tuttiEvery: 4, strings: 0.04, basses: 0.045, harp: 0.032, celesta: 0.01, brass: 0.03, lowBrass: 0.04, choir: 0.02, drum: 0.35, timp: 0.25, swell: 0.04, crash: 0.06 },
+  combat: { bpm: 132, bars: BATTLE_CHORDS, melody: BATTLE, lead: 'horns', leadVol: 0.085, tuttiEvery: 2, strings: 0.03, ostinato: 0.055, brass: 0.03, lowBrass: 0.045, riff: true, stabs: 0.045, choir: 0.022, drum: 0.38, timp: 0.45, snare: 0.14, swell: 0.045, crash: 0.07 },
+  tension: { bpm: 70, bars: [chord('D2', 'A2', 'Eb3', 'A3'), chord('D2', 'G2', 'C#3', 'G3'), chord('D2', 'A2', 'Eb3', 'Bb3'), chord('Bb1', 'F2', 'B2', 'E3')], tremolo: 0.045, basses: 0.06, lowBrass: 0.05, brassSwell: true, choir: 0.018, timp: 0.4, timpRumble: true, drum: 0.3, swell: 0.03 },
+  sad: { bpm: 58, bars: LAMENT_CHORDS, melody: LAMENT, lead: 'horn', leadVol: 0.1, strings: 0.05, basses: 0.04, harp: 0.012, brass: 0.018, choir: 0.015 },
+  victory: { bpm: 100, bars: FANFARE_CHORDS, melody: FANFARE, lead: 'trumpets', leadVol: 0.1, tuttiEvery: 1, strings: 0.05, basses: 0.05, harp: 0.03, brass: 0.045, lowBrass: 0.06, choir: 0.03, drum: 0.5, timp: 0.5, swell: 0.05, crash: 0.09 },
 };
 
 export { MOODS as MUSIC_MOODS }; // for offline rendering in tests
@@ -162,24 +166,37 @@ class Music {
     const m = this.mood;
     const s = step % 16, bar = Math.floor(step / 16);
     const ch = m.bars[bar % m.bars.length];
-    const phrase = m.bars.length, inPhrase = bar % phrase;
+    const phrase = m.bars.length, inPhrase = bar % phrase, pass = Math.floor(bar / phrase);
+    const tutti = !!m.tuttiEvery && pass % m.tuttiEvery === m.tuttiEvery - 1;
+    const big = tutti ? 1 : 0.55; // the tutti pass is the full, epic statement
     if (s === 0) {
-      if (m.strings) this.strings(ch, t, sd * 16, m.strings, m.bpm > 120 ? 0.25 : 0.7);
+      if (m.strings) this.strings(ch, t, sd * 16, m.strings * (tutti ? 1.15 : 1), m.bpm > 120 ? 0.25 : 0.7);
       if (m.tremolo) this.strings(ch, t, sd * 16, m.tremolo, 1.2, true);
       if (m.basses) this.strings([ch[0] - 12], t, sd * 16, m.basses, 0.4);
-      if (m.hornSwell && bar % 2 === 1) this.horn(midi(ch[2]), t, sd * 14, m.hornSwell, true);
-      if (m.crash && inPhrase === 0) this.crash(t, m.crash);
+      // horn section holding the harmony; in quiet passes only on the phrase's main bars
+      if (m.brass && (tutti || inPhrase % 4 === 0 || m.bpm > 120)) this.hornChord(ch.slice(1).map(midi), t, sd * (m.bpm > 120 ? 8 : 15), m.brass * big);
+      // trombones and tuba: a sustained foundation (or a riff in battle, see below)
+      if (m.lowBrass && !m.riff && (tutti || m.brassSwell || inPhrase % 2 === 0)) this.lowBrass(midi(ch[0]), t, sd * 14, m.lowBrass * big, m.brassSwell);
+      if (m.choir && (tutti || m.brassSwell)) this.choir(ch.slice(1).map((n) => midi(n + 12)), t, sd * 16, m.choir);
+      if (m.crash && tutti && inPhrase === 0) this.crash(t, m.crash);
+      if (m.drum && (tutti || m.brassSwell) && (inPhrase % 4 === 0 || (m.bpm > 120 && inPhrase % 2 === 0))) this.bassDrum(t, m.drum);
+    }
+    // battle: low brass riff driving with the ostinato, bass drum on the downbeats
+    if (m.riff) {
+      const hits = { 0: 1, 3: 0.7, 6: 0.85, 8: 1, 11: 0.7, 14: 0.85 };
+      if (hits[s]) this.lowBrass(midi(ch[0]), t, sd * (s === 0 || s === 8 ? 2.2 : 1.4), m.lowBrass * hits[s] * (tutti ? 1 : 0.8), false, true);
+      if (m.drum && (s === 0 || (s === 8 && tutti))) this.bassDrum(t, m.drum * (s === 0 ? 1 : 0.7));
     }
     // cymbal swell rising into the next phrase
     if (m.swell && inPhrase === phrase - 1 && s === 8) this.swell(t, sd * 8, m.swell);
     // harp: rolling eighth-note arpeggios over two octaves
     if (m.harp && s % 2 === 0) {
-      const up = [0, 1, 2, 3, 4, 5, 6, 7], k = up[(s / 2) % 8];
+      const k = (s / 2) % 8;
       const n = ch[k % 4] + 12 * (1 + Math.floor(k / 4));
       this.harp(midi(n), t, m.harp * (s === 0 ? 1.2 : 1));
     }
-    // celesta sparkle
-    if (m.celesta && (s === 0 || s === 6 || s === 10) && Math.random() < 0.8) this.celesta(midi(ch[(bar + s) % 4] + 24), t, m.celesta);
+    // celesta sparkle (only in the quiet passes, where it can be heard)
+    if (m.celesta && !tutti && (s === 0 || s === 6 || s === 10) && Math.random() < 0.8) this.celesta(midi(ch[(bar + s) % 4] + 24), t, m.celesta);
     // low-string ostinato: urgent sixteenths in battle, a soft pulse in briefings
     if (m.ostinato) {
       const root = ch[0] - 12;
@@ -188,30 +205,30 @@ class Music {
         this.staccato(midi(root + pat[s]), t, sd * 0.9, m.ostinato * (s % 4 === 0 ? 1.25 : 0.85));
       } else if (s % 2 === 0) this.staccato(midi(root), t, sd * 1.6, m.ostinato * (s % 8 === 0 ? 1.2 : 0.8));
     }
-    // melody, entering on every pass or every second pass so it doesn't wear out
+    // melody: horns in the quiet passes, trumpets with the horns an octave below in the tutti
     if (m.melody) {
-      const pass = Math.floor(bar / m.melody.length);
-      if (pass % (m.melodyEvery || 1) === 0) {
+      if (pass % (m.melodyEvery || 1) === 0 || tutti) {
         for (const [st, note, len] of m.melody[bar % m.melody.length]) {
           if (st !== s) continue;
           const f = midi(N(note));
-          this.voice(m.lead, f, t, sd * len, m.leadVol);
-          if (m.hornHarmony) this.horn(f * Math.pow(2, -4 / 12), t, sd * len, m.hornHarmony); // a third below
+          if (tutti) {
+            this.trumpets(f, t, sd * len, m.leadVol);
+            this.horns(f / 2, t, sd * len, m.leadVol * 0.95);
+          } else this.voice(m.lead, f, t, sd * len, m.leadVol);
         }
-      } else if (m.stabs && (s === 0 || s === 6 || (s === 12 && bar % 2 === 1))) {
-        // brass hits answer the ostinato when the trumpets rest
-        this.stab(ch.slice(1).map((n) => midi(n + 12)), t, sd * 1.5, m.stabs);
       }
+      // brass hits answer the ostinato between the phrases of the tune
+      if (m.stabs && !tutti && (s === 6 || (s === 12 && bar % 2 === 1))) this.stab(ch.slice(1).map((n) => midi(n + 12)), t, sd * 1.5, m.stabs);
     }
-    // timpani: phrase marks, battle hits and the odd roll
+    // timpani: phrase marks, battle hits and rolls into the climaxes
     if (m.timp) {
       const tp = midi(ch[0] >= 48 ? ch[0] - 12 : ch[0]);
       if (m.timpRumble) { if (s === 0 && bar % 2 === 0) this.roll(tp, t, sd * 12, m.timp * 0.5); }
       else if (m.bpm > 120) {
-        if (s === 0 || s === 8) this.timpani(tp, t, m.timp * (s === 0 ? 1 : 0.7));
-        if (bar % 4 === 3 && s === 12) this.roll(tp, t, sd * 4, m.timp * 0.6);
-      } else if (s === 0 && (inPhrase === 0 || inPhrase === 4)) this.timpani(tp, t, m.timp);
-      else if (inPhrase === phrase - 1 && s === 12) this.roll(tp, t, sd * 4, m.timp * 0.45);
+        if (s === 0 || s === 8 || (tutti && (s === 6 || s === 14))) this.timpani(tp, t, m.timp * (s === 0 ? 1 : 0.7));
+        if (bar % 4 === 3 && s === 12) this.roll(tp, t, sd * 4, m.timp * 0.7);
+      } else if (s === 0 && (inPhrase === 0 || inPhrase === 4 || (tutti && inPhrase % 2 === 0))) this.timpani(tp, t, m.timp * big * 1.4);
+      else if ((inPhrase === phrase - 1 || (tutti && inPhrase === 3)) && s === 8) this.roll(tp, t, sd * 8, m.timp * 0.55);
     }
     if (m.snare) {
       if (s === 4 || s === 12) this.snare(t, m.snare);
@@ -345,7 +362,57 @@ class Music {
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol * 0.5, t + 0.002); g.gain.setTargetAtTime(0.0001, t + 0.01, 0.035);
     this.osc('triangle', 200, t, t + 0.2, g);
   }
+  /** horn section in unison: three players, slightly apart in pitch and timing */
+  horns(f0, t, dur, vol) {
+    for (const [d, dt] of [[-7, 0], [0, 0.012], [8, 0.02]]) this.horn(f0 * Math.pow(2, d / 1200), t + dt, dur, vol * 0.5);
+  }
+  /** trumpets in unison, bright and heroic */
+  trumpets(f0, t, dur, vol) {
+    for (const [d, dt] of [[-5, 0], [6, 0.01]]) this.trumpet(f0 * Math.pow(2, d / 1200), t + dt, dur, vol * 0.62);
+  }
+  /** horn section holding a chord, swelling in */
+  hornChord(freqs, t, dur, vol) {
+    for (const f of freqs) this.horn(f, t, dur, vol / Math.sqrt(freqs.length), true);
+  }
+  /** trombones (root and fifth) over a tuba an octave down: the weight of the brass section */
+  lowBrass(f0, t, dur, vol, swell = false, short = false) {
+    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter(), end = t + dur + 0.8;
+    f.type = 'lowpass'; f.Q.value = 0.9;
+    const a = swell ? dur * 0.55 : short ? 0.02 : 0.12;
+    f.frequency.setValueAtTime(220, t); f.frequency.linearRampToValueAtTime(short ? 1700 : 1300, t + a + 0.05); f.frequency.setTargetAtTime(800, t + a + 0.1, short ? 0.08 : 0.5);
+    f.connect(g); g.connect(this.dry); g.connect(this.wet);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + a);
+    if (short) g.gain.setTargetAtTime(0.0001, t + a + dur * 0.5, dur * 0.25);
+    else { g.gain.setValueAtTime(vol * 0.9, t + Math.max(a, dur - 0.1)); g.gain.setTargetAtTime(0.0001, t + Math.max(a, dur), swell ? 0.6 : 0.25); }
+    for (const [k, d] of [[1, -6], [1, 6], [1.5, 0], [0.5, 0]]) this.osc('sawtooth', f0 * k, t, end, f, d); // trombones root+fifth, tuba below
+  }
+  /** wordless choir ("ah"): voices through vowel formants */
+  choir(freqs, t, dur, vol) {
+    const ctx = this.ctx, g = ctx.createGain(), end = t + dur + 1.4;
+    g.connect(this.dry); g.connect(this.wet);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.9);
+    g.gain.setValueAtTime(vol, t + Math.max(0.9, dur - 0.3)); g.gain.linearRampToValueAtTime(0.0001, t + dur + 1.2);
+    const src = ctx.createGain();
+    for (const [fq, q, k] of [[780, 6, 1], [1180, 7, 0.6], [2600, 9, 0.18]]) {
+      const bp = ctx.createBiquadFilter(), bg = ctx.createGain();
+      bp.type = 'bandpass'; bp.frequency.value = fq; bp.Q.value = q; bg.gain.value = k * 3;
+      src.connect(bp); bp.connect(bg); bg.connect(g);
+    }
+    const vib = this.vibrato(t, end, 5, 12, 0.8);
+    for (const f of freqs) for (const d of [-14, 0, 13]) { const o = this.osc('sawtooth', f, t, end, src, d + (Math.random() - 0.5) * 6); vib.connect(o.detune); }
+  }
+  /** concert bass drum: a deep, booming hit */
+  bassDrum(t, vol) {
+    const ctx = this.ctx, g = ctx.createGain(), o = ctx.createOscillator();
+    o.frequency.setValueAtTime(68, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.5);
+    o.connect(g); g.connect(this.dry); g.connect(this.wet);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.008); g.gain.setTargetAtTime(0.0001, t + 0.05, 0.45);
+    o.start(t); o.stop(t + 2.5);
+    this.a.noiseAt(t, 0.3, vol * 0.25, 'lowpass', 300, 80, this.dry);
+  }
   voice(kind, f0, t, dur, vol) {
+    if (kind === 'horns') return this.horns(f0, t, dur, vol);
+    if (kind === 'trumpets') return this.trumpets(f0, t, dur, vol);
     if (kind === 'trumpet') return this.trumpet(f0, t, dur, vol);
     if (kind === 'flute') return this.flute(f0, t, dur, vol);
     return this.horn(f0, t, dur, vol);
