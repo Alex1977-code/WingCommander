@@ -72,9 +72,9 @@ function tutorial() {
   const msl = pad ? 'X' : touch ? 'NEUTRON' : 'M';
   const boost = pad ? 'LT' : touch ? 'BOOST' : 'Shift';
   const tips = [
-    `Kurze Auffrischung, {cs}: ${steer} steuert. ${settings.invert ? 'Ziehen hebt die Nase, wie im Flugzeug.' : 'Nach oben drücken hebt die Nase.'}`,
+    `Kurze Auffrischung, {cs}: ${steer} steuert. ${settings.invert ? 'Ziehen hebt die Nase, wie beim klassischen Steuerknüppel.' : 'Nach oben drücken hebt die Nase.'}`,
     `${fire} feuert die Pulslaser. Zielst du auf den Kreis vor dem Gegner, wird dein Fadenkreuz grün und du triffst.`,
-    `${msl} feuert die Neutronenkanone – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann richtet sie den Strahl aufs Ziel. ${boost} zündet den Nachbrenner. Und wenn der Navpunkt weit weg ist: Autopilot.`,
+    `${msl} feuert die Neutronenkanone – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann richtet sie den Strahl aufs Ziel. Mit ${boost} beschleunigst du kurzzeitig. Hältst du die Taste ohne Feinde in der Nähe gedrückt, schaltet der Impulsantrieb zu und bringt dich mit Kilometern pro Sekunde zum Navpunkt. Oder gleich: Autopilot.`,
   ];
   tips.forEach((t) => ui.comm('rook', t));
   save.tutorialDone = true; store(SAVE_KEY, save);
@@ -579,7 +579,7 @@ function debrief(result, reason, stats, def, oldRank) {
   setLabel($('r-kicker'), `Nachbesprechung · ${def.title}`);
   $('r-title').style.color = result === 'win' ? 'var(--ok)' : result === 'branch' ? 'var(--warn)' : 'var(--foe)';
   const mm = Math.floor(stats.time / 60), ss = String(Math.floor(stats.time % 60)).padStart(2, '0');
-  $('r-stats').innerHTML = `<div><b id="st-k">0</b><span>Abschüsse</span></div><div><b id="st-a">0%</b><span>Trefferquote</span></div><div><b>${mm}:${ss}</b><span>Flugzeit</span></div><div><b id="st-s">0</b><span>Punkte</span></div>`;
+  $('r-stats').innerHTML = `<div><b id="st-k">0</b><span>Abschüsse</span></div><div><b id="st-a">0%</b><span>Trefferquote</span></div><div><b>${mm}:${ss}</b><span>Einsatzzeit</span></div><div><b id="st-s">0</b><span>Punkte</span></div>`;
   let extra = reason || '';
   if (result !== 'lose') {
     const nr = rankFor(save.kills);
@@ -653,7 +653,7 @@ function refreshSettings() {
   setLabel($('set-control'), `Steuer im Cockpit: ${settings.control === 'stick' ? 'Steuerknüppel' : 'Steuerjoch'}`);
   setLabel($('set-sens'), `Empfindlichkeit: ${settings.sens < 1 ? 'Niedrig' : settings.sens > 1 ? 'Hoch' : 'Normal'}`);
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
-  setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Flugzeug (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
+  setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Invertiert (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
   setLabel($('set-quality'), `Grafik: ${settings.quality === 'high' ? 'Hoch (Bloom)' : 'Leistung'}`);
   store(SET_KEY, settings);
 }

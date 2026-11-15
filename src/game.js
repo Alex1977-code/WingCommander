@@ -13,7 +13,7 @@ import { Cockpit } from './cockpit.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
-const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3(), tBox = new THREE.Vector3(), tBump = new THREE.Vector3(), tSeg = new THREE.Vector3();
+const t1 = new THREE.Vector3(), t2 = new THREE.Vector3(), t3 = new THREE.Vector3(), t4 = new THREE.Vector3(), tBox = new THREE.Vector3(), tBump = new THREE.Vector3(), tSeg = new THREE.Vector3(), tVel = new THREE.Vector3(), tImp = new THREE.Vector3();
 /** squared distance from point c to the segment a-b */
 function segDist2(a, b, c) {
   tSeg.subVectors(b, a);
@@ -91,6 +91,12 @@ const tL0 = new THREE.Vector3(), tL1 = new THREE.Vector3(), tL2 = new THREE.Vect
 
 const ENEMY_TOUGH = 1.7;
 const MSL_CONE = Math.cos((22 * Math.PI) / 180);
+/**
+ * Impulse drive: holding boost on a clear stretch between nav points spools up a cruise drive that
+ * covers kilometres per second. It drops out on its own near enemies, mines, capital ships, rocks and
+ * the nav point, so fights always happen at combat speed.
+ */
+const IMPULSE = { speed: 2400, spool: 0.9, hostile: 3500, mine: 2200, look: 3600, nav: 3700 };
 
 export class Game {
   constructor(canvas, hudCanvas, audio, ui) {
@@ -218,7 +224,7 @@ export class Game {
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
     this.fx = new Fx(this.scene, this.quality);
-    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = [];
+    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = []; this.impHintShown = false;
     this.composer = this.makeComposer(this.camera);
     this.resize();
   }
@@ -253,7 +259,7 @@ export class Game {
       const camera = new THREE.PerspectiveCamera(60, 1, 2, 90000);
       const P = {
         idx: i, ship, ctrl, camera, camQ: ship.quat.clone(), invQ: new THREE.Quaternion(),
-        target: null, energy: 1, boosting: false, throttle: 0.75,
+        target: null, energy: 1, boosting: false, impulse: false, impT: 0, impChkT: 0, impClear: false, throttle: 0.75,
         aimPoint: new THREE.Vector3(), leadPoint: new THREE.Vector3(), aimLocked: false, mslLock: 0, mslTgt: null, lockToneT: 0,
         shake: 0, hurt: 0, bumpT: 0, deadT: 0, missileWarn: false, warnT: 0,
         color: PILOT_COLORS[i], label: `P${i + 1}`, baseFov: 60, targetT: 0, view: this.view || 'cockpit', cockpit: new Cockpit(), hitSide: {}, marks: [],
@@ -293,7 +299,7 @@ export class Game {
     this.setBayLights(false, false, false); this.setBayField(1); this.setClamps(true);
     this.useBay = !!opts.launch;
     if (this.useBay) this.startLaunch();
-    else this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Maschinen. Guten Flug, Nachtfalken!' : 'Startfreigabe erteilt. Guten Flug, {cs}!');
+    else this.ui.comm('flug', this.coop ? 'Startfreigabe für beide Jäger. Klare Bahn, Nachtfalken!' : 'Startfreigabe erteilt. Klare Bahn, {cs}!');
   }
 
   // ---------- launch from and landing in the carrier's flight deck ----------
@@ -430,7 +436,7 @@ export class Game {
       }
       if (out === this.pilots.length) {
         this.seq = null; this.setBayLights(false, false, false); this.setBayField(1); this.setClamps(true);
-        this.ui.comm('flug', this.coop ? 'Beide Maschinen frei. Schleusenfeld wieder aktiv. Gute Jagd, Nachtfalken!' : 'Maschine frei, Schleusenfeld wieder aktiv. Gute Jagd, {cs}!');
+        this.ui.comm('flug', this.coop ? 'Beide Jäger frei. Schleusenfeld wieder aktiv. Gute Jagd, Nachtfalken!' : 'Jäger frei, Schleusenfeld wieder aktiv. Gute Jagd, {cs}!');
       }
       return;
     }
@@ -807,7 +813,7 @@ export class Game {
       const P = s.pilot;
       P.deadT = this.coop ? 7 : 3; P.shake = 2;
       P.ctrl.buzz?.(300);
-      if (this.coop && this.alivePilots().length) this.ui.comm('flug', `${s.name} ist abgeschossen! Rettungskapsel geortet – Ersatzmaschine startet.`);
+      if (this.coop && this.alivePilots().length) this.ui.comm('flug', `${s.name} ist abgeschossen! Rettungskapsel geortet – Ersatzjäger startet.`);
       return;
     }
     if (s.team === 1) {
@@ -921,7 +927,7 @@ export class Game {
         dir.set(-28, 2, -22).applyQuaternion(lead.quat).add(lead.pos).sub(s.pos);
         const d = dir.length();
         if (d < 30) { this.fwd(lead, dir); want = lead.speed; }
-        else { dir.divideScalar(d); t3.copy(FWD).applyQuaternion(lead.quat); dir.lerp(t3, d < 120 ? 0.5 : 0).normalize(); want = Math.min(def.boost, lead.speed + d * 1.2); }
+        else { dir.divideScalar(d); t3.copy(FWD).applyQuaternion(lead.quat); dir.lerp(t3, d < 120 ? 0.5 : 0).normalize(); want = lead.speed > def.boost || d > 1200 && this.mission && this.mission.phase !== 'fight' ? Math.min(IMPULSE.speed, lead.speed + d * 1.2) : Math.min(def.boost, lead.speed + d * 1.2); }
       } else {
         dir.copy(t2).addScaledVector(t3.set(1, 0, 0).applyQuaternion(s.quat), 0.3).normalize();
       }
@@ -973,7 +979,7 @@ export class Game {
       if (d < 60) dir.addScaledVector(t3, 3).normalize();
     }
     this.steer(s, dir, dt, def.turn * (0.75 + s.skill * 0.25));
-    s.speed += (want - s.speed) * Math.min(1, dt * 1.4);
+    s.speed += (want - s.speed) * Math.min(1, dt * (s.speed > (def.boost || def.speed * 2) * 1.05 || want > (def.boost || 1e9) ? 3.5 : 1.4));
   }
 
   /**
@@ -1126,7 +1132,7 @@ export class Game {
     c.update?.(dt);
     if (p.seqHold) {
       // launch / landing on rails: only pause and view change are accepted
-      c.throttleSet = null;
+      c.throttleSet = null; P.impulse = false; P.impT = 0; P.wantSpeed = null;
       for (const e of c.take()) { if (e === 'pause') this.ui.pause(); else if (e === 'view' && this.seq?.kind !== 'launch') { P.view = P.view === 'cockpit' ? 'chase' : 'cockpit'; this.ui.viewChanged?.(P); } }
       p.bank *= 0.9; p.mesh.userData.body.rotation.z = p.bank; p.mesh.userData.body.rotation.x = 0;
       P.aimLocked = false; P.mslLock = 0;
@@ -1137,7 +1143,7 @@ export class Game {
     // small dead zone + expo curve: precise near the centre, full authority at the edge
     const shape = (v) => { const a = Math.max(0, (Math.abs(v) - 0.05) / 0.95); return Math.sign(v) * a * (0.45 + 0.55 * a * a); };
     const sx = shape(c.x), sy = shape(c.y) * (this.invert ? 1 : -1);
-    const rate = def.turn * (P.boosting ? 0.7 : 1) * (this.sens || 1);
+    const rate = def.turn * (P.impulse ? 0.4 : P.boosting ? 0.7 : 1) * (this.sens || 1);
     q1.setFromAxisAngle(AX, -sy * rate * dt);
     q2.setFromAxisAngle(AY, -sx * rate * dt);
     p.quat.multiply(q1).multiply(q2).normalize();
@@ -1147,12 +1153,33 @@ export class Game {
 
     if (P.energy <= 0.02) P.boostLock = true;
     if (P.boostLock && (P.energy > 0.3 || !c.boosting)) P.boostLock = false;
-    const boosting = c.boosting && !P.boostLock && P.energy > 0.02;
-    if (boosting) P.energy = Math.max(0, P.energy - dt * 0.22);
+    const boosting = c.boosting && !P.boostLock && (P.energy > 0.02 || P.impulse);
+    // impulse drive: boost held on a clear stretch for a moment; the drive itself draws no boost energy
+    P.impChkT -= dt;
+    if (P.impChkT <= 0) { P.impChkT = 0.2; P.impClear = this.impulseClear(P); }
+    P.impT = boosting && P.impClear && !c.firing && !P.lance ? P.impT + dt : 0;
+    const impulse = P.impT > IMPULSE.spool;
+    P.impProg = Math.min(1, P.impT / IMPULSE.spool);
+    if (impulse !== P.impulse) {
+      P.impulse = impulse;
+      if (impulse) {
+        if (P.idx === 0 || !this.coop) this.audio.warp();
+        P.cockpit?.log('IMPULSANTRIEB ZUGESCHALTET', '#7fd6ff');
+      } else P.cockpit?.log('IMPULSANTRIEB AUS · GEFECHTSGESCHWINDIGKEIT', '#7fd6ff');
+    }
+    if (impulse) P.energy = Math.min(1, P.energy + dt * 0.05);
+    else if (boosting) P.energy = Math.max(0, P.energy - dt * 0.22);
     else P.energy = Math.min(1, P.energy + dt * 0.1);
     P.boosting = boosting;
-    const want = boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);
-    p.speed += (want - p.speed) * Math.min(1, dt * (boosting ? 1.8 : 1.2));
+    const want = impulse ? IMPULSE.speed : boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);
+    P.wantSpeed = want;
+    // spools up over ~2 s, but brakes hard when it drops out (inertial dampers)
+    const k = impulse ? 1.25 : p.speed > def.boost * 1.05 ? 3.5 : boosting ? 1.8 : 1.2;
+    p.speed += (want - p.speed) * Math.min(1, dt * k);
+    if (!P.impHinted && P.impClear && !boosting && P.idx === 0 && this.mission?.phase === 'travel' && this.def.navs?.length) {
+      P.impHinted = true;
+      if (!this.impHintShown) { this.impHintShown = true; this.ui.comm('flug', 'Kurs ist frei, {cs}. Boost halten für den Impulsantrieb.'); }
+    }
 
     this.fwd(p, t1);
     P.aimPoint.copy(p.pos).addScaledVector(t1, 900);
@@ -1293,7 +1320,7 @@ export class Game {
     const m = this.mission, out = [];
     if (!m || m.phase !== 'fight') return out;
     const n = this.nav();
-    if (n.type === 'pickup') for (const p of this.pickups) if (!p.got) out.push({ pos: p.pos, color: '#6dffb0', label: n.pickupLabel || 'FLUGSCHREIBER' });
+    if (n.type === 'pickup') for (const p of this.pickups) if (!p.got) out.push({ pos: p.pos, color: '#6dffb0', label: n.pickupLabel || 'DATENKERN' });
     if (n.type === 'convoy') for (const c of m.convoy || []) if (c.alive) out.push({ pos: c.pos, color: '#6dffb0', label: c.name.toUpperCase(), main: true });
     if (n.type === 'scan' && m.prog < n.scan) out.push({ pos: n._pos, color: '#ffc857', label: 'SCANZONE', main: true });
     if (n.type === 'intercept' && m.courier?.alive) out.push({ pos: m.courier.pos, color: '#ff4d6d', label: 'KURIER', main: true });
@@ -1310,6 +1337,33 @@ export class Game {
     if (!alive.length || alive.length < this.pilots.length) return false;
     const np = this.navPos();
     return !!np && alive.every((P) => P.ship.pos.distanceTo(np) > 2600);
+  }
+
+  /** The impulse drive needs open space: no enemies, mines, capital ships or rocks nearby, the nav point still far. */
+  impulseClear(P) {
+    const m = this.mission, p = P.ship;
+    if (!m || this.seq || this.ended || this.frozen || p.seqHold || P.inTube) return false;
+    if (m.phase !== 'travel' && m.phase !== 'return') return false;
+    if (m.timer != null || m.phase === 'travel' && this.nav()?.type === 'escape') return false;
+    const np = this.navPos();
+    if (np && p.pos.distanceToSquared(np) < IMPULSE.nav ** 2) return false;
+    // big objects only matter when they are close or lie on the flight path ahead
+    const f = this.fwd(p, tImp);
+    const inPath = (pos, r, side, near) => {
+      const rx = pos.x - p.pos.x, ry = pos.y - p.pos.y, rz = pos.z - p.pos.z;
+      const d2 = rx * rx + ry * ry + rz * rz;
+      if (d2 < (r + near) ** 2) return true;
+      const al = rx * f.x + ry * f.y + rz * f.z;
+      return al > 0 && al < IMPULSE.look + r && d2 - al * al < (r + side) ** 2;
+    };
+    for (const s of this.ships) {
+      if (!s.alive || s === p) continue;
+      if (s.team === 1 && p.pos.distanceToSquared(s.pos) < IMPULSE.hostile ** 2) return false;
+      if (s.def.capital && !s.def.ghost && inPath(s.pos, s.radius, 600, 500)) return false;
+    }
+    for (const mn of this.mines) if (mn.alive && p.pos.distanceToSquared(mn.pos) < IMPULSE.mine ** 2) return false;
+    for (const a of this.asteroids) if (inPath(a.pos, a.radius, 300, 350)) return false;
+    return true;
   }
 
   /** Abort lance charges (autopilot, landing): the charge goes back into the capacitors. */
@@ -1332,13 +1386,15 @@ export class Game {
       m1.lookAt(t1, ZERO, UP);
       q1.setFromRotationMatrix(m1);
       this.pilots.forEach((P, i) => {
-        P.ship.quat.copy(q1);
+        P.ship.quat.copy(q1); P.impulse = false; P.impT = 0;
+        P.ship.speed = Math.min(P.ship.speed, P.ship.def.boost);
         P.ship.pos.copy(base).add(t2.set(i * 40, -i * 6, -i * 20).applyQuaternion(q1));
         P.camQ.copy(q1);
       });
       if (this.wingman?.alive) {
         this.wingman.pos.copy(t2.set(-30, 2, -24).applyQuaternion(q1).add(base));
         this.wingman.quat.copy(q1);
+        this.wingman.speed = Math.min(this.wingman.speed, this.wingman.def.boost || this.wingman.def.speed);
       }
       this.frozen = false;
     });
@@ -1498,7 +1554,7 @@ export class Game {
             this.ui.comm('flug', 'Landefreigabe Bucht eins, {cs}. Folgen Sie dem Leitstrahl unter den Bug und fliegen Sie selbst ein – unter 120 Metern pro Sekunde. Oder AUTO für den Landeautopiloten.');
             this.setBanner('LANDEFREIGABE · BUCHT 1');
             this.audio.beep(900, 0.18);
-          } else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Luftraum säubern, dann Landefreigabe.'); }
+          } else if (!m.landWarned) { m.landWarned = true; this.ui.comm('flug', 'Negativ, {cs} – Feindkontakt am Träger. Erst den Sektor säubern, dann Landefreigabe.'); }
         }
       } else {
         const inv = qBay.copy(this.carrier.quat).invert();
@@ -1583,7 +1639,7 @@ export class Game {
             p.got = true; this.scene.remove(p.mesh); disposeObj(p.mesh);
             this.fx.flash(p.pos, 50, new THREE.Color(0.6, 3, 1.4), 0.4);
             this.audio.beep(1600, 0.15);
-            this.setBanner(`${nav.pickupLabel || 'FLUGSCHREIBER'} ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
+            this.setBanner(`${nav.pickupLabel || 'DATENKERN'} ${this.pickups.filter((x) => x.got).length}/${this.pickups.length} GEBORGEN`);
           }
         }
         done = this.pickups.every((p) => p.got);
@@ -1681,7 +1737,7 @@ export class Game {
       r.setViewport(P.vx, y, P.vw, P.vh);
       setParticleScale(this.fx, P.vh * this.drawRatio());
       if (split) r.setScissor(P.vx, y, P.vw, P.vh);
-      this.env.update(P.camera);
+      this.env.update(P.camera, P.ship.alive ? this.fwd(P.ship, tVel).multiplyScalar(P.ship.speed) : null);
       const inCockpit = P.view === 'cockpit' && P.ship.alive;
       // hide only this pilot's own ship from its own cockpit view
       for (const Q of this.pilots) Q.ship.mesh.visible = !(Q === P && inCockpit);
@@ -1754,13 +1810,15 @@ export class Game {
     this.bannerT -= dt;
     this.ui.setAuto(this.autoAvailable());
     const P0 = this.leadPilot(); // the engine sound follows a living pilot
-    this.audio.setEngine(P0.ship.alive ? P0.ship.speed / P0.ship.def.boost : 0, P0.boosting);
+    this.audio.setEngine(P0.ship.alive ? Math.min(1.25, P0.ship.speed / P0.ship.def.boost) : 0, P0.boosting);
     this.ui.setThrottle?.(P0.throttle);
 
     for (const P of this.pilots) {
       const p = P.ship;
       if (p.alive) {
         let fov;
+        // combat-speed share and impulse share of the current speed (the drive adds a little stretch, not a fisheye)
+        const sr = Math.min(1, p.speed / p.def.boost), ir = THREE.MathUtils.clamp((p.speed - p.def.boost) / (IMPULSE.speed - p.def.boost), 0, 1);
         // wide phone screens (19.5:9 and wider) would get 120°+ horizontally and stretch everything
         // towards the edges: cap the horizontal field of view, the vertical one follows the aspect
         const aspect = P.camera.aspect || 1.6;
@@ -1773,13 +1831,13 @@ export class Game {
           P.camera.position.copy(t1.set(eye[0], eye[1], eye[2]).applyQuaternion(p.quat).add(p.pos));
           q1.setFromAxisAngle(AZ, p.bank * 0.45);
           P.camera.quaternion.copy(P.camQ).multiply(q1).multiply(FLIP);
-          fov = P.cockpitFov + (p.speed / p.def.boost) * 4;
+          fov = P.cockpitFov + sr * 4 + ir * 7;
         } else {
           P.camQ.slerp(p.quat, 1 - Math.exp(-dt * 5.5));
-          const back = 27 + (p.speed / p.def.boost) * 9;
+          const back = 27 + sr * 9 + ir * 5;
           P.camera.position.copy(t1.set(0, 7.5, -back).applyQuaternion(P.camQ).add(p.pos));
           P.camera.quaternion.copy(P.camQ).multiply(FLIP);
-          fov = Math.min(P.baseFov, capV(104)) + (p.speed / p.def.boost) * 10;
+          fov = Math.min(P.baseFov, capV(104)) + sr * 10 + ir * 6;
         }
         if (Math.abs(fov - P.camera.fov) > 0.05) { P.camera.fov += (fov - P.camera.fov) * Math.min(1, dt * 4); P.camera.updateProjectionMatrix(); }
       }

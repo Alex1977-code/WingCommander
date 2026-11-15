@@ -126,7 +126,7 @@
             <li><b>Linke Hälfte</b> – Steuerknüppel</li>
             <li><b>FEUER</b> – Pulslaser (halten)</li>
             <li><b>NEUTRON</b> – Neutronenkanone: Teilchenstrahl, mit Zielaufschaltung ins Ziel gerichtet</li>
-            <li><b>BOOST</b> – Nachbrenner</li>
+            <li><b>BOOST</b> – Boost · gehalten ohne Feinde: Impulsantrieb</li>
             <li><b>ZIEL</b> – Ziel wechseln</li>
             <li><b>SICHT</b> – Cockpit / Außenansicht</li>
             <li><b>SCHUB</b> – Regler rechts</li>
@@ -134,7 +134,7 @@
           <div><h3>Gamepad</h3><ul>
             <li><b>Linker Stick</b> – steuern</li>
             <li><b>RT / A</b> – feuern</li>
-            <li><b>LT / LB</b> – Nachbrenner</li>
+            <li><b>LT / LB</b> – Boost · gehalten ohne Feinde: Impulsantrieb</li>
             <li><b>X / RB</b> – Neutronenkanone · <b>Y</b> – Ziel</li>
             <li><b>Rechter Stick / Steuerkreuz</b> – Schub</li>
             <li><b>Select</b> – Autopilot · <b>Start</b> – Pause</li>
@@ -144,7 +144,7 @@
             <li><b>WASD / Pfeile</b> – steuern</li>
             <li><b>Leertaste</b> – feuern</li>
             <li><b>M / Enter</b> – Neutronenkanone</li>
-            <li><b>Shift</b> – Nachbrenner</li>
+            <li><b>Shift</b> – Boost · gehalten ohne Feinde: Impulsantrieb</li>
             <li><b>T</b> – Ziel · <b>J</b> – Autopilot</li>
             <li><b>V</b> – Cockpit / Außenansicht</li>
             <li><b>Q / E</b> – Schub · <b>Esc</b> – Pause</li>
@@ -195,7 +195,7 @@
           <canvas id="b-map" width="520" height="360"></canvas>
           <div>
             <h3>Missionsziele</h3><ul id="b-obj"></ul>
-            <h3>Zugeteilte Maschine</h3><p id="b-ship"></p>
+            <h3>Zugeteilter Jäger</h3><p id="b-ship"></p>
             <h3>Flügel</h3><p id="b-wing"></p>
           </div>
         </div>
@@ -214,7 +214,7 @@
 
     <section id="s-pause" class="screen hidden dim">
       <div class="panel narrow">
-        <header><span>Flug angehalten</span><h2>Pause</h2></header>
+        <header><span>Einsatz angehalten</span><h2>Pause</h2></header>
         <button id="p-resume" class="btn primary">Weiterfliegen</button>
         <button id="p-restart" class="btn">Mission neu starten</button>
         <button id="p-quit" class="btn">Mission abbrechen</button>

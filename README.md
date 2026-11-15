@@ -17,7 +17,7 @@ eigene Schiffe – läuft direkt im Browser (Handy, Tablet, Desktop) und lässt 
   - Missionstypen: Patrouille, Geleitschutz, Konvoi-Eskorte, Rettung, Aufklärung, Bergung, Abfangen, Durchhalten,
     Flucht, Befreiung, Minenfelder, Angriff auf Zerstörer, Stationen und das Kommandoschiff
 - **Kampf**: 3 fliegbare Jäger, 4 Feindtypen inkl. Ass-Pilot, Zerstörer und Kommandoschiff mit Geschütztürmen,
-  Pulslaser und Neutronenkanone (zielgeführter Teilchenstrahl), Plasmasucher und Fusionsladungen der Aszendenz, Schilde, Nachbrenner, Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
+  Pulslaser und Neutronenkanone (zielgeführter Teilchenstrahl), Plasmasucher und Fusionsladungen der Aszendenz, Schilde, Boost mit Impulsantrieb (km/s zwischen den Navpunkten), Vorhalteanzeige mit Zielhilfe, Radar, Autopilot
 - **Touch-Steuerung**: virtueller Stick, Feuer/Neutron/Boost/Ziel, Schubregler – dazu Tastatur am Desktop
 - **Effekte**: Explosionen mit Lichtblitz, Feuerball, Rauch und Wrackteilen; Schutzschild-Blasen, Triebwerksspuren,
   Ionenspuren, brennende Großkampfschiffe, Linsenreflexe der Sonne
@@ -70,7 +70,7 @@ GitHub Pages braucht der eigene Dienst ein TLS-Zertifikat.
 | Steuern | linke Bildschirmhälfte | linker Stick | WASD / Pfeiltasten |
 | Feuern | FEUER | RT / A | Leertaste |
 | Neutronenkanone | NEUTRON | X / RB | M / Enter |
-| Nachbrenner | BOOST | LT / LB | Shift |
+| Boost / Impulsantrieb (halten) | BOOST | LT / LB | Shift |
 | Ziel wechseln | ZIEL | Y | T |
 | Autopilot | AUTOPILOT | Select | J |
 | Schub | Regler rechts | rechter Stick / Steuerkreuz | Q / E |
