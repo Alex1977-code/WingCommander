@@ -532,8 +532,9 @@ export const MISSIONS = [
     objectives: ['Vier Flugschreiber der Valkyrie bergen', 'Plünderer vertreiben', 'Zur TUS Aurora zurückkehren'],
     navs: [
       { name: 'Wrack Valkyrie', pos: A(1500, 200, 8000), type: 'pickup', pickups: 4, objective: 'Berge die Flugschreiber', asteroids: 26, wreck: true,
-        waves: [[['dorn', 3]], [['klinge', 2], ['dorn', 2]], [['klinge', 3]]],
+        waves: [[['dorn', 3]], [['klinge', 2], ['dorn', 2]], [['klinge', 2], ['schwinge', 1]]],
         onArrive: [{ who: 'rook', text: 'Vier Signale. Ich decke dich, du sammelst. Grüne Markierungen.' }],
+        onWave: [null, null, { who: 'rook', text: 'Achtung, eine Schwinge! Einflügler, die schwere Kanone sitzt an der Flügelspitze. Bleib aus ihrem Schussfeld, {cs}.' }],
         onClear: [{ who: 'rook', text: 'Alle vier. Spiel die letzte Aufzeichnung ab, {cs}. Ich… ich muss sie hören.' }] },
     ],
     win: [
@@ -625,7 +626,7 @@ export const MISSIONS = [
     protect: 'carrier', noReturn: true,
     navs: [
       { name: 'Aurora', pos: A(0, 0, 900), anchor: true, type: 'survive', survive: 180, objective: 'Halte durch',
-        waves: [[['dorn', 4], ['klinge', 1, 'holtEscaped']], [['hammer', 2], ['klinge', 2]], [['klinge', 3], ['dorn', 2]], [['hammer', 3], ['dorn', 2], ['klinge', 1, 'holtEscaped']]],
+        waves: [[['dorn', 4], ['klinge', 1, 'holtEscaped']], [['hammer', 2], ['klinge', 2]], [['klinge', 2], ['schwinge', 1], ['dorn', 2]], [['hammer', 3], ['dorn', 2], ['klinge', 1, 'holtEscaped']]],
         onArrive: [{ who: 'flug', text: 'Kontakte aus allen Richtungen! Sprungantrieb bei zehn Prozent!' }],
         onWave: [null, { who: 'rook', text: 'Bomber! Kolibri, links. {cs}, mit mir!' }, { who: 'flug', text: 'Sprungantrieb bei sechzig Prozent!' }, { who: 'brandt', text: 'Fast geschafft. Noch eine Welle!' }],
         onClear: [{ who: 'flug', text: 'Sprungantrieb geladen! Aber… ein Zerstörer springt direkt vor uns rein!' }] },
@@ -681,7 +682,7 @@ export const MISSIONS = [
           [['dorn', 4]],
           [['dorn', 3], ['klinge', 2]],
           [['hammer', 2], ['dorn', 3]],
-          [['klinge', 4]],
+          [['klinge', 2], ['schwinge', 2]],
           [['hammer', 3], ['klinge', 2]],
           [['dorn', 4], ['klinge', 3]],
           [['hammer', 4], ['dorn', 2]],
@@ -764,7 +765,7 @@ export const MISSIONS = [
     objectives: ['Den Geleitschutz bei Nav 1 vernichten', 'Den Zerstörer „Dogma“ vernichten'],
     noReturn: true,
     navs: [
-      { name: 'Nav 1', pos: A(2500, -200, 7500), waves: [[['klinge', 3], ['dorn', 2]]],
+      { name: 'Nav 1', pos: A(2500, -200, 7500), waves: [[['klinge', 2], ['schwinge', 1], ['dorn', 2]]],
         onArrive: [{ who: 'flug', text: 'Vorpostenstaffel. Kurzen Prozess, die Dogma hört mit.' }],
         onClear: [{ who: 'flug', text: 'Weg ist frei. Ziel: die Dogma.' }] },
       { name: 'Dogma', pos: A(-2000, 300, 14500), objective: 'Vernichte den Zerstörer „Dogma“', waves: [[['zerstoerer', 1], ['dorn', 4]], [['klinge', 2]]],
@@ -867,10 +868,10 @@ export const MISSIONS = [
     objectives: ['Zwei Verteidigungslinien der Schattenflotte durchbrechen'],
     noReturn: true,
     navs: [
-      { name: 'Linie Alpha', pos: A(-2500, 0, 7000), waves: [[['klinge', 3], ['dorn', 2]], [['hammer', 2], ['klinge', 2]]],
+      { name: 'Linie Alpha', pos: A(-2500, 0, 7000), waves: [[['klinge', 2], ['schwinge', 1], ['dorn', 2]], [['hammer', 2], ['klinge', 2]]],
         onArrive: [{ who: 'flug', text: 'Feindliche Jäger in Massen. Alle Nachtfalken: Feuer frei!' }],
         onClear: [{ who: 'flug', text: 'Linie Alpha durchbrochen!' }] },
-      { name: 'Linie Beta', pos: A(1500, 300, 13000), waves: [[['klinge', 4]], [['holt', 1, 'holtEscaped'], ['klinge', 2]], [['dorn', 4]]],
+      { name: 'Linie Beta', pos: A(1500, 300, 13000), waves: [[['klinge', 2], ['schwinge', 2]], [['holt', 1, 'holtEscaped'], ['klinge', 2]], [['dorn', 4]]],
         onWave: [null, { who: 'holt', text: 'Ihr hättet aufsteigen können. Alle. Jetzt sterbt ihr als das, was ihr seid.', if: 'holtEscaped' }],
         onClear: [{ who: 'brandt', text: 'Die Schattenflotte weicht zurück! Der Weg zur Apotheose ist frei!' }] },
     ],
