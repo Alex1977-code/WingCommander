@@ -198,14 +198,14 @@ export const CUTSCENES = {
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
       { id: 'z', type: 'zerstoerer', pos: A(700, 100, 1400), dir: A(-0.45, -0.05, -0.89), speed: 0, name: 'Litanei' },
-      { id: 'r', type: 'greif', pos: A(-1300, -160, -2160), dir: A(0.489, 0.0636, 0.870), speed: 345 },
+      { id: 'r', type: 'greif', pos: A(-1300, -40, -2160), dir: A(0.4897, 0.035, 0.8712), speed: 345 },
       { id: 'k', type: 'greif', pos: A(320, -60, 620), dir: A(0.2, 0, 1), speed: 40 },
       { id: 'v', type: 'archon', pos: A(0, 0, 0), hidden: true },
     ],
     shots: [
       { dur: 4, cam: { rel: 'aurora', from: A(-160, 70, 260), look: 'z' },
         ev: [{ t: 0.1, a: 'fire', id: 'z', at: 'aurora', dur: 8 }, { t: 0.3, sub: 'brandt', text: 'Die Litanei lädt ihr Hauptgeschütz! Wenn sie feuert, verlieren wir den Sprungantrieb!' }] },
-      { dur: 4, cam: { rel: 'r', from: A(-10, 4, -30), look: 'r', lookOff: A(0, 0, 60) },
+      { dur: 4, cam: { rel: 'r', from: A(-16, 8, -40), look: 'r', lookOff: A(0, 0, 60) },
         ev: [{ t: 0.2, sub: 'rook', text: 'Kolibri, {cs}: Ihr bringt die Aurora nach Hause. Verstanden?' }, { t: 2.3, sub: 'kolibri', text: 'Rook? Rook, dreh ab! Das ist ein Befehl von—' }] },
       { dur: 3.5, cam: { rel: 'r', from: A(12, 3, 22), look: 'r', lookOff: A(0, 1, 0) },
         ev: [{ t: 0.2, sub: 'rook', text: 'Aric… Ich lasse dich nicht noch einmal zurück.' }] },
@@ -224,7 +224,7 @@ export const CUTSCENES = {
     sky: SKY.mahlstrom,
     cast: [
       { id: 'pr', type: 'prison', pos: A(0, 0, 0), speed: 22 },
-      { id: 'k', type: 'falke', pos: A(0, -4, 40), speed: 22, hidden: true },
+      { id: 'k', type: 'falke', pos: A(0, -1, 24), speed: 22, hidden: true },
       { id: 'p', type: 'falke', pos: A(46, 12, 30), speed: 22 },
     ],
     shots: [
@@ -532,8 +532,9 @@ export const MISSIONS = [
     objectives: ['Vier Flugschreiber der Valkyrie bergen', 'Plünderer vertreiben', 'Zur TUS Aurora zurückkehren'],
     navs: [
       { name: 'Wrack Valkyrie', pos: A(1500, 200, 8000), type: 'pickup', pickups: 4, objective: 'Berge die Flugschreiber', asteroids: 26, wreck: true,
-        waves: [[['dorn', 3]], [['klinge', 2], ['dorn', 2]], [['klinge', 3]]],
+        waves: [[['dorn', 3]], [['klinge', 2], ['dorn', 2]], [['klinge', 2], ['schwinge', 1]]],
         onArrive: [{ who: 'rook', text: 'Vier Signale. Ich decke dich, du sammelst. Grüne Markierungen.' }],
+        onWave: [null, null, { who: 'rook', text: 'Achtung, eine Schwinge! Einflügler, die schwere Kanone sitzt an der Flügelspitze. Bleib aus ihrem Schussfeld, {cs}.' }],
         onClear: [{ who: 'rook', text: 'Alle vier. Spiel die letzte Aufzeichnung ab, {cs}. Ich… ich muss sie hören.' }] },
     ],
     win: [
@@ -625,7 +626,7 @@ export const MISSIONS = [
     protect: 'carrier', noReturn: true,
     navs: [
       { name: 'Aurora', pos: A(0, 0, 900), anchor: true, type: 'survive', survive: 180, objective: 'Halte durch',
-        waves: [[['dorn', 4], ['klinge', 1, 'holtEscaped']], [['hammer', 2], ['klinge', 2]], [['klinge', 3], ['dorn', 2]], [['hammer', 3], ['dorn', 2], ['klinge', 1, 'holtEscaped']]],
+        waves: [[['dorn', 4], ['klinge', 1, 'holtEscaped']], [['hammer', 2], ['klinge', 2]], [['klinge', 2], ['schwinge', 1], ['dorn', 2]], [['hammer', 3], ['dorn', 2], ['klinge', 1, 'holtEscaped']]],
         onArrive: [{ who: 'flug', text: 'Kontakte aus allen Richtungen! Sprungantrieb bei zehn Prozent!' }],
         onWave: [null, { who: 'rook', text: 'Bomber! Kolibri, links. {cs}, mit mir!' }, { who: 'flug', text: 'Sprungantrieb bei sechzig Prozent!' }, { who: 'brandt', text: 'Fast geschafft. Noch eine Welle!' }],
         onClear: [{ who: 'flug', text: 'Sprungantrieb geladen! Aber… ein Zerstörer springt direkt vor uns rein!' }] },
@@ -681,7 +682,7 @@ export const MISSIONS = [
           [['dorn', 4]],
           [['dorn', 3], ['klinge', 2]],
           [['hammer', 2], ['dorn', 3]],
-          [['klinge', 4]],
+          [['klinge', 2], ['schwinge', 2]],
           [['hammer', 3], ['klinge', 2]],
           [['dorn', 4], ['klinge', 3]],
           [['hammer', 4], ['dorn', 2]],
@@ -764,7 +765,7 @@ export const MISSIONS = [
     objectives: ['Den Geleitschutz bei Nav 1 vernichten', 'Den Zerstörer „Dogma“ vernichten'],
     noReturn: true,
     navs: [
-      { name: 'Nav 1', pos: A(2500, -200, 7500), waves: [[['klinge', 3], ['dorn', 2]]],
+      { name: 'Nav 1', pos: A(2500, -200, 7500), waves: [[['klinge', 2], ['schwinge', 1], ['dorn', 2]]],
         onArrive: [{ who: 'flug', text: 'Vorpostenstaffel. Kurzen Prozess, die Dogma hört mit.' }],
         onClear: [{ who: 'flug', text: 'Weg ist frei. Ziel: die Dogma.' }] },
       { name: 'Dogma', pos: A(-2000, 300, 14500), objective: 'Vernichte den Zerstörer „Dogma“', waves: [[['zerstoerer', 1], ['dorn', 4]], [['klinge', 2]]],
@@ -867,10 +868,10 @@ export const MISSIONS = [
     objectives: ['Zwei Verteidigungslinien der Schattenflotte durchbrechen'],
     noReturn: true,
     navs: [
-      { name: 'Linie Alpha', pos: A(-2500, 0, 7000), waves: [[['klinge', 3], ['dorn', 2]], [['hammer', 2], ['klinge', 2]]],
+      { name: 'Linie Alpha', pos: A(-2500, 0, 7000), waves: [[['klinge', 2], ['schwinge', 1], ['dorn', 2]], [['hammer', 2], ['klinge', 2]]],
         onArrive: [{ who: 'flug', text: 'Feindliche Jäger in Massen. Alle Nachtfalken: Feuer frei!' }],
         onClear: [{ who: 'flug', text: 'Linie Alpha durchbrochen!' }] },
-      { name: 'Linie Beta', pos: A(1500, 300, 13000), waves: [[['klinge', 4]], [['holt', 1, 'holtEscaped'], ['klinge', 2]], [['dorn', 4]]],
+      { name: 'Linie Beta', pos: A(1500, 300, 13000), waves: [[['klinge', 2], ['schwinge', 2]], [['holt', 1, 'holtEscaped'], ['klinge', 2]], [['dorn', 4]]],
         onWave: [null, { who: 'holt', text: 'Ihr hättet aufsteigen können. Alle. Jetzt sterbt ihr als das, was ihr seid.', if: 'holtEscaped' }],
         onClear: [{ who: 'brandt', text: 'Die Schattenflotte weicht zurück! Der Weg zur Apotheose ist frei!' }] },
     ],

@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { buildShip, SHIPS, BAY, BAY_LIGHTS } from './ships.js';
+import { buildShip, SHIPS, BAY, BAY_LIGHTS, setShipDetail } from './ships.js';
 import { createEnvironment, createAsteroids, rockDepth, rockRay } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
@@ -22,6 +22,7 @@ function segDist2(a, b, c) {
   return tBox.copy(a).addScaledVector(tSeg, k).distanceToSquared(c);
 }
 const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), q3 = new THREE.Quaternion();
+const tHL = new THREE.Vector3(), tHN = new THREE.Vector3(), tHB = new THREE.Vector3(), tHA = new THREE.Vector3(), tHC = new THREE.Vector3(), qHL = new THREE.Quaternion();
 const qBay = new THREE.Quaternion(); // the carrier's inverse rotation for bay code (q3 is reused by damage())
 const t5 = new THREE.Vector3();
 const m1 = new THREE.Matrix4();
@@ -168,8 +169,37 @@ export class Game {
     this.env?.setPixelRatio?.(this.drawRatio());
   }
 
+  /**
+   * Compile the shaders of every ship type the mission will spawn now, during the start fade,
+   * instead of stalling the first frame an Aszendenz wave (or the prison ship, the wreck) appears.
+   */
+  prewarm(def) {
+    const types = new Set(['klinge']);
+    const add = (list) => { for (const e of list || []) if (Array.isArray(e) && typeof e[0] === 'string' && SHIPS[e[0]]) types.add(e[0]); };
+    for (const n of def.navs || []) {
+      for (const w of n.waves || []) add(w);
+      add(n.chasers); add(n.dockWave);
+      if (n.type === 'dock') types.add('prison');
+      if (n.wreck) types.add('valkyrie');
+      if (n.type === 'intercept') types.add('kurier');
+      if (n.convoy) for (const t of n.convoy.types || []) types.add(t);
+    }
+    const tmp = new THREE.Group();
+    for (const t of types) { try { tmp.add(buildShip(t)); } catch { /* unknown type: skip */ } }
+    tmp.position.copy(this.pilots[0]?.camera.position || ZERO);
+    this.scene.add(tmp);
+    // on 'high' the scene renders into the bloom composer's float target: compile those shader variants
+    const P0 = this.pilots[0], prev = this.renderer.getRenderTarget();
+    try {
+      this.renderer.setRenderTarget(this.quality === 'high' && P0?.composer ? P0.composer.readBuffer : null);
+      this.renderer.compile(this.scene, P0?.camera || this.camera);
+    } catch { /* compile is only an optimisation */ } finally { this.renderer.setRenderTarget(prev); }
+    this.scene.remove(tmp);
+  }
+
   setQuality(q) {
     this.quality = q;
+    setShipDetail(q); // clearcoat / iridescence only on 'high'
     for (const P of this.pilots) {
       if (q === 'high' && !P.composer) P.composer = this.makeComposer(P.camera);
       if (q !== 'high' && P.composer) { disposeComposer(P.composer); P.composer = null; }
@@ -256,6 +286,7 @@ export class Game {
     this.banner = null; this.bannerT = 0; this.objT = performance.now(); this.lastObj = '';
     this.resize();
     this.activateNav(0);
+    this.prewarm(def);
     this.audio.startEngine();
     this.seq = null;
     // bay lamps are shared materials: never carry a launch/landing state into the next mission
@@ -945,42 +976,108 @@ export class Game {
     s.speed += (want - s.speed) * Math.min(1, dt * 1.4);
   }
 
-  /** Distance to a capital ship's hull: its box, plus an optional ring (torus) such as the station's. */
+  /**
+   * Signed distance to a capital ship's hull, worked out in the ship's own frame once:
+   *  - main shape: an ellipsoid (def.ell, the organic Aszendenz hulls) or the box def.box
+   *  - extra boxes def.boxes (parts sticking out, see fitStats in ships.js)
+   *  - def.disc: the carrier's saucer (radius, z-stretch and its height profile)
+   *  - def.arcs: ribs, blades and rings as swept tubes (torus segments)
+   *  - def.torus: the station's ring
+   * out = world-space push direction away from the nearest surface.
+   */
   hullDist(c, p, out) {
-    let d = this.boxDist(c, p, out);
-    // extra boxes for blades, towers and prows outside the main box (see fitStats in ships.js)
-    for (const e of c.def.boxes || []) {
-      const de = this.boxDist(c, p, tBox, e);
-      if (de < d) { d = de; out.copy(tBox); }
+    const def = c.def, L = tHL.copy(p).sub(c.pos).applyQuaternion(qHL.copy(c.quat).invert());
+    let d;
+    if (def.ell) { // one or more ellipsoids [cx, cy, cz, a, b, c]
+      d = Infinity;
+      for (const e of def.ell) { const de = this.ellLocal(e, L, tHB); if (de < d) { d = de; tHN.copy(tHB); } }
+    } else d = this.boxLocal(def.box, L, 0, 0, 0, tHN);
+    for (const e of def.boxes || []) {
+      // cheap reject before the exact box test
+      const rx = Math.abs(L.x - e[0]) - e[3], ry = Math.abs(L.y - e[1]) - e[4], rz = Math.abs(L.z - e[2]) - e[5];
+      if (rx > d || ry > d || rz > d) continue;
+      const de = this.boxLocal(e, L, e[0], e[1], e[2], tHB, true);
+      if (de < d) { d = de; tHN.copy(tHB); }
     }
-    const tor = c.def.torus;
-    if (!tor) return d;
-    const l = t5.copy(p).sub(c.pos).applyQuaternion(q3.copy(c.quat).invert());
-    const radial = Math.hypot(l.x, l.y) || 1e-6;
-    const qx = radial - tor[0];
-    const dt = Math.hypot(qx, l.z) - tor[1];
-    if (dt >= d) return d;
-    out.set((l.x / radial) * qx, (l.y / radial) * qx, l.z);
-    if (out.lengthSq() < 1e-9) out.set(0, 0, 1);
-    out.normalize().applyQuaternion(c.quat);
-    return dt;
+    const disc = def.disc;
+    if (disc) {
+      const x = L.x - disc.c[0], y = L.y - disc.c[1], z = (L.z - disc.c[2]) / disc.k;
+      const rad = Math.hypot(x, z) || 1e-6, r = Math.min(rad, disc.R), over = Math.max(0, rad - disc.R);
+      const yt = disc.top(r), yb = disc.bot(r);
+      let dd;
+      if (over === 0 && y <= yt && y >= yb) { // inside the saucer
+        const up = yt - y, dn = y - yb, side = disc.R - rad;
+        dd = -Math.min(up, dn, side);
+        if (side < up && side < dn) tHB.set(x / rad, 0, z / rad); else tHB.set(0, up < dn ? 1 : -1, 0);
+      } else {
+        const vy = y > yt ? y - yt : y < yb ? y - yb : 0;
+        dd = Math.hypot(over, vy);
+        tHB.set((x / rad) * over, vy, (z / rad) * over);
+        if (tHB.lengthSq() < 1e-9) tHB.set(0, 1, 0);
+      }
+      if (dd < d) { d = dd; tHN.copy(tHB).normalize(); }
+    }
+    for (const a of def.arcs || []) {
+      // bounding-sphere reject, then the point in the arc's own (unscaled torus) frame
+      const ox = L.x - a.cx, oy = L.y - a.cy, oz = L.z - a.cz;
+      if (ox * ox + oy * oy + oz * oz > (a.bound + Math.max(d, 0) + 2) ** 2) continue;
+      tHA.copy(L).applyMatrix4(a.inv);
+      let ang = Math.atan2(tHA.y, tHA.x); if (ang < 0) ang += Math.PI * 2;
+      if (ang > a.arc) ang = ang - a.arc < Math.PI * 2 - ang ? a.arc : 0;
+      // offset from the centre line in the arc frame: in-plane (radial) and out-of-plane parts, scaled to the ship frame
+      const cxl = a.R * Math.cos(ang), cyl = a.R * Math.sin(ang);
+      const uw = Math.hypot(tHA.x - cxl, tHA.y - cyl) * a.sxy, zw = tHA.z * a.sz, dw = Math.hypot(uw, zw);
+      // tube surface is an ellipse (flattened blades): its radius along this direction
+      const rdir = dw > 1e-6 ? dw / Math.hypot(uw / a.tA, zw / a.tB) : Math.min(a.tA, a.tB);
+      const dd = dw - rdir;
+      if (dd < d) {
+        d = dd;
+        tHC.set(cxl, cyl, 0).applyMatrix4(a.mat); // nearest point on the centre line, ship frame
+        tHN.copy(L).sub(tHC); if (tHN.lengthSq() < 1e-9) tHN.set(0, 1, 0); tHN.normalize();
+      }
+    }
+    const tor = def.torus;
+    if (tor) {
+      const radial = Math.hypot(L.x, L.y) || 1e-6, qx = radial - tor[0];
+      const dt = Math.hypot(qx, L.z) - tor[1];
+      if (dt < d) { d = dt; tHN.set((L.x / radial) * qx, (L.y / radial) * qx, L.z); if (tHN.lengthSq() < 1e-9) tHN.set(0, 0, 1); tHN.normalize(); }
+    }
+    out.copy(tHN).applyQuaternion(c.quat);
+    return d;
   }
 
-  /** Distance from point to a capital ship's oriented box; out = world-space push direction. */
-  boxDist(c, p, out, e = null) {
-    const b = e ? [e[3], e[4], e[5]] : c.def.box;
-    t4.copy(p).sub(c.pos).applyQuaternion(q2.copy(c.quat).invert());
-    if (e) t4.x -= e[0], t4.y -= e[1], t4.z -= e[2];
-    const cx = THREE.MathUtils.clamp(t4.x, -b[0], b[0]), cy = THREE.MathUtils.clamp(t4.y, -b[1], b[1]), cz = THREE.MathUtils.clamp(t4.z, -b[2], b[2]);
-    out.set(t4.x - cx, t4.y - cy, t4.z - cz);
-    const d = out.length();
+  /** box with half extents b[0..2] (or e[3..5]) centred at (ox, oy, oz) in the ship frame; n = local push direction */
+  boxLocal(b, L, ox, oy, oz, n, packed = false) {
+    const bx = packed ? b[3] : b[0], by = packed ? b[4] : b[1], bz = packed ? b[5] : b[2];
+    const x = L.x - ox, y = L.y - oy, z = L.z - oz;
+    const cx = THREE.MathUtils.clamp(x, -bx, bx), cy = THREE.MathUtils.clamp(y, -by, by), cz = THREE.MathUtils.clamp(z, -bz, bz);
+    n.set(x - cx, y - cy, z - cz);
+    const d = n.length();
     if (d < 0.001) {
-      const dx = b[0] - Math.abs(t4.x), dy = b[1] - Math.abs(t4.y), dz = b[2] - Math.abs(t4.z);
-      if (dx < dy && dx < dz) out.set(Math.sign(t4.x) || 1, 0, 0); else if (dy < dz) out.set(0, Math.sign(t4.y) || 1, 0); else out.set(0, 0, Math.sign(t4.z) || 1);
-      out.applyQuaternion(c.quat);
+      const dx = bx - Math.abs(x), dy = by - Math.abs(y), dz = bz - Math.abs(z);
+      if (dx < dy && dx < dz) n.set(Math.sign(x) || 1, 0, 0); else if (dy < dz) n.set(0, Math.sign(y) || 1, 0); else n.set(0, 0, Math.sign(z) || 1);
       return -Math.min(dx, dy, dz);
     }
-    out.divideScalar(d).applyQuaternion(c.quat);
+    n.divideScalar(d);
+    return d;
+  }
+
+  /** ellipsoid [cx, cy, cz, a, b, c]: first-order signed distance (k - 1) / |grad k|, clamped deep inside */
+  ellLocal(e, L, n) {
+    const qx = (L.x - e[0]) / e[3], qy = (L.y - e[1]) / e[4], qz = (L.z - e[2]) / e[5], k = Math.sqrt(qx * qx + qy * qy + qz * qz);
+    const mn = Math.min(e[3], e[4], e[5]);
+    if (k < 1e-6) { n.set(0, 1, 0); return -mn; }
+    n.set(qx / e[3] / k, qy / e[4] / k, qz / e[5] / k);
+    const g = n.length();
+    n.divideScalar(g);
+    return Math.max((k - 1) / g, -mn); // deep inside: never deeper than the smallest half-axis
+  }
+
+  /** Distance from point to a capital ship's oriented box; out = world-space push direction (kept for callers outside hullDist). */
+  boxDist(c, p, out, e = null) {
+    const L = tHL.copy(p).sub(c.pos).applyQuaternion(qHL.copy(c.quat).invert());
+    const d = e ? this.boxLocal(e, L, e[0], e[1], e[2], out, true) : this.boxLocal(c.def.box, L, 0, 0, 0, out);
+    out.applyQuaternion(c.quat);
     return d;
   }
 
@@ -1835,9 +1932,11 @@ export class Game {
           const r = Math.max(s.radius, s.def.modelR || 0) + 4;
           if (s.def.capital) {
             if (pos.distanceToSquared(s.pos) > r * r) continue;
+            // sample the bolt's path every ~3.5 m, so it can't skip through thin ribs or blades at low frame rates
             let hp = null;
-            for (const k of [0.25, 0.5, 0.75, 1]) {
-              t2.copy(b.prev).lerp(pos, k);
+            const n = Math.min(12, Math.max(2, Math.ceil(b.prev.distanceTo(pos) / 3.5)));
+            for (let j = 1; j <= n; j++) {
+              t2.copy(b.prev).lerp(pos, j / n);
               if (this.hullDist(s, t2, t1) < 2.5) { hp = t2; break; }
             }
             if (hp) { this.damage(s, b.dmg, b.owner, hp); hit = true; break; }
