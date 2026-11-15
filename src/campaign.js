@@ -198,7 +198,7 @@ export const CUTSCENES = {
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
       { id: 'z', type: 'zerstoerer', pos: A(700, 100, 1400), dir: A(-0.45, -0.05, -0.89), speed: 0, name: 'Litanei' },
-      { id: 'r', type: 'greif', pos: A(-1300, -110, -2160), dir: A(0.489, 0.0636, 0.870), speed: 345 },
+      { id: 'r', type: 'greif', pos: A(-1300, -40, -2160), dir: A(0.4897, 0.035, 0.8712), speed: 345 },
       { id: 'k', type: 'greif', pos: A(320, -60, 620), dir: A(0.2, 0, 1), speed: 40 },
       { id: 'v', type: 'archon', pos: A(0, 0, 0), hidden: true },
     ],
