@@ -4,7 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildShip, SHIPS, BAY, BAY_LIGHTS } from './ships.js';
-import { createEnvironment, createAsteroids } from './env.js';
+import { createEnvironment, createAsteroids, rockDepth, rockRay } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
@@ -165,6 +165,7 @@ export class Game {
     this.safeL = parseFloat(cs.getPropertyValue('--sal')) || 0;
     this.safeR = parseFloat(cs.getPropertyValue('--sar')) || 0;
     this.safeB = parseFloat(cs.getPropertyValue('--sab')) || 0;
+    this.env?.setPixelRatio?.(this.drawRatio());
   }
 
   setQuality(q) {
@@ -267,7 +268,7 @@ export class Game {
   // ---------- launch from and landing in the carrier's flight deck ----------
   /** is a carrier-local point inside the bay tube / its approach corridor (lined up with the opening)? */
   inBayCorridor(L, ahead = 90) {
-    return Math.abs(L.x) < BAY.hw - 1.5 && Math.abs(L.y - BAY.y) < BAY.hh - 0.5 && L.z > BAY.back + 1 && L.z < BAY.mouth + ahead;
+    return Math.abs(L.x) < BAY.hw - 1.5 && Math.abs(L.y - BAY.y) < BAY.hh - 0.5 && L.z > BAY.back - 25 && L.z < BAY.mouth + ahead; // deeper than one boosted frame's step, so the back wall can't be skipped
   }
 
   /** flying by hand inside the tube: the walls stop the ship (scraping hurts at speed), the nose eases onto the axis */
@@ -296,7 +297,8 @@ export class Game {
   captureInBay(P) {
     const s = P.ship;
     this.seq ||= { kind: 'land', t: 0, doneT: 0 };
-    s.seqHold = true; P.landStage = 1; P.landStop = this.nextBayStop(); P.boosting = false;
+    if (P.lance) { P.lance = null; s.missiles++; } // a charge cut off by the tractor beam goes back into the capacitors
+    s.seqHold = true; P.landStage = 1; P.landStop = this.nextBayStop(P); P.boosting = false;
     if (s.speed > 150) {
       this.damage(s, 18, null, s.pos.clone()); P.shake = 0.9;
       this.ui.comm('flug', 'Viel zu schnell, {cs}! Der Traktorstrahl fängt Sie gerade noch ab.');
@@ -305,7 +307,10 @@ export class Game {
   }
 
   /** parking spots are handed out by arrival: the first ship in takes the deepest, so nobody flies through a parked ship */
-  nextBayStop() { this.seq.stops = (this.seq.stops || 0) + 1; return BAY.back + 18 + (this.seq.stops - 1) * 36; }
+  nextBayStop(P) {
+    const taken = this.pilots.filter((Q) => Q !== P && Q.ship.alive && Q.ship.seqHold && Q.landStop != null).map((Q) => Q.landStop);
+    for (let k = 0; ; k++) { const z = BAY.back + 18 + k * 36; if (!taken.includes(z) || z > BAY.mouth - 40) return Math.min(z, BAY.mouth - 40); }
+  }
 
   /** carrier-local point -> world (the carrier keeps moving during both sequences) */
   bayToWorld(out, x, y, z) { return out.set(x, y, z).applyQuaternion(this.carrier.quat).add(this.carrier.pos); }
@@ -338,11 +343,11 @@ export class Game {
     const inv = qBay.copy(this.carrier.quat).invert();
     this.alivePilots().forEach((P, i) => {
       if (P.ship.seqHold) return; // already caught by the tractor beam
-      P.ship.seqHold = true; P.landStage = 0; P.landStop = this.nextBayStop(); P.boosting = false;
+      P.ship.seqHold = true; P.landStage = 0; P.landStop = null; P.boosting = false; // spot assigned on final approach
       // waypoints in carrier space: swing wide round the hull if needed, then line up ahead of the bow
       const L = t4.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
       // already lined up in front of the opening and pointing in: straight to the final approach
-      if (this.inBayCorridor(L, 250) && this.fwd(P.ship, t5).applyQuaternion(inv).z < 0) { P.landWps = []; P.landStage = 1; return; }
+      if (this.inBayCorridor(L, 250) && this.fwd(P.ship, t5).applyQuaternion(inv).z < 0) { P.landWps = []; P.landStage = 1; P.landStop = this.nextBayStop(P); return; }
       const A = new THREE.Vector3(0, BAY.y - 0.5, BAY.mouth + 480 + i * 60);
       const sx = Math.sign(L.x) || 1;
       P.landWps = L.z > BAY.mouth + 250 && Math.abs(L.x) < 400 ? [A] : [new THREE.Vector3(sx * (320 + i * 40), -90, 200), A];
@@ -417,8 +422,9 @@ export class Game {
         s.speed = Math.min(260, Math.max(90, d * 0.4));
         s.pos.addScaledVector(this.fwd(s, t1), s.speed * dt);
         // reached, or flown past (never circle a waypoint)
-        if (d < 45 || (d < 220 && this.fwd(s, t1).dot(t2) < 0)) { P.landWps.shift(); if (!P.landWps.length) P.landStage = 1; }
+        if (d < 45 || (d < 220 && this.fwd(s, t1).dot(t2) < 0)) { P.landWps.shift(); if (!P.landWps.length) { P.landStage = 1; P.landStop = this.nextBayStop(P); } }
       } else if (P.landStage === 1) {
+        if (P.landStop == null) P.landStop = this.nextBayStop(P);
         // final approach, nose first: chase a point on the bay's centre line a little ahead, slowing towards the stop mark
         const T = t5.set(0, BAY.y - 0.5, Math.max(P.landStop, L.z - 70));
         t2.copy(T).sub(L);
@@ -576,8 +582,8 @@ export class Game {
       }
     }
     for (const a of this.asteroids) {
-      const iv = sphere(a.pos, a.radius * 0.92);
-      if (iv && iv[0] < best) { best = iv[0]; hit = null; }
+      const d = rockRay(a, from, dir, best);
+      if (d >= 0 && d < best) { best = d; hit = null; }
     }
     return best < maxD ? { d: best, ship: hit } : null;
   }
@@ -589,7 +595,9 @@ export class Game {
     let dir = fwd.clone();
     if (target?.alive) {
       tL0.copy(target.pos).sub(from);
-      if (tL0.length() < LANCE.range + target.radius) dir.copy(tL0).normalize();
+      // the field emitters can only swing the beam so far: a target that slipped far off the nose gets a straight shot
+      const d = tL0.length();
+      if (d < LANCE.range + target.radius && tL0.dot(fwd) > d * 0.7) dir.copy(tL0).normalize();
     }
     const hit = this.lanceRay(from, dir, LANCE.range, s.team);
     const end = from.clone().addScaledVector(dir, hit ? hit.d : LANCE.range);
@@ -599,7 +607,7 @@ export class Game {
       const dmg = h.def.capital ? LANCE.capDmg : LANCE.dmg;
       this.damage(h, s.isPlayer || s.team !== 0 ? dmg : dmg * 0.35, s, end);
     }
-    if (s.isPlayer) this.stats.shots += 2;
+    if (s.isPlayer) this.stats.shots += 1;
     this.addBeam(from, fwd, end, !!hit);
     if (this.ear(from) < 1500) this.audio.lance(Math.max(0.3, 1 - this.ear(from) / 1500));
     return hit?.ship || null;
@@ -683,7 +691,7 @@ export class Game {
     if (L.t > 0) return;
     P.lance = null;
     const hit = this.fireLance(p, L.target?.alive ? L.target : null);
-    P.cockpit?.log(`NEUTRON ${p.def.missiles - p.missiles} → ${hit ? hit.name : L.target ? 'VERFEHLT' : 'UNGELENKT'}`, hit ? '#7fd8ff' : '#ffc857');
+    P.cockpit?.log(`NEUTRON · NOCH ${p.missiles} → ${hit ? hit.name : L.target ? 'VERFEHLT' : 'UNGELENKT'}`, hit ? '#7fd8ff' : '#ffc857');
     P.shake = Math.max(P.shake, 0.25);
   }
 
@@ -789,7 +797,7 @@ export class Game {
     const mate = this.alivePilots()[0];
     const s = P.ship;
     P.lance = null; P.mslLock = 0; P.mslTgt = null; // a charge from the previous life must not fire now
-    s.seqHold = false; P.landStage = undefined; P.landWps = null; P.inBay = false; // no leftover landing state
+    s.seqHold = false; P.landStage = undefined; P.landWps = null; P.inBay = false; P.inTube = false; // no leftover landing state
     if (mate && mate.ship.seqHold && this.carrier?.alive) {
       // the mate is parked or landing: come back in front of the bay, facing the carrier's course
       this.bayToWorld(s.pos, 0, BAY.y, BAY.mouth + 700); s.quat.copy(this.carrier.quat);
@@ -1087,16 +1095,17 @@ export class Game {
     }
 
     for (const a of this.asteroids) {
-      t2.copy(p.pos).sub(a.pos);
-      const d = t2.length();
-      if (d < a.radius + 5) this.bump(P, t2.divideScalar(d), a.radius + 5 - d);
+      const depth = rockDepth(a, p.pos, 5, t2); // the rock's real (ellipsoid) shape, not its bounding sphere
+      if (depth > 0) this.bump(P, t2, depth);
     }
     for (const cap of this.ships) {
       if (!cap.def.capital || !cap.alive || cap.def.ghost) continue;
-      if (p.pos.distanceToSquared(cap.pos) > (cap.radius + 40) ** 2) continue;
+      if (p.pos.distanceToSquared(cap.pos) > (cap.radius + 40) ** 2) { if (cap === this.carrier) P.inTube = false; continue; }
       if (cap === this.carrier && this.useBay) {
         const L = tLoc.copy(p.pos).sub(cap.pos).applyQuaternion(q3.copy(cap.quat).invert());
-        if (this.inBayCorridor(L)) { this.bayConstrain(P, dt); continue; }
+        // in the tube only if the ship came in through the mouth (not when it touches the back wall from outside)
+        if (this.inBayCorridor(L) && (P.inTube || L.z > BAY.back + 6)) { P.inTube = true; this.bayConstrain(P, dt); continue; }
+        P.inTube = false;
       }
       const d = this.hullDist(cap, p.pos, t2);
       if (d < 6) this.bump(P, t2, 6 - d);
@@ -1121,6 +1130,7 @@ export class Game {
 
   playerMissile(P) {
     const p = P.ship;
+    if (this.frozen || p.seqHold) return; // autopilot jump or landing in progress
     if (p.missiles <= 0 || !p.alive || P.lance) { if (!P.lance) this.audio.beep(220); return; }
     p.missiles--;
     // only a locked seeker steers the beam; without lock it fires straight along the nose
@@ -1398,7 +1408,7 @@ export class Game {
         for (const P of alive) {
           if (P.ship.seqHold) continue;
           const L = tLoc.copy(P.ship.pos).sub(this.carrier.pos).applyQuaternion(inv);
-          if (this.inBayCorridor(L, 0) && L.z < BAY.mouth - 8 && L.z > BAY.back + 10) this.captureInBay(P);
+          if (this.inBayCorridor(L, 0) && L.z < BAY.mouth - 8 && L.z > BAY.back + 5) this.captureInBay(P); // incl. a ship resting on the back wall
         }
       }
       return;
@@ -1424,7 +1434,7 @@ export class Game {
         if (nav.type === 'survive') m.surv = nav.survive;
         if (nav.type === 'pickup') this.spawnPickups(nav);
         if (nav.type === 'convoy') {
-          const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 320));
+          const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 450));
           m.convoyFollow = nav.convoy.to ? null : to; // docking point moves with the carrier
           m.convoy = nav.convoy.types.map((type, i) => {
             const c = this.spawn(type, nav._pos.clone().add(new THREE.Vector3(i * 90 - 45, i * 20, i * 60)), to.clone().sub(nav._pos).normalize());
@@ -1490,7 +1500,7 @@ export class Game {
         if (!alive.length) return this.fail(nav.failText || 'Der Konvoi wurde vernichtet.');
         if (alive.length < (m.convoyAlive ?? m.convoy.length)) { this.setBanner('KONVOISCHIFF VERLOREN'); this.audio.warn(); }
         m.convoyAlive = alive.length;
-        if (m.convoyFollow && this.carrier?.alive) m.convoyFollow.copy(this.carrier.pos).add(tLoc.set(0, -40, 320));
+        if (m.convoyFollow && this.carrier?.alive) m.convoyFollow.copy(this.carrier.pos).add(tLoc.set(0, -40, 450));
         done = alive.every((c) => c.pos.distanceTo(c.dest) < 300);
         break;
       }
@@ -1843,7 +1853,7 @@ export class Game {
       }
       if (!hit) {
         for (const a of this.asteroids) {
-          if (pos.distanceToSquared(a.pos) < a.radius * a.radius) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
+          if (rockDepth(a, pos) > 0) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
         }
       }
       if (!hit && b.team === 0) {
@@ -1900,7 +1910,7 @@ export class Game {
           }
         }
       }
-      if (!boom) for (const a of this.asteroids) if (m.pos.distanceToSquared(a.pos) < a.radius * a.radius) { boom = true; break; }
+      if (!boom) for (const a of this.asteroids) if (rockDepth(a, m.pos) > 0) { boom = true; break; }
       if (boom) {
         // plasma burst: a white-hot flash, an expanding shock ring and a spray of charged sparks
         // (smaller when it bursts right at a player's ship, so the camera isn't blinded)

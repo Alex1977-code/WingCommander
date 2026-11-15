@@ -105,10 +105,27 @@ export function startPadPage(code, existingTransport) {
     e.preventDefault(); tr?.send({ t: 'm', e: b.dataset.m }); buzz(8);
     b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120);
   }));
-  document.querySelectorAll('[data-e]').forEach((b) => b.addEventListener('pointerdown', (e) => {
-    e.preventDefault(); tr?.send({ t: 'e', e: b.dataset.e }); buzz(10);
-    b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120);
-  }));
+  document.querySelectorAll('[data-e]').forEach((b) => {
+    // the neutron cannon fires on a deliberate tap (finger lifted on the button within 0.8 s), like the
+    // on-screen button in the game: a thumb brushing it on the way to FEUER fires nothing
+    if (b.dataset.e === 'missile') {
+      let id = null, t0 = 0, last = 0;
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); id = e.pointerId; t0 = performance.now(); b.setPointerCapture(id); b.classList.add('down'); buzz(6); });
+      const up = (e, ok) => {
+        if (e.pointerId !== id) return;
+        id = null; b.classList.remove('down');
+        const r = b.getBoundingClientRect(), now = performance.now();
+        const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+        if (ok && inside && now - t0 < 800 && now - last > 500) { last = now; tr?.send({ t: 'e', e: 'missile' }); buzz(12); }
+      };
+      b.addEventListener('pointerup', (e) => up(e, true)); b.addEventListener('pointercancel', (e) => up(e, false));
+      return;
+    }
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); tr?.send({ t: 'e', e: b.dataset.e }); buzz(10);
+      b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120);
+    });
+  });
   const holds = [];
   document.querySelectorAll('[data-h]').forEach((b) => {
     const k = b.dataset.h;
