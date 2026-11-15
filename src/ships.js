@@ -19,11 +19,11 @@ export const SHIPS = {
   gate: { name: 'Sprungtor', team: 3, capital: true, ghost: true, invulnerable: true, hp: 1e9, speed: 0, radius: 340, box: [1, 1, 1], turrets: [] },
   prison: { name: 'Ketten', team: 3, capital: true, invulnerable: true, hp: 1e9, speed: 22, radius: 55, box: [15, 13, 48], turrets: [] },
   valkyrie: { name: 'TUS Valkyrie', team: 3, capital: true, invulnerable: true, wreck: true, hp: 1e9, speed: 0, radius: 240, box: [6, 4, 30], turrets: [] },
-  tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [15, 13, 48], dmg: 5, turrets: [[0, 14, 0]] },
+  tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [19, 9.5, 48], dmg: 5, turrets: [[0, 13.7, 0]] },
   habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
   relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
   aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 240, box: [6, 4, 30], dmg: 7, turrets: [[18, 21.5, 132], [-18, 21.5, 132], [18, 21.5, 70], [-18, 21.5, 70], [0, 20.8, 150], [0, -42.6, -40], [24.4, -22, -90], [-24.4, -22, -90]] },
-  transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [15, 13, 48], dmg: 6, turrets: [[0, 14, 0]] },
+  transport: { name: 'Samariter', team: 0, capital: true, hp: 1000, speed: 38, radius: 55, box: [17, 7.5, 50], dmg: 6, turrets: [[0, 13.3, 0]] },
   zerstoerer: { name: 'Zerstörer', team: 1, capital: true, hp: 2100, speed: 18, radius: 135, box: [24, 20, 125], dmg: 8, score: 2000, turrets: [[20, 14, 70], [-20, 14, 70], [0, 22, -20], [0, -18, 20], [0, 18, -90]] },
   dreadnought: { name: 'Apotheose', team: 1, capital: true, hp: 5200, speed: 9, radius: 260, box: [50, 40, 245], dmg: 9, score: 5000, turrets: [[44, 20, 150], [-44, 20, 150], [44, 20, 0], [-44, 20, 0], [0, 44, 60], [0, -40, 60], [0, 44, -120], [0, -40, -120]] },
 };
@@ -178,9 +178,11 @@ function textures() {
   if (TEX) return TEX;
   // capital-ship hull: coated metal plates at a larger scale, with wear
   const PAN = 1024;
-  const panelRough = document.createElement('canvas'); panelRough.width = panelRough.height = PAN;
-  metalHull(panelRough.getContext('2d'), PAN, 'rough', { seed: 11, min: 44 });
-  const panel = canvasTex(PAN, (g, s) => { metalHull(g, s, 'color', { seed: 11, min: 44, accent: 'rgba(214,96,30,.8)' }); weather(g, s, panelRough.getContext('2d'), 1.4); });
+  // roughness maps at half resolution (drawn scaled from the same layout)
+  const panelRough = document.createElement('canvas'); panelRough.width = panelRough.height = PAN / 2;
+  const prc = panelRough.getContext('2d'); prc.scale(0.5, 0.5);
+  metalHull(prc, PAN, 'rough', { seed: 11, min: 44 });
+  const panel = canvasTex(PAN, (g, s) => { metalHull(g, s, 'color', { seed: 11, min: 44, accent: 'rgba(214,96,30,.8)' }); weather(g, s, prc, 1.4); });
   const windows = canvasTex(512, (g, s) => {
     g.fillStyle = '#000'; g.fillRect(0, 0, s, s);
     for (let row = 0; row < 12; row++) {
@@ -193,9 +195,10 @@ function textures() {
   });
   // fighter hull: the same coated metal at fighter scale (larger plates per tile), bump + roughness maps
   const PLATE = 1024;
-  const plateRoughC = document.createElement('canvas'); plateRoughC.width = plateRoughC.height = PLATE;
-  metalHull(plateRoughC.getContext('2d'), PLATE, 'rough', { seed: 5, min: 70 });
-  const plate = canvasTex(PLATE, (g, s) => { metalHull(g, s, 'color', { seed: 5, min: 70, accent: 'rgba(214,96,30,.85)' }); weather(g, s, plateRoughC.getContext('2d'), 1.3); });
+  const plateRoughC = document.createElement('canvas'); plateRoughC.width = plateRoughC.height = PLATE / 2;
+  const plc = plateRoughC.getContext('2d'); plc.scale(0.5, 0.5);
+  metalHull(plc, PLATE, 'rough', { seed: 5, min: 70 });
+  const plate = canvasTex(PLATE, (g, s) => { metalHull(g, s, 'color', { seed: 5, min: 70, accent: 'rgba(214,96,30,.85)' }); weather(g, s, plc, 1.3); });
   const plateRough = new THREE.CanvasTexture(plateRoughC); plateRough.wrapS = plateRough.wrapT = THREE.RepeatWrapping;
   const panelRoughT = new THREE.CanvasTexture(panelRough); panelRoughT.wrapS = panelRoughT.wrapT = THREE.RepeatWrapping;
   const plateBump = canvasTex(512, (g, s) => { g.scale(0.5, 0.5); metalHull(g, PLATE, 'bump', { seed: 5, min: 70 }); }, false);
@@ -266,6 +269,17 @@ function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   engines.push(s);
 }
 
+// hull materials with clearcoat / iridescence: switched off on the 'low' quality setting (phones)
+const PHYS = [];
+let shipDetail = 'high';
+function phys(m) { m.userData.cc = m.clearcoat; m.userData.ir = m.iridescence; PHYS.push(m); applyDetail(m); return m; }
+function applyDetail(m) {
+  const lo = shipDetail !== 'high';
+  const cc = lo ? 0 : m.userData.cc, ir = lo ? 0 : m.userData.ir;
+  if (m.clearcoat !== cc || m.iridescence !== ir) { m.clearcoat = cc; m.iridescence = ir; m.needsUpdate = true; }
+}
+export function setShipDetail(q) { shipDetail = q; PHYS.forEach(applyDetail); }
+
 const PAL = {
   union: { hull: 0x98a2ae, dark: 0x2c333d, accent: 0xff6a12, glow: new THREE.Color(0.5, 1.6, 4), canopy: 0x0a1626 },
   asz: { hull: 0x2d2438, dark: 0x120f18, accent: 0x6a1038, glow: new THREE.Color(4, 0.35, 1.3), canopy: 0x30040f },
@@ -275,9 +289,9 @@ function mats(p) {
   const t = textures();
   return {
     // Union: painted, clear-coated metal; Aszendenz: dark chitin with an oily, iridescent sheen
-    hull: p === PAL.union
+    hull: phys(p === PAL.union
       ? new THREE.MeshPhysicalMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 0.9, roughnessMap: t.plateRough, metalness: 0.62, roughness: 0.5, clearcoat: 0.55, clearcoatRoughness: 0.3 })
-      : new THREE.MeshPhysicalMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 0.6, roughnessMap: t.plateRough, metalness: 0.7, roughness: 0.38, iridescence: 0.75, iridescenceIOR: 1.35, iridescenceThicknessRange: [180, 520], clearcoat: 0.4, clearcoatRoughness: 0.2 }),
+      : new THREE.MeshPhysicalMaterial({ color: p.hull, map: t.plate, bumpMap: t.plateBump, bumpScale: 0.6, roughnessMap: t.plateRough, metalness: 0.7, roughness: 0.38, iridescence: 0.75, iridescenceIOR: 1.35, iridescenceThicknessRange: [180, 520], clearcoat: 0.4, clearcoatRoughness: 0.2 })),
     decal: new THREE.MeshStandardMaterial({ map: p === PAL.union ? t.codeUnion : t.glyphAsz, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, roughness: 0.6, metalness: 0.2, emissive: p === PAL.union ? 0x000000 : 0xffffff, emissiveMap: p === PAL.union ? null : t.glyphAsz, emissiveIntensity: 0.8 }),
     dark: new THREE.MeshStandardMaterial({ color: p.dark, map: t.plate, roughnessMap: t.plateRough, metalness: 0.75, roughness: 0.68 }),
     accent: new THREE.MeshStandardMaterial({ color: p.accent, metalness: 0.5, roughness: 0.4 }),
@@ -535,13 +549,14 @@ function schwinge() {
     sail.moveTo(0, -3.5); sail.quadraticCurveTo(3.5, -1.5, 8.4, 4.8); sail.lineTo(8.9, 6.6); sail.quadraticCurveTo(4.2, 2.6, 0.2, 2.8); sail.closePath();
     const sg = new THREE.ExtrudeGeometry(sail, { depth: 0.45, bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.2, bevelSegments: 2, curveSegments: 10 });
     sg.rotateX(Math.PI / 2); sg.translate(0, 0.22, 0); sg.rotateZ(0.95); scaleUV(sg, 0.12);
-    mk(g, sg, m.hull, 0.8, 0.4, 0);
+    const sailMat = m.hull.clone(); sailMat.color.set(0x4a3d5c); sailMat.metalness = 0.4; phys(sailMat); // the sail catches the light
+    mk(g, sg, sailMat, 0.8, 0.4, 0);
     // glowing veins along both edges of the sail (same transform as the sail: x-z plane, tilted up by 0.95 rad)
-    const T = 0.45; // mid-thickness of the sail, so the veins show on both faces
-    const W = (x, y) => new THREE.Vector3(x * Math.cos(0.95) - T * Math.sin(0.95) + 0.8, x * Math.sin(0.95) + T * Math.cos(0.95) + 0.4, y);
-    for (const [p0, c, p1] of [[[0, -3.5], [3.5, -1.5], [8.4, 4.8]], [[0.2, 2.8], [4.2, 2.6], [8.9, 6.6]]]) {
-      const cv = new THREE.QuadraticBezierCurve3(W(...p0), W(...c), W(...p1));
-      mk(g, new THREE.TubeGeometry(cv, 16, 0.22, 6, false), m.line);
+    // one vein on each face of the sail, so the glowing edges show from above and below
+    const W = (T, x, y) => new THREE.Vector3(x * Math.cos(0.95) - T * Math.sin(0.95) + 0.8, x * Math.sin(0.95) + T * Math.cos(0.95) + 0.4, y);
+    for (const T of [0.64, -0.2]) for (const [p0, c, p1] of [[[0, -3.5], [3.5, -1.5], [8.4, 4.8]], [[0.2, 2.8], [4.2, 2.6], [8.9, 6.6]]]) {
+      const cv = new THREE.QuadraticBezierCurve3(W(T, ...p0), W(T, ...c), W(T, ...p1));
+      mk(g, new THREE.TubeGeometry(cv, 16, 0.2, 6, false), m.line);
     }
     // tip: gun housing and a spike
     gunPod(g, m, 6, 6, 4.6, 1.4);
@@ -653,7 +668,14 @@ function carrier(g, engines, M, o = {}) {
     for (let i = 1; i < P.length; i++) if (r <= P[i][0]) { const [r0, y0] = P[i - 1], [r1, y1] = P[i]; return y0 + (y1 - y0) * ((r - r0) / (r1 - r0)); }
     return P[P.length - 1][1];
   };
-  const sauc = mk(g, lathe(SAUCER, 72, 10, 3), hull, SC.x, SC.y, SC.z); sauc.scale.z = SC.k;
+  // saucer UVs: u runs round the disc, v follows ln(r) (conformal), so plates keep their shape instead of pinching at the hub
+  const sg = lathe(SAUCER, 72, 10, 3);
+  { const uv = sg.attributes.uv, pos = sg.attributes.position, k = 10 / (2 * Math.PI), rim = Math.log(110);
+    for (let i = 0; i < uv.count; i++) {
+      const r = Math.max(6, Math.hypot(pos.getX(i), pos.getZ(i))), top = pos.getY(i) > -0.4;
+      uv.setY(i, k * (top ? Math.log(r) : 2 * rim - Math.log(r)));
+    } }
+  const sauc = mk(g, sg, hull, SC.x, SC.y, SC.z); sauc.scale.z = SC.k;
   const rim = mk(g, new THREE.TorusGeometry(109, 1.1, 6, 96), dark, SC.x, SC.y - 0.4, SC.z); rim.rotation.x = Math.PI / 2; rim.scale.y = SC.k;
   const rimGlow = mk(g, new THREE.TorusGeometry(103, 0.35, 4, 96), strip, SC.x, SC.y + 2.1, SC.z); rimGlow.rotation.x = Math.PI / 2; rimGlow.scale.y = SC.k;
   // a disc's bounding box would leave solid empty corners: the saucer is hit-tested with stacked boxes instead
@@ -688,7 +710,7 @@ function carrier(g, engines, M, o = {}) {
   const DRIVE = [[0.01, -176], [9, -174], [15, -165], [20, -150], [23.5, -120], [24, -60], [24, 60], [23.4, 118], [22.2, 142]];
   const hullR = (z) => { for (let i = 1; i < DRIVE.length; i++) if (z <= DRIVE[i][1]) { const [r0, z0] = DRIVE[i - 1], [r1, z1] = DRIVE[i]; return r0 + (r1 - r0) * ((z - z0) / (z1 - z0)); } return 22.2; };
   const dg = lathe(DRIVE, 48, 4, 10); dg.rotateX(Math.PI / 2);
-  const drive = mk(g, dg, hull, 0, HY, 0); drive.scale.y = HS;
+  const drive = mk(g, dg, M.hullRot || hull, 0, HY, 0); drive.scale.y = HS;
   // bow plate round the hangar mouth
   const { y: by, back, mouth, hw, hh } = BAY, len = mouth - back, mid = (mouth + back) / 2;
   const bow = new THREE.Shape(); bow.absellipse(0, 0, 22.4, 22.4 * HS, 0, Math.PI * 2, false, 0);
@@ -732,7 +754,7 @@ function carrier(g, engines, M, o = {}) {
   for (const sx of [-1, 1]) {
     const nx = sx * 64, ny = 16, nz = -102;
     const first = g.children.length, torn = W && sx > 0;
-    mk(g, nacGeo, hull, nx, ny, nz);
+    mk(g, nacGeo, M.hullRot || hull, nx, ny, nz);
     const intake = mk(g, new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), intakeMat, nx, ny, nz + 89); intake.scale.set(7.4, 6.2, 7.4); intake.rotation.x = Math.PI / 2;
     mk(g, new THREE.TorusGeometry(8.9, 0.8, 6, 28), dark, nx, ny, nz + 88.5);
     mk(g, uvBox(1.2, 5.2, 140), coilMat, nx - sx * 9.05, ny, nz - 6);          // coil grilles facing inboard
@@ -747,7 +769,10 @@ function carrier(g, engines, M, o = {}) {
     if (torn) {
       // ripped off its pylon: drifting beside the hull, tumbled, with a scorched stump left behind
       const piv = new THREE.Vector3(nx, ny, nz), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, 0.35, 1.1)), off = new THREE.Vector3(55, -48, -40);
-      for (const c of g.children.slice(first)) { c.position.sub(piv).applyQuaternion(q).add(piv).add(off); c.quaternion.premultiply(q); }
+      for (const c of g.children.slice(first)) { c.position.sub(piv).applyQuaternion(q).add(piv).add(off); c.quaternion.premultiply(q); c.userData.noBox = true; }
+      // its axis-aligned bounding boxes would be mostly empty: a chain of small boxes along the tumbled axis instead
+      const mb = SHIPS[o.type].manualBoxes, ax = new THREE.Vector3(0, 0, 1).applyQuaternion(q), ctr = piv.clone().add(off);
+      for (let k = -92; k <= 92; k += 16) { const h = Math.abs(k) > 80 ? 7 : 11.5, c = ctr.clone().addScaledVector(ax, k); mb.push([c.x, c.y, c.z, h, h, h]); }
     }
     const pylon = mk(g, pg, hull, 0, 0, 0);
     _a.set(sx * 16, HY + 8, nz); _b.set(nx, ny, nz);
@@ -801,7 +826,8 @@ function carrier(g, engines, M, o = {}) {
   wg.setAttribute('color', new THREE.Float32BufferAttribute(winCol, 3));
   wg.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(winPos.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   wg.setAttribute('uv', new THREE.Float32BufferAttribute(new Array((winPos.length / 3) * 2).fill(0), 2));
-  mk(g, wg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), 0, 0, 0);
+  // the windows sit on surfaces other hit boxes already cover: their bounding box would be a huge phantom block
+  mk(g, wg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), 0, 0, 0).userData.noBox = true;
   if (W) wreckDamage(g, dark, SC, sy);
 }
 
@@ -812,12 +838,24 @@ function wreckDamage(g, dark, SC, sy) {
   const hole = new THREE.MeshBasicMaterial({ color: 0x050403 });
   let seed = 7; const R = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   // the breach: a blackened, glowing-edged crater through the saucer's port side
-  const a0 = 2.35, rr = 72, hx = SC.x + Math.sin(a0) * rr, hz = SC.z + Math.cos(a0) * rr * SC.k;
+  const a0 = 1.9, rr = 72, hx = SC.x + Math.sin(a0) * rr, hz = SC.z + Math.cos(a0) * rr * SC.k;
+  const first = g.children.length;
+  // jagged outline: a circle whose rim radius varies per vertex, laid onto the sloping deck
+  const jag = (rad, jit, lift, top, mat) => {
+    const c = new THREE.CircleGeometry(1, 32); const p = c.attributes.position;
+    for (let i = 1; i < p.count; i++) { const k = 1 + (R() - 0.5) * jit; p.setXY(i, p.getX(i) * k, p.getY(i) * k); }
+    c.rotateX(top ? -Math.PI / 2 : Math.PI / 2);
+    for (let i = 0; i < p.count; i++) {
+      const wx = hx + p.getX(i) * rad.x, wz = hz + p.getZ(i) * rad.z, r0 = Math.hypot(wx - SC.x, (wz - SC.z) / SC.k);
+      p.setXYZ(i, p.getX(i) * rad.x, SC.y + sy(Math.min(r0, 109), top) + (top ? lift : -lift), p.getZ(i) * rad.z);
+    }
+    c.computeVertexNormals();
+    return mk(g, c, mat, hx, 0, hz);
+  };
   for (const top of [true, false]) {
-    const y = SC.y + sy(rr, top) + (top ? 0.4 : -0.4);
-    const d = mk(g, new THREE.CircleGeometry(1, 28), hole, hx, y, hz); d.rotation.x = top ? -Math.PI / 2 : Math.PI / 2; d.scale.set(26, 18, 1);
-    const ring = mk(g, new THREE.TorusGeometry(1, 0.05, 4, 28), ember, hx, y + (top ? 0.1 : -0.1), hz); ring.rotation.x = Math.PI / 2; ring.scale.set(26.5, 18.5, 1);
-    const sc = mk(g, new THREE.CircleGeometry(1, 28), SOOT, hx, y - (top ? 0.15 : -0.15), hz); sc.rotation.x = d.rotation.x; sc.scale.set(40, 30, 1);
+    jag({ x: 40, z: 30 }, 0.5, 0.25, top, SOOT);
+    jag({ x: 28, z: 20 }, 0.6, 0.45, top, ember);
+    jag({ x: 25, z: 17 }, 0.55, 0.6, top, hole);
   }
   for (let i = 0; i < 26; i++) { // bent plates round the breach and along the hull
     const a = a0 + (R() - 0.5) * 0.7, r = rr + (R() - 0.5) * 40;
@@ -833,32 +871,42 @@ function wreckDamage(g, dark, SC, sy) {
     const d = mk(g, uvBox(2 + R() * 10, 1 + R() * 4, 3 + R() * 16), dark, (R() - 0.5) * 300, (R() - 0.5) * 120, (R() - 0.5) * 420);
     d.rotation.set(R() * 3, R() * 3, R() * 3);
   }
+  for (const c of g.children.slice(first)) c.userData.noBox = true; // damage and debris: decoration, no hit boxes
 }
 
 /** organic Aszendenz capital ship: ellipsoid hull (half-axes a, b, c), rib cage, curved blades, spines, veins */
 function asz(g, M, engines, o) {
   const { hull, dark, strip, glow, pal } = M;
   const { a, b, c } = o;
+  // ribs and blades are arcs: their bounding boxes would be mostly empty, so they get a chain of small boxes
+  const mb = (SHIPS[o.type].manualBoxes = []);
+  const arcBoxes = (mesh, R, tube, arc, n) => {
+    mesh.updateMatrix(); mesh.userData.noBox = true;
+    const h = Math.max(tube * 1.3, (R * arc / n) * 0.55), v = new THREE.Vector3();
+    for (let i = 0; i <= n; i++) { const t = (i / n) * arc; v.set(R * Math.cos(t), R * Math.sin(t), 0).applyMatrix4(mesh.matrix); mb.push([v.x, v.y, v.z, h, h, h]); }
+  };
   ell(g, hull, 0, 0, 0, a, b, c, 40);
   ell(g, dark, 0, -b * 0.35, -c * 0.05, a * 0.8, b * 0.75, c * 0.9, 28);          // darker ventral carapace
-  const prow = new THREE.ConeGeometry(a * 0.32, o.prow * 2, 12); prow.rotateX(Math.PI / 2);
-  mk(g, prow, dark, 0, 0, c * 0.86 + o.prow);
+  if (o.prow > 0) { const prow = new THREE.ConeGeometry(a * 0.32, o.prow * 2, 12); prow.rotateX(Math.PI / 2); mk(g, prow, dark, 0, 0, c * 0.86 + o.prow); }
   ell(g, glow, 0, b * 0.1, c * 0.9, a * 0.18, b * 0.16, c * 0.05, 12);              // the glowing "eye" at the bow
   // ribs: chitin arches over the back, tilted to sweep aft
   for (const z of o.ribs) {
     const k = Math.sqrt(Math.max(0.1, 1 - (z / c) ** 2));
-    const rib = mk(g, new THREE.TorusGeometry(o.ribR * k + a * 0.15, a * 0.07, 6, 28, Math.PI * 1.15), dark, 0, -b * 0.15, z);
+    const rr = o.ribR * k + a * 0.15;
+    const rib = mk(g, new THREE.TorusGeometry(rr, a * 0.07, 6, 28, Math.PI * 1.15), dark, 0, -b * 0.15, z);
     rib.rotation.set(-0.35, 0, -Math.PI * 0.075);
     rib.scale.set(1.15, 1, 1);
-    const vein = mk(g, new THREE.TorusGeometry(o.ribR * k + a * 0.15, a * 0.018, 4, 28, Math.PI * 1.15), strip, 0, -b * 0.15 + a * 0.05, z + a * 0.04);
-    vein.rotation.copy(rib.rotation); vein.scale.copy(rib.scale);
+    arcBoxes(rib, rr, a * 0.07 * 1.15, Math.PI * 1.15, 6);
+    const vein = mk(g, new THREE.TorusGeometry(rr, a * 0.018, 4, 28, Math.PI * 1.15), strip, 0, -b * 0.15 + a * 0.05, z + a * 0.04);
+    vein.rotation.copy(rib.rotation); vein.scale.copy(rib.scale); vein.userData.noBox = true;
   }
   // curved blades: crescents sweeping back from the flanks
   for (const sx of [-1, 1]) {
     const t = new THREE.TorusGeometry(o.blade, a * 0.12, 6, 32, Math.PI * 0.55);
     const bl = mk(g, t, dark, sx * a * 0.4, 0, -c * 0.1);
-    bl.rotation.set(Math.PI / 2, 0, sx > 0 ? Math.PI * 0.95 : Math.PI * 0.5);
+    bl.rotation.set(Math.PI / 2, 0, sx > 0 ? -Math.PI * 0.05 : Math.PI * 0.5); // mirrored: one sweeps to each side
     bl.scale.set(1, 1, 0.3);
+    arcBoxes(bl, o.blade, a * 0.12, Math.PI * 0.55, 8);
     mk(g, new THREE.BoxGeometry(a * 0.04, b * 0.08, c * 1.2), strip, sx * a * 0.92, b * 0.15, -c * 0.05);   // flank vein
   }
   // dorsal spines
@@ -869,7 +917,8 @@ function asz(g, M, engines, o) {
   }
   if (o.crown) for (const z of [c * 0.25, -c * 0.35]) {
     const cr = mk(g, new THREE.TorusGeometry(a * 1.9, a * 0.09, 6, 48), dark, 0, 0, z); cr.scale.set(1, 0.75, 1);
-    const cv = mk(g, new THREE.TorusGeometry(a * 1.9, a * 0.025, 4, 48), strip, 0, 0, z + a * 0.1); cv.scale.set(1, 0.75, 1);
+    arcBoxes(cr, a * 1.9, a * 0.09, Math.PI * 2, 16);
+    const cv = mk(g, new THREE.TorusGeometry(a * 1.9, a * 0.025, 4, 48), strip, 0, 0, z + a * 0.1); cv.scale.set(1, 0.75, 1); cv.userData.noBox = true;
     for (const ang of [0.6, 2.5, 3.8, 5.6]) beam(g, dark, Math.cos(ang) * a * 0.8, Math.sin(ang) * b * 0.8, z, Math.cos(ang) * a * 1.9, Math.sin(ang) * a * 1.42, z, a * 0.06, a * 0.12);
   }
   // drive cluster at the stern
@@ -879,8 +928,8 @@ function asz(g, M, engines, o) {
 
 /** small Union nacelle for freighters (no warp coils, a plain drive) */
 function freightNacelle(g, M, engines, x, y, z, r, len) {
-  const { hull, dark, glow, pal, strip } = M;
-  tube(g, hull, x, y, z, r * 0.9, r, len, 16);
+  const { dark, glow, pal, strip } = M;
+  tube(g, M.tank, x, y, z, r * 0.9, r, len, 16);
   ell(g, dark, x, y, z + len / 2, r * 0.9, r * 0.9, r * 0.7, 14);
   mk(g, new THREE.TorusGeometry(r * 0.95, r * 0.12, 6, 18), strip, x, y, z + len / 2 - r * 0.3);
   engine(g, engines, x, y, z - len / 2 - r * 0.3, r * 0.85, glow, dark, pal.glow);
@@ -889,13 +938,13 @@ function freightNacelle(g, M, engines, x, y, z, r, len) {
 function samariter(g, engines, M) {
   const { hull, dark, strip, accent } = M;
   ell(g, hull, 0, 3, 34, 13, 7.5, 17, 28);                                          // command section
-  ell(g, M.glow, 0, 5.5, 47, 5, 1.6, 2.6, 12);                                      // bridge windows
+  ell(g, M.bridge, 0, 5.4, 47.6, 4.2, 1.1, 2.2, 12);                                 // bridge windows
   tube(g, dark, 0, 0, 0, 4.5, 5, 80, 16);                                           // spine
   for (const sx of [-1, 1]) {
-    tube(g, hull, sx * 10.5, 0, -2, 6.2, 6.2, 58, 20);                             // ward modules
+    tube(g, M.hullRot, sx * 10.5, 0, -2, 6.2, 6.2, 58, 20);                        // ward modules
     ell(g, hull, sx * 10.5, 0, 27, 6.2, 6.2, 4, 18); ell(g, dark, sx * 10.5, 0, -31, 6, 6, 3, 18);
     for (const z of [-24, -6, 12]) { const rg = mk(g, new THREE.TorusGeometry(6.4, 0.45, 6, 24), dark, sx * 10.5, 0, z); rg.scale.set(1, 1, 1.5); }
-    for (const yy of [2.2, -1.2]) mk(g, uvBox(0.4, 0.7, 50), strip, sx * (10.5 + 6.05), yy, -2);   // lit ward windows
+    for (const yy of [3.6, -3.0]) mk(g, uvBox(0.4, 0.6, 50), M.ward, sx * (10.5 + 5.6), yy, -2);   // lit ward windows, clear of the name
     const band = mk(g, uvBox(0.5, 3.6, 10), accent, sx * (10.5 + 6.1), 0, 18);    // livery band
     beam(g, dark, sx * 4, 0, 12, sx * 5.5, 0, 12, 1.4, 6); beam(g, dark, sx * 4, 0, -20, sx * 5.5, 0, -20, 1.4, 6);
     freightNacelle(g, M, engines, sx * 15, 8, -42, 3.4, 26);
@@ -906,7 +955,7 @@ function samariter(g, engines, M) {
   for (const ex of [-5, 5]) engine(g, engines, ex, 0, -52, 3.4, M.glow, dark, M.pal.glow);
   // medical emblem and name on both flanks of the wards
   const reg = new THREE.MeshStandardMaterial({ map: registryTexture('SAMARITER', 'MED-04 · LAZARETTSCHIFF'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
-  for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(30, 4.7), reg, sx * (10.5 + 6.3), 0.4, -6); d.rotation.y = sx * Math.PI / 2; }
+  for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(16, 2.5), reg, sx * (10.5 + 6.3), 0.2, 3); d.rotation.y = sx * Math.PI / 2; }
   for (const sx of [-1, 1]) blinker(g, sx * 17, 0, 0, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 3);
   blinker(g, 0, 14, 4, new THREE.Color(3, 3, 3), 1.1, 0.2, 3.5);
 }
@@ -914,22 +963,22 @@ function samariter(g, engines, M) {
 function tankerShip(g, engines, M) {
   const { hull, dark, strip, accent } = M;
   ell(g, hull, 0, 3, 44, 9, 7, 10, 24);
-  ell(g, M.glow, 0, 5.5, 52.5, 4, 1.4, 1.6, 10);
+  ell(g, M.bridge, 0, 5.4, 52.6, 3.4, 1.0, 1.4, 10);
   mk(g, uvBox(5, 5, 96), dark, 0, 0, 0);                                             // truss spine
   for (let z = -40; z <= 36; z += 8) for (const sx of [-1, 1]) { const st = mk(g, uvBox(0.5, 0.5, 7), dark, sx * 2.6, 2.6 * (z % 16 ? 1 : -1), z); st.rotation.x = 0.7; }
   for (const z of [26, 4, -18]) for (const sx of [-1, 1]) {
-    ell(g, hull, sx * 9.6, 0, z, 9, 9, 9.6, 22);                                    // pressure tank
+    ell(g, M.tank, sx * 9.6, 0, z, 9, 9, 9.6, 22).rotation.y = z * 0.37 + sx;    // pressure tank (no windows; turned to break the repeat)
     const b = mk(g, new THREE.TorusGeometry(9.05, 0.4, 6, 32), dark, sx * 9.6, 0, z); b.rotation.y = Math.PI / 2;
     const h = mk(g, new THREE.TorusGeometry(9.1, 0.25, 4, 32), accent, sx * 9.6, 0, z); h.rotation.x = Math.PI / 2;  // hazard ring
     tube(g, dark, sx * 4, 6, z, 0.6, 0.6, 18, 8);                                    // fuel line
   }
   mk(g, uvBox(8, 4, 50), hull, 0, 11.6, 4);                                         // dorsal walkway (turret mount)
-  for (const sx of [-1, 1]) mk(g, uvBox(0.3, 0.4, 70), strip, sx * 18.7, 0, 4);
+  for (const sx of [-1, 1]) mk(g, uvBox(0.3, 0.4, 88), M.ward, sx * 2.55, 0, 0);  // light strip along the truss
   mk(g, uvBox(18, 14, 14), dark, 0, 0, -44);
   for (const sx of [-1, 1]) { freightNacelle(g, M, engines, sx * 14, 7, -42, 3, 22); beam(g, hull, sx * 4, 3, -42, sx * 12, 6.5, -42, 1.2, 8); }
   for (const ex of [-5, 5]) engine(g, engines, ex, 0, -52, 3.4, M.glow, dark, M.pal.glow);
   const reg = new THREE.MeshStandardMaterial({ map: registryTexture('TANKER', 'TF-11 · FLOTTENVERSORGUNG'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
-  for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(16, 2.5), reg, sx * 9.2, 3.6, 44); d.rotation.y = sx * Math.PI / 2; }
+  for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(8, 1.3), reg, sx * 8.0, 1.2, 44); d.rotation.y = sx * Math.PI / 2; }
   for (const sx of [-1, 1]) blinker(g, sx * 19, 0, 4, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 3);
   blinker(g, 0, 14.5, 4, new THREE.Color(3, 3, 3), 1.1, 0.2, 3.5);
 }
@@ -940,18 +989,19 @@ function prisonDetail(g, M) {
   for (const sx of [-1, 1]) {
     for (let i = 0; i < 7; i++) {
       const z = 30 - i * 9, k = Math.sqrt(Math.max(0.1, 1 - (z / 46) ** 2));
-      const c = ell(g, dark, sx * 13.5 * k, -2, z, 2.4, 3.2, 3.2, 12);
-      ell(g, cell, sx * (13.5 * k + 1.6), -2, z, 0.7, 2.2, 2.2, 8);                  // the lit cell window
+      ell(g, dark, sx * 13.5 * k, -2, z, 2.4, 3.2, 3.2, 12);
+      ell(g, cell, sx * (13.5 * k + 2.2), -2, z, 0.45, 2.1, 2.1, 12);                 // the lit cell window, proud of the pod
     }
-    for (let i = 0; i < 9; i++) {                                                    // chain links along the back
-      const link = mk(g, new THREE.TorusGeometry(1.4, 0.35, 6, 14), dark, sx * 6, 11.5 - Math.abs(i - 4) * 0.25, 34 - i * 8);
+    for (let i = 0; i < 7; i++) {                                                    // chain links along the back, on the hull
+      const z = 26 - i * 8, hs = 12 * Math.sqrt(Math.max(0, 1 - (6 / 14) ** 2 - (z / 46) ** 2));
+      const link = mk(g, new THREE.TorusGeometry(1.4, 0.35, 6, 14), dark, sx * 6, hs + (i % 2 ? 0.8 : 0.3), z);
       link.rotation.set(Math.PI / 2, i % 2 ? Math.PI / 2 : 0, 0); link.scale.set(1, 1.6, 1);
     }
   }
   // docking maw: a dark opening ringed by veins (a fighter launches from here in the rescue scene)
-  const maw = mk(g, new THREE.CircleGeometry(4.8, 20), new THREE.MeshBasicMaterial({ color: 0x030204 }), 0, -4, 44.6);
-  maw.scale.set(1.3, 0.85, 1);
-  const lip = mk(g, new THREE.TorusGeometry(5.1, 0.5, 6, 24), strip, 0, -4, 44.5); lip.scale.set(1.3, 0.85, 1);
+  const maw = mk(g, new THREE.CircleGeometry(2.6, 20), new THREE.MeshBasicMaterial({ color: 0x030204 }), 0, -1.2, 43.6);
+  maw.scale.set(1.2, 0.9, 1);
+  const lip = mk(g, new THREE.TorusGeometry(2.8, 0.35, 6, 24), strip, 0, -1.2, 43.5); lip.scale.set(1.2, 0.9, 1);
 }
 
 function capital(type) {
@@ -969,7 +1019,15 @@ function capital(type) {
     iridescence: union ? 0 : 0.7, iridescenceIOR: 1.35, iridescenceThicknessRange: [180, 520],
     emissiveMap: t.windows, emissive: wreck ? new THREE.Color(0.35, 0.18, 0.08) : union ? new THREE.Color(1.8, 1.5, 0.9) : new THREE.Color(2.4, 0.3, 0.8),
   });
-  if (wreck) { hull.color.set(0x4a4f57); hull.roughness = 0.85; hull.clearcoat = 0; }
+  if (wreck) { hull.color.set(0x6a6e74); hull.metalness = 0.35; hull.roughness = 0.85; hull.clearcoat = 0; }
+  phys(hull);
+  // tubes and lathes run their u round the circumference: the window map rotated so rows run along the hull
+  const winRot = t.windows.clone(); winRot.center.set(0.5, 0.5); winRot.rotation = Math.PI / 2; winRot.repeat.set(1, 3);
+  const hullRot = phys(hull.clone()); hullRot.emissiveMap = winRot;
+  // pressure tanks and nacelles: hull metal without cabin windows
+  const tank = phys(hull.clone()); tank.emissiveMap = null; tank.emissive.set(0);
+  const bridge = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.2, 1.0, 0.6) });
+  const ward = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 0.8, 1.3) });
   const dark = new THREE.MeshStandardMaterial({ color: union ? 0x30363f : 0x15111c, map: t.panel, roughnessMap: t.panelRough, metalness: 0.75, roughness: 0.7 });
   const glow = new THREE.MeshBasicMaterial({ color: pal.glow });
   const accent = new THREE.MeshStandardMaterial({ color: pal.accent, metalness: 0.4, roughness: 0.5 });
@@ -979,21 +1037,21 @@ function capital(type) {
   const turretGeo = new THREE.SphereGeometry(3.2, 10, 6, 0, 6.3, 0, 1.6);
 
   if (type === 'aurora') {
-    carrier(g, engines, { hull, dark, glow, strip, accent, pal });
+    carrier(g, engines, { hull, hullRot, dark, glow, strip, accent, pal });
   } else if (type === 'valkyrie') {
     // the TUS Valkyrie: a sister ship of the Aurora, gutted in the war
-    carrier(g, engines, { hull, dark, glow, strip, accent, pal }, { wreck: true, type });
+    carrier(g, engines, { hull, hullRot, dark, glow, strip, accent, pal }, { wreck: true, type });
   } else if (type === 'transport') {
-    samariter(g, engines, { hull, dark, glow, strip, accent, pal });
+    samariter(g, engines, { hull, hullRot, tank, bridge, ward, dark, glow, strip, accent, pal });
   } else if (type === 'tanker') {
-    tankerShip(g, engines, { hull, dark, glow, strip, accent, pal });
+    tankerShip(g, engines, { hull, hullRot, tank, bridge, ward, dark, glow, strip, accent, pal });
   } else if (type === 'prison') {
     // Aszendenz prison transport: an organic hull, glowing cell pods, chain-link ribs, a docking maw in the bow
-    asz(g, { hull, dark, strip, glow, pal }, engines, { a: 14, b: 12, c: 46, prow: 5, ribs: [26, 8, -10, -28], ribR: 16, blade: 32, spines: 5, eng: [[-5, 0], [5, 0]], engR: 3.6 });
+    asz(g, { hull, dark, strip, glow, pal }, engines, { type, a: 14, b: 12, c: 46, prow: 0, ribs: [26, 8, -10, -28], ribR: 16, blade: 32, spines: 5, eng: [[-5, 0], [5, 0]], engR: 3.6 });
     prisonDetail(g, { hull, dark, strip, glow });
   } else if (type === 'zerstoerer') {
     // Aszendenz destroyer: an organic hull in a cage of chitin ribs, a lance-like prow, glowing veins
-    asz(g, { hull, dark, strip, glow, pal }, engines, { a: 22, b: 18, c: 120, prow: 46, ribs: [70, 25, -20, -65], ribR: 27, blade: 62, spines: 6, eng: [[-9, 0], [9, 0], [0, 8]], engR: 7 });
+    asz(g, { hull, dark, strip, glow, pal }, engines, { type, a: 22, b: 18, c: 120, prow: 46, ribs: [70, 25, -20, -65], ribR: 27, blade: 62, spines: 6, eng: [[-9, 0], [9, 0], [0, 8]], engR: 7 });
   } else if (type === 'relay') {
     B(22, 104, 22, hull, 0, 0, 0);
     B(30, 8, 30, dark, 0, -50, 0);
@@ -1037,7 +1095,7 @@ function capital(type) {
     }
   } else {
     // Apotheose: the command ship - a vast organic spire, crowned by arcs, ribbed and veined
-    asz(g, { hull, dark, strip, glow, pal }, engines, { a: 48, b: 38, c: 240, prow: 110, ribs: [150, 80, 10, -60, -130], ribR: 56, blade: 130, spines: 9, crown: true, eng: [[-22, 12], [22, 12], [-22, -12], [22, -12], [0, 0]], engR: 11 });
+    asz(g, { hull, dark, strip, glow, pal }, engines, { type, a: 48, b: 38, c: 240, prow: 110, ribs: [150, 80, 10, -60, -130], ribR: 56, blade: 130, spines: 9, crown: true, eng: [[-22, 12], [22, 12], [-22, -12], [22, -12], [0, 0]], engR: 11 });
   }
   // surface detail on the warships and freighters: equipment blocks, vents, sensor domes, antennas, window strips
   const det = {

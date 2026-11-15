@@ -198,14 +198,14 @@ export const CUTSCENES = {
     cast: [
       { id: 'aurora', type: 'aurora', pos: A(0, 0, 0), speed: 0 },
       { id: 'z', type: 'zerstoerer', pos: A(700, 100, 1400), dir: A(-0.45, -0.05, -0.89), speed: 0, name: 'Litanei' },
-      { id: 'r', type: 'greif', pos: A(-1300, -160, -2160), dir: A(0.489, 0.0636, 0.870), speed: 345 },
+      { id: 'r', type: 'greif', pos: A(-1300, -110, -2160), dir: A(0.489, 0.0636, 0.870), speed: 345 },
       { id: 'k', type: 'greif', pos: A(320, -60, 620), dir: A(0.2, 0, 1), speed: 40 },
       { id: 'v', type: 'archon', pos: A(0, 0, 0), hidden: true },
     ],
     shots: [
       { dur: 4, cam: { rel: 'aurora', from: A(-160, 70, 260), look: 'z' },
         ev: [{ t: 0.1, a: 'fire', id: 'z', at: 'aurora', dur: 8 }, { t: 0.3, sub: 'brandt', text: 'Die Litanei lädt ihr Hauptgeschütz! Wenn sie feuert, verlieren wir den Sprungantrieb!' }] },
-      { dur: 4, cam: { rel: 'r', from: A(-10, 4, -30), look: 'r', lookOff: A(0, 0, 60) },
+      { dur: 4, cam: { rel: 'r', from: A(-16, 8, -40), look: 'r', lookOff: A(0, 0, 60) },
         ev: [{ t: 0.2, sub: 'rook', text: 'Kolibri, {cs}: Ihr bringt die Aurora nach Hause. Verstanden?' }, { t: 2.3, sub: 'kolibri', text: 'Rook? Rook, dreh ab! Das ist ein Befehl von—' }] },
       { dur: 3.5, cam: { rel: 'r', from: A(12, 3, 22), look: 'r', lookOff: A(0, 1, 0) },
         ev: [{ t: 0.2, sub: 'rook', text: 'Aric… Ich lasse dich nicht noch einmal zurück.' }] },
@@ -224,7 +224,7 @@ export const CUTSCENES = {
     sky: SKY.mahlstrom,
     cast: [
       { id: 'pr', type: 'prison', pos: A(0, 0, 0), speed: 22 },
-      { id: 'k', type: 'falke', pos: A(0, -4, 40), speed: 22, hidden: true },
+      { id: 'k', type: 'falke', pos: A(0, -1, 24), speed: 22, hidden: true },
       { id: 'p', type: 'falke', pos: A(46, 12, 30), speed: 22 },
     ],
     shots: [

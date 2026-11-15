@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { buildShip, SHIPS, BAY, BAY_LIGHTS } from './ships.js';
+import { buildShip, SHIPS, BAY, BAY_LIGHTS, setShipDetail } from './ships.js';
 import { createEnvironment, createAsteroids, rockDepth, rockRay } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
@@ -168,8 +168,32 @@ export class Game {
     this.env?.setPixelRatio?.(this.drawRatio());
   }
 
+  /**
+   * Compile the shaders of every ship type the mission will spawn now, during the start fade,
+   * instead of stalling the first frame an Aszendenz wave (or the prison ship, the wreck) appears.
+   */
+  prewarm(def) {
+    const types = new Set(['klinge']);
+    const add = (list) => { for (const e of list || []) if (Array.isArray(e) && typeof e[0] === 'string' && SHIPS[e[0]]) types.add(e[0]); };
+    for (const n of def.navs || []) {
+      for (const w of n.waves || []) add(w);
+      add(n.chasers); add(n.dockWave);
+      if (n.type === 'dock') types.add('prison');
+      if (n.wreck) types.add('valkyrie');
+      if (n.type === 'intercept') types.add('kurier');
+      if (n.convoy) for (const t of n.convoy.types || []) types.add(t);
+    }
+    const tmp = new THREE.Group();
+    for (const t of types) { try { tmp.add(buildShip(t)); } catch { /* unknown type: skip */ } }
+    tmp.position.copy(this.pilots[0]?.camera.position || ZERO);
+    this.scene.add(tmp);
+    try { this.renderer.compile(this.scene, this.pilots[0]?.camera || this.camera); } catch { /* compile is only an optimisation */ }
+    this.scene.remove(tmp);
+  }
+
   setQuality(q) {
     this.quality = q;
+    setShipDetail(q); // clearcoat / iridescence only on 'high'
     for (const P of this.pilots) {
       if (q === 'high' && !P.composer) P.composer = this.makeComposer(P.camera);
       if (q !== 'high' && P.composer) { disposeComposer(P.composer); P.composer = null; }
@@ -256,6 +280,7 @@ export class Game {
     this.banner = null; this.bannerT = 0; this.objT = performance.now(); this.lastObj = '';
     this.resize();
     this.activateNav(0);
+    this.prewarm(def);
     this.audio.startEngine();
     this.seq = null;
     // bay lamps are shared materials: never carry a launch/landing state into the next mission

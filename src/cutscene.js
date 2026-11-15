@@ -7,6 +7,7 @@
  */
 import * as THREE from 'three';
 import { createAsteroids } from './env.js';
+import { SHIPS } from './ships.js';
 
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3(), v4 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, 1), ZERO = new THREE.Vector3();
@@ -29,10 +30,11 @@ export function installCutscenes(Game) {
       this.mission = null;
       if (def.rocks) {
         // keep rocks away from the cast and from fixed camera positions
-        const keep = def.cast.map((c) => new THREE.Vector3(...c.pos));
-        for (const sh of def.shots) if (!sh.cam.rel) { keep.push(new THREE.Vector3(...sh.cam.from)); if (sh.cam.to) keep.push(new THREE.Vector3(...sh.cam.to)); }
+        // (big cast ships keep rocks clear of their whole hull, not just their centre)
+        const keep = def.cast.map((c) => ({ p: new THREE.Vector3(...c.pos), r: Math.max(160, (SHIPS[c.type]?.radius || 0) + 60) }));
+        for (const sh of def.shots) if (!sh.cam.rel) { keep.push({ p: new THREE.Vector3(...sh.cam.from), r: 160 }); if (sh.cam.to) keep.push({ p: new THREE.Vector3(...sh.cam.to), r: 160 }); }
         for (const a of createAsteroids(this.scene, new THREE.Vector3(...def.rocks.at), def.rocks.n, def.rocks.spread)) {
-          if (keep.some((k) => k.distanceTo(a.pos) < a.radius + 160)) this.scene.remove(a.mesh);
+          if (keep.some((k) => k.p.distanceTo(a.pos) < a.radius + k.r)) this.scene.remove(a.mesh);
           else this.asteroids.push(a);
         }
       }
