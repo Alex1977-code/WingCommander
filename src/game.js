@@ -1132,7 +1132,7 @@ export class Game {
     c.update?.(dt);
     if (p.seqHold) {
       // launch / landing on rails: only pause and view change are accepted
-      c.throttleSet = null; P.impulse = false; P.impT = 0;
+      c.throttleSet = null; P.impulse = false; P.impT = 0; P.wantSpeed = null;
       for (const e of c.take()) { if (e === 'pause') this.ui.pause(); else if (e === 'view' && this.seq?.kind !== 'launch') { P.view = P.view === 'cockpit' ? 'chase' : 'cockpit'; this.ui.viewChanged?.(P); } }
       p.bank *= 0.9; p.mesh.userData.body.rotation.z = p.bank; p.mesh.userData.body.rotation.x = 0;
       P.aimLocked = false; P.mslLock = 0;
@@ -1172,6 +1172,7 @@ export class Game {
     else P.energy = Math.min(1, P.energy + dt * 0.1);
     P.boosting = boosting;
     const want = impulse ? IMPULSE.speed : boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);
+    P.wantSpeed = want;
     // spools up over ~2 s, but brakes hard when it drops out (inertial dampers)
     const k = impulse ? 1.25 : p.speed > def.boost * 1.05 ? 3.5 : boosting ? 1.8 : 1.2;
     p.speed += (want - p.speed) * Math.min(1, dt * k);
@@ -1393,6 +1394,7 @@ export class Game {
       if (this.wingman?.alive) {
         this.wingman.pos.copy(t2.set(-30, 2, -24).applyQuaternion(q1).add(base));
         this.wingman.quat.copy(q1);
+        this.wingman.speed = Math.min(this.wingman.speed, this.wingman.def.boost || this.wingman.def.speed);
       }
       this.frozen = false;
     });

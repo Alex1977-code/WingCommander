@@ -315,7 +315,7 @@ const IDLE_LINES = [
 
 // ---------------------------------------------------------------------------
 const LAMPS = [
-  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['SUCHER', 'missile'], ['NACHBR', 'boost'], ['FUNK', 'comm'],
+  ['SCHILD', 'shield'], ['HÜLLE', 'hull'], ['SUCHER', 'missile'], ['BOOST', 'boost'], ['FUNK', 'comm'],
   ['ZIEL', 'target'], ['LOCK', 'lock'], ['WAFFEN', 'guns'], ['MINE', 'mine'], ['AUTO', 'auto'],
 ];
 const LAMP_RGB = { off: [40, 36, 30], green: [70, 255, 150], amber: [255, 190, 60], red: [255, 60, 70] };

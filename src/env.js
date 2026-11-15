@@ -368,7 +368,7 @@ export function createEnvironment(scene, renderer, opts) {
     vertexShader: `uniform vec3 uCam; uniform vec3 uVel; attribute float aEnd; varying float vA;
       void main(){ vec3 p = mod(position - uCam, 900.0) - 450.0;
         float spd = length(uVel);
-        p -= uVel * (0.05 * aEnd);
+        p += uVel * (0.05 * aEnd); // tail = where the speck was a moment ago, relative to the moving viewer
         vec4 mv = viewMatrix * vec4(p + uCam, 1.0);
         vA = smoothstep(450.0, 160.0, length(p)) * smoothstep(10.0, 60.0, -mv.z) * smoothstep(700.0, 1700.0, spd) * (1.0 - 0.8 * aEnd);
         gl_Position = projectionMatrix * mv; }`,

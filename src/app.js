@@ -74,7 +74,7 @@ function tutorial() {
   const tips = [
     `Kurze Auffrischung, {cs}: ${steer} steuert. ${settings.invert ? 'Ziehen hebt die Nase, wie beim klassischen Steuerknüppel.' : 'Nach oben drücken hebt die Nase.'}`,
     `${fire} feuert die Pulslaser. Zielst du auf den Kreis vor dem Gegner, wird dein Fadenkreuz grün und du triffst.`,
-    `${msl} feuert die Neutronenkanone – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann richtet sie den Strahl aufs Ziel. ${boost} zündet den Boost – hältst du ihn ohne Feinde in der Nähe gedrückt, schaltet der Impulsantrieb zu und bringt dich mit Kilometern pro Sekunde zum Navpunkt. Oder gleich: Autopilot.`,
+    `${msl} feuert die Neutronenkanone – halte das Ziel im Visier, bis die Zielerfassung aufschaltet, dann richtet sie den Strahl aufs Ziel. Mit ${boost} beschleunigst du kurzzeitig. Hältst du die Taste ohne Feinde in der Nähe gedrückt, schaltet der Impulsantrieb zu und bringt dich mit Kilometern pro Sekunde zum Navpunkt. Oder gleich: Autopilot.`,
   ];
   tips.forEach((t) => ui.comm('rook', t));
   save.tutorialDone = true; store(SAVE_KEY, save);
@@ -653,7 +653,7 @@ function refreshSettings() {
   setLabel($('set-control'), `Steuer im Cockpit: ${settings.control === 'stick' ? 'Steuerknüppel' : 'Steuerjoch'}`);
   setLabel($('set-sens'), `Empfindlichkeit: ${settings.sens < 1 ? 'Niedrig' : settings.sens > 1 ? 'Hoch' : 'Normal'}`);
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
-  setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Steuerknüppel (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
+  setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Invertiert (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
   setLabel($('set-quality'), `Grafik: ${settings.quality === 'high' ? 'Hoch (Bloom)' : 'Leistung'}`);
   store(SET_KEY, settings);
 }

@@ -478,7 +478,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
     if (vv < 0) continue;
     const y = cy - (vv - spd) * ppm, major = vv % 50 === 0;
     ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 - (major ? 10 : 5) * s, y); ctx.stroke();
-    if (major) ctx.fillText(String(vv), x0 - 13 * s, y);
+    if (major) ctx.fillText(spd >= 1000 ? (vv / 1000).toFixed(2).replace('.', ',') : String(vv), x0 - 13 * s, y);
   }
   // cruise speed and afterburner band
   const yb = cy - (def.boost - spd) * ppm;
@@ -487,7 +487,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
   ctx.textBaseline = 'middle'; // the restore above dropped it; the readouts below are centred
   ctx.beginPath(); ctx.moveTo(x0, cy - th / 2); ctx.lineTo(x0, cy + th / 2); ctx.stroke();
   // set-speed caret from the throttle
-  const want = P.boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85);
+  const want = P.wantSpeed ?? (P.boosting ? def.boost : def.speed * (0.15 + P.throttle * 0.85));
   const yc = Math.max(cy - th / 2, Math.min(cy + th / 2, cy - (want - spd) * ppm));
   ctx.beginPath(); ctx.moveTo(x0 + 2 * s, yc); ctx.lineTo(x0 + 9 * s, yc - 5 * s); ctx.lineTo(x0 + 9 * s, yc + 5 * s); ctx.closePath(); ctx.stroke();
   // trend arrow (where the speed will be in ~1 s)
