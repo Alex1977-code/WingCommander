@@ -988,8 +988,10 @@ export class Game {
   hullDist(c, p, out) {
     const def = c.def, L = tHL.copy(p).sub(c.pos).applyQuaternion(qHL.copy(c.quat).invert());
     let d;
-    if (def.ell) d = this.ellLocal(def.ell, L, tHN);
-    else d = this.boxLocal(def.box, L, 0, 0, 0, tHN);
+    if (def.ell) { // one or more ellipsoids [cx, cy, cz, a, b, c]
+      d = Infinity;
+      for (const e of def.ell) { const de = this.ellLocal(e, L, tHB); if (de < d) { d = de; tHN.copy(tHB); } }
+    } else d = this.boxLocal(def.box, L, 0, 0, 0, tHN);
     for (const e of def.boxes || []) {
       // cheap reject before the exact box test
       const rx = Math.abs(L.x - e[0]) - e[3], ry = Math.abs(L.y - e[1]) - e[4], rz = Math.abs(L.z - e[2]) - e[5];
@@ -1022,10 +1024,17 @@ export class Game {
       tHA.copy(L).applyMatrix4(a.inv);
       let ang = Math.atan2(tHA.y, tHA.x); if (ang < 0) ang += Math.PI * 2;
       if (ang > a.arc) ang = ang - a.arc < Math.PI * 2 - ang ? a.arc : 0;
-      tHC.set(a.R * Math.cos(ang), a.R * Math.sin(ang), 0).applyMatrix4(a.mat); // nearest point on the centre line, ship frame
-      tHB.copy(L).sub(tHC);
-      const dd = tHB.length() - a.tube;
-      if (dd < d) { d = dd; tHN.copy(tHB).normalize(); }
+      // offset from the centre line in the arc frame: in-plane (radial) and out-of-plane parts, scaled to the ship frame
+      const cxl = a.R * Math.cos(ang), cyl = a.R * Math.sin(ang);
+      const uw = Math.hypot(tHA.x - cxl, tHA.y - cyl) * a.sxy, zw = tHA.z * a.sz, dw = Math.hypot(uw, zw);
+      // tube surface is an ellipse (flattened blades): its radius along this direction
+      const rdir = dw > 1e-6 ? dw / Math.hypot(uw / a.tA, zw / a.tB) : Math.min(a.tA, a.tB);
+      const dd = dw - rdir;
+      if (dd < d) {
+        d = dd;
+        tHC.set(cxl, cyl, 0).applyMatrix4(a.mat); // nearest point on the centre line, ship frame
+        tHN.copy(L).sub(tHC); if (tHN.lengthSq() < 1e-9) tHN.set(0, 1, 0); tHN.normalize();
+      }
     }
     const tor = def.torus;
     if (tor) {
@@ -1053,14 +1062,15 @@ export class Game {
     return d;
   }
 
-  /** ellipsoid [a, b, c] round the ship origin: first-order signed distance (k - 1) / |grad k| */
+  /** ellipsoid [cx, cy, cz, a, b, c]: first-order signed distance (k - 1) / |grad k|, clamped deep inside */
   ellLocal(e, L, n) {
-    const qx = L.x / e[0], qy = L.y / e[1], qz = L.z / e[2], k = Math.sqrt(qx * qx + qy * qy + qz * qz);
-    if (k < 1e-6) { n.set(0, 1, 0); return -e[1]; }
-    n.set(qx / e[0] / k, qy / e[1] / k, qz / e[2] / k);
+    const qx = (L.x - e[0]) / e[3], qy = (L.y - e[1]) / e[4], qz = (L.z - e[2]) / e[5], k = Math.sqrt(qx * qx + qy * qy + qz * qz);
+    const mn = Math.min(e[3], e[4], e[5]);
+    if (k < 1e-6) { n.set(0, 1, 0); return -mn; }
+    n.set(qx / e[3] / k, qy / e[4] / k, qz / e[5] / k);
     const g = n.length();
     n.divideScalar(g);
-    return (k - 1) / g;
+    return Math.max((k - 1) / g, -mn); // deep inside: never deeper than the smallest half-axis
   }
 
   /** Distance from point to a capital ship's oriented box; out = world-space push direction (kept for callers outside hullDist). */
@@ -1922,9 +1932,11 @@ export class Game {
           const r = Math.max(s.radius, s.def.modelR || 0) + 4;
           if (s.def.capital) {
             if (pos.distanceToSquared(s.pos) > r * r) continue;
+            // sample the bolt's path every ~3.5 m, so it can't skip through thin ribs or blades at low frame rates
             let hp = null;
-            for (const k of [0.25, 0.5, 0.75, 1]) {
-              t2.copy(b.prev).lerp(pos, k);
+            const n = Math.min(12, Math.max(2, Math.ceil(b.prev.distanceTo(pos) / 3.5)));
+            for (let j = 1; j <= n; j++) {
+              t2.copy(b.prev).lerp(pos, j / n);
               if (this.hullDist(s, t2, t1) < 2.5) { hp = t2; break; }
             }
             if (hp) { this.damage(s, b.dmg, b.owner, hp); hit = true; break; }

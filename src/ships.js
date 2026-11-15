@@ -554,7 +554,7 @@ function schwinge() {
     // glowing veins along both edges of the sail (same transform as the sail: x-z plane, tilted up by 0.95 rad)
     // one vein on each face of the sail, so the glowing edges show from above and below
     const W = (T, x, y) => new THREE.Vector3(x * Math.cos(0.95) - T * Math.sin(0.95) + 0.8, x * Math.sin(0.95) + T * Math.cos(0.95) + 0.4, y);
-    for (const T of [0.62, -0.18]) for (const [p0, c, p1] of [[[0, -3.5], [3.5, -1.5], [8.4, 4.8]], [[0.2, 2.8], [4.2, 2.6], [8.9, 6.6]]]) {
+    for (const T of [0.62, -0.63]) for (const [p0, c, p1] of [[[0, -3.5], [3.5, -1.5], [8.4, 4.8]], [[0.2, 2.8], [4.2, 2.6], [8.9, 6.6]]]) {
       const cv = new THREE.QuadraticBezierCurve3(W(T, ...p0), W(T, ...c), W(T, ...p1));
       mk(g, new THREE.TubeGeometry(cv, 16, 0.2, 6, false), m.line);
     }
@@ -673,7 +673,7 @@ function carrier(g, engines, M, o = {}) {
   const sg = lathe(SAUCER, 72, 10, 3);
   { const uv = sg.attributes.uv, pos = sg.attributes.position, k = 10 / (2 * Math.PI), rim = Math.log(110);
     for (let i = 0; i < uv.count; i++) {
-      const r = Math.max(35, Math.hypot(pos.getX(i), pos.getZ(i))), top = pos.getY(i) > -0.4;
+      const r = Math.max(14, Math.hypot(pos.getX(i), pos.getZ(i))), top = pos.getY(i) > -0.4;
       uv.setY(i, k * (top ? Math.log(r) : 2 * rim - Math.log(r)));
     } }
   const sauc = mk(g, sg, hull, SC.x, SC.y, SC.z); sauc.scale.z = SC.k;
@@ -767,6 +767,7 @@ function carrier(g, engines, M, o = {}) {
     const pg = new THREE.ExtrudeGeometry(pl, { depth: 4, bevelEnabled: true, bevelThickness: 1, bevelSize: 1, bevelSegments: 1 });
     scaleUV(pg, 1 / 50); pg.rotateY(-Math.PI / 2); pg.translate(2, 0, -28);
     drv(nx, ny, nz - 98, 6);
+    if (torn) mbx.pop(); // that nozzle tumbles away with its nacelle (the chain boxes cover it)
     lamp(nx + sx * 9.5, ny, nz + 60, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 6);
     if (torn) {
       // ripped off its pylon: drifting beside the hull, tumbled, with a scorched stump left behind
@@ -852,8 +853,9 @@ function wreckDamage(g, dark, SC, sy, mbx) {
   const first = g.children.length;
   // jagged outline: a circle whose rim radius varies per vertex, laid onto the sloping deck
   const jag = (rad, jit, lift, top, mat) => {
-    const c = new THREE.CircleGeometry(1, 32); const p = c.attributes.position;
-    for (let i = 1; i < p.count; i++) { const k = 1 + (R() - 0.5) * jit; p.setXY(i, p.getX(i) * k, p.getY(i) * k); }
+    const c = new THREE.RingGeometry(0.001, 1, 32, 6); const p = c.attributes.position;
+    const jk = []; for (let i = 0; i <= 32; i++) jk.push(1 + (R() - 0.5) * jit); jk[32] = jk[0];
+    for (let i = 0; i < p.count; i++) { const rr = Math.hypot(p.getX(i), p.getY(i)), ai = Math.round(((Math.atan2(p.getY(i), p.getX(i)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 32), k = 1 + (jk[ai] - 1) * rr; p.setXY(i, p.getX(i) * k, p.getY(i) * k); }
     c.rotateX(top ? -Math.PI / 2 : Math.PI / 2);
     for (let i = 0; i < p.count; i++) {
       let wx = hx + p.getX(i) * rad.x, wz = hz + p.getZ(i) * rad.z;
@@ -892,7 +894,8 @@ function wreckDamage(g, dark, SC, sy, mbx) {
 function addArc(def, mesh, R, tube, arc) {
   mesh.updateMatrix(); mesh.userData.noBox = true;
   const mat = mesh.matrix.clone(), sc = mesh.scale;
-  (def.arcs ||= []).push({ mat, inv: mat.clone().invert(), R, arc, tube: tube * Math.min(1, (sc.x + sc.y + sc.z) / 3),
+  const sxy = (sc.x + sc.y) / 2;
+  (def.arcs ||= []).push({ mat, inv: mat.clone().invert(), R, arc, sxy, sz: sc.z, tA: tube * sxy, tB: tube * sc.z,
     cx: mesh.position.x, cy: mesh.position.y, cz: mesh.position.z, bound: R * Math.max(sc.x, sc.y, sc.z) + tube });
 }
 /** axis-aligned box of a mesh in the ship frame, as a manual hit box */
@@ -915,10 +918,11 @@ function asz(g, M, engines, o) {
   const { a, b, c } = o;
   // ribs and blades are arcs: their bounding boxes would be mostly empty, so they get a chain of small boxes
   const def = SHIPS[o.type];
-  def.ell = [a, b, c]; def.arcs = []; const mb = (def.manualBoxes = []); // hull: an exact ellipsoid; ribs and blades: arcs
+  // hull, ventral carapace and stern drive cluster as exact ellipsoids [cx, cy, cz, a, b, c]
+  def.ell = [[0, 0, 0, a, b, c], [0, -b * 0.35, -c * 0.05, a * 0.8, b * 0.75, c * 0.9], [0, 0, -c * 0.95, a * 0.55, b * 0.55, c * 0.12]]; def.arcs = []; const mb = (def.manualBoxes = []); // hull: an exact ellipsoid; ribs and blades: arcs
   const arcBoxes = (mesh, R, tube, arc) => addArc(def, mesh, R, tube, arc);
   ell(g, hull, 0, 0, 0, a, b, c, 40);
-  ell(g, dark, 0, -b * 0.35, -c * 0.05, a * 0.8, b * 0.75, c * 0.9, 28);          // darker ventral carapace
+  ell(g, dark, 0, -b * 0.35, -c * 0.05, a * 0.8, b * 0.75, c * 0.9, 28).userData.noBox = true; // darker ventral carapace (def.ell)
   if (o.prow > 0) {
     const prow = new THREE.ConeGeometry(a * 0.32, o.prow * 2, 12); prow.rotateX(Math.PI / 2);
     mk(g, prow, dark, 0, 0, c * 0.86 + o.prow).userData.noBox = true;
@@ -945,7 +949,8 @@ function asz(g, M, engines, o) {
     bl.rotation.set(Math.PI / 2, 0, sx > 0 ? -Math.PI * 0.05 : Math.PI * 0.5); // mirrored: one sweeps to each side
     bl.scale.set(1, 1, 0.3);
     arcBoxes(bl, o.blade, a * 0.12, Math.PI * 0.55);
-    mk(g, new THREE.BoxGeometry(a * 0.04, b * 0.08, c * 1.2), strip, sx * a * 0.92, b * 0.15, -c * 0.05);   // flank vein
+    const fv = mk(g, new THREE.BoxGeometry(a * 0.04, b * 0.08, c * 1.2), strip, sx * a * 0.92, b * 0.15, -c * 0.05);   // flank vein
+    meshBox(mb, fv); // axis-aligned strip: its own box is exact
   }
   // dorsal spines
   for (let i = 0; i < o.spines; i++) {
@@ -961,7 +966,7 @@ function asz(g, M, engines, o) {
     for (const ang of [0.6, 2.5, 3.8, 5.6]) beam(g, dark, Math.cos(ang) * a * 0.8, Math.sin(ang) * b * 0.8, z, Math.cos(ang) * a * 1.9, Math.sin(ang) * a * 1.42, z, a * 0.06, a * 0.12);
   }
   // drive cluster at the stern
-  ell(g, dark, 0, 0, -c * 0.95, a * 0.55, b * 0.55, c * 0.12, 20);
+  ell(g, dark, 0, 0, -c * 0.95, a * 0.55, b * 0.55, c * 0.12, 20).userData.noBox = true; // drive cluster (def.ell)
   for (const [ex, ey] of o.eng) engine(g, engines, ex, ey, -c * 1.05, o.engR, glow, dark, pal.glow);
 }
 
@@ -977,7 +982,7 @@ function freightNacelle(g, M, engines, x, y, z, r, len) {
 function samariter(g, engines, M) {
   const { hull, dark, strip, accent } = M;
   ell(g, hull, 0, 3, 34, 13, 7.5, 17, 28);                                          // command section
-  ell(g, M.bridge, 0, 5.4, 49.6, 4.2, 1.1, 1.4, 12);                                 // bridge windows
+  ell(g, M.bridge, 0, 5.4, 49.6, 4.2, 1.1, 1.4, 24);                                 // bridge windows
   tube(g, dark, 0, 0, 0, 4.5, 5, 80, 16);                                           // spine
   for (const sx of [-1, 1]) {
     tube(g, M.hullRot, sx * 10.5, 0, -2, 6.2, 6.2, 58, 20);                        // ward modules
@@ -1040,7 +1045,7 @@ function prisonDetail(g, M) {
   // docking maw: a dark opening ringed by veins (a fighter launches from here in the rescue scene)
   const A = 14, B = 12, C = 46, MX = 7.4, MY = 3.6, MCY = -1.2;
   const onHull = (x, y, lift) => C * Math.sqrt(Math.max(0, 1 - (x / A) ** 2 - (y / B) ** 2)) + lift;
-  const mg = new THREE.CircleGeometry(1, 32), mp = mg.attributes.position;
+  const mg = new THREE.RingGeometry(0.001, 1, 32, 8), mp = mg.attributes.position; // interior rings: follows the curve
   for (let i = 0; i < mp.count; i++) { const x = mp.getX(i) * MX, y = MCY + mp.getY(i) * MY; mp.setXYZ(i, x, y, onHull(x, y, 0.12)); }
   mg.computeVertexNormals();
   const maw = mk(g, mg, new THREE.MeshBasicMaterial({ color: 0x030204, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
