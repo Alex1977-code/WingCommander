@@ -184,6 +184,10 @@ function rockGeometry(seed, detail) {
     p.setXYZ(i, v.x * sx, v.y * sy, v.z * sz);
   }
   g.computeVertexNormals();
+  // half-axes of the body (for collisions: a sphere would leave tens of metres of empty space on flat rocks)
+  let ex = 0, ey = 0, ez = 0;
+  for (let i = 0; i < n; i++) { ex = Math.max(ex, Math.abs(p.getX(i))); ey = Math.max(ey, Math.abs(p.getY(i))); ez = Math.max(ez, Math.abs(p.getZ(i))); }
+  g.userData.ext = new THREE.Vector3(ex, ey, ez).multiplyScalar(0.94);
   // albedo: rock type, mottling, darker crater floors and cavities, lighter fresh rims
   const t = ROCK_TYPES[seed % ROCK_TYPES.length], col = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -207,12 +211,16 @@ export function createEnvironment(scene, renderer, opts) {
   const { a = '#2b5fff', b = '#b03cff', seed = 1, planet = ['#31506b', '#c9a37a'] } = opts;
   const sunDir = new THREE.Vector3(...(opts.sun || [0.55, 0.3, 0.78])).normalize();
 
-  const skyGroup = new THREE.Group();
+  const skyGroup = new THREE.Group(); // live sky objects that follow the camera: stars and sun
   scene.add(skyGroup);
-  const skyMat = skyMaterial(a, b, seed);
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(40000, 32, 20), skyMat);
+  // nebula, Milky Way, planet and its halo only depend on the view direction: they are rendered once
+  // into a cube map and used as the scene background instead of running their shaders every frame
+  const bake = new THREE.Scene();
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(40000, 32, 20), skyMaterial(a, b, seed));
   sky.renderOrder = -10;
-  skyGroup.add(sky);
+  bake.add(sky);
+  const pDir = planet ? new THREE.Vector3(...(opts.planetDir || [-0.6, -0.25, 0.75])).normalize() : null;
+  const pAng = Math.asin(7000 / 24000);
 
   // stars: realistic colours (blackbody: mostly white/yellow, some orange/red, few blue-white), a steep
   // brightness distribution (many faint, few bright) and a concentration along the galactic plane.
@@ -242,11 +250,19 @@ export function createEnvironment(scene, renderer, opts) {
   sg.setAttribute('color', new THREE.BufferAttribute(sc, 3));
   sg.setAttribute('aSize', new THREE.BufferAttribute(ss, 1));
   const starMat = new THREE.ShaderMaterial({
-    uniforms: { uPR: { value: Math.min(2, renderer.getPixelRatio()) } },
-    vertexShader: `attribute float aSize; attribute vec3 color; uniform float uPR; varying vec3 vC;
-      void main(){ vC = color; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_PointSize = aSize*uPR; }`,
-    fragmentShader: `varying vec3 vC;
-      void main(){ float d = length(gl_PointCoord-.5)*2.0; float k = exp(-d*d*10.0) + exp(-d*4.0)*.18; if (k < .01) discard; gl_FragColor = vec4(vC*k,1.0); }`,
+    uniforms: {
+      uPR: { value: Math.min(2, renderer.getPixelRatio()) },
+      uPDir: { value: pDir ? pDir.clone() : new THREE.Vector3(0, 1, 0) }, uPCos: { value: pDir ? Math.cos(pAng * 1.02) : 2 },
+    },
+    // the point is padded and its glow has a fixed width in pixels, so faint stars don't drop out or
+    // flicker when they sit between pixels; stars behind the (baked) planet are not drawn
+    vertexShader: `attribute float aSize; attribute vec3 color; uniform float uPR; uniform vec3 uPDir; uniform float uPCos;
+      varying vec3 vC; varying float vS, vR;
+      void main(){ vC = color; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0);
+        float px = aSize*uPR; vR = px; gl_PointSize = px + 3.0; vS = gl_PointSize;
+        if (dot(normalize(position), uPDir) > uPCos) gl_PointSize = 0.0; }`,
+    fragmentShader: `varying vec3 vC; varying float vS, vR;
+      void main(){ float dp = length(gl_PointCoord-.5)*vS; float k = exp(-dp*dp/(.09*vR*vR+.35)); if (k < .004) discard; gl_FragColor = vec4(vC*k*1.15,1.0); }`,
     blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
   });
   const stars = new THREE.Points(sg, starMat);
@@ -261,23 +277,39 @@ export function createEnvironment(scene, renderer, opts) {
   sun.scale.setScalar(5200);
   sun.renderOrder = -8;
   skyGroup.add(sun);
+  // the planet in the baked background can't hide the live sun sprite: fade it by the eclipse
+  if (pDir) sun.material.opacity = THREE.MathUtils.smoothstep(Math.acos(THREE.MathUtils.clamp(pDir.dot(sunDir), -1, 1)), pAng - 0.02, pAng + 0.06);
 
   // planet
   if (planet) {
     // every other sky gets a rocky world instead of a gas giant
     const rocky = Math.floor(seed) % 3 === 0;
     const pm = new THREE.Mesh(new THREE.SphereGeometry(7000, 96, 64), planetMaterial(planet[0], planet[1], sunDir, seed, rocky));
-    const pd = new THREE.Vector3(...(opts.planetDir || [-0.6, -0.25, 0.75])).normalize();
-    pm.position.copy(pd).multiplyScalar(24000);
+    pm.position.copy(pDir).multiplyScalar(24000);
     pm.rotation.set(0.3, 0, 0.35);
     pm.renderOrder = -7;
-    skyGroup.add(pm);
+    bake.add(pm);
     const hs = rocky ? 1.035 : 1.05;
     const halo = new THREE.Mesh(new THREE.SphereGeometry(7000 * hs, 64, 40), haloMaterial(new THREE.Color(planet[1]).lerp(new THREE.Color('#8fb8ff'), 0.55), sunDir, hs));
     halo.position.copy(pm.position);
     halo.renderOrder = -6;
-    skyGroup.add(halo);
+    bake.add(halo);
   }
+  // sRGB 8-bit faces keep the dark gradients free of banding at a quarter of a float target's memory
+  const skyRT = new THREE.WebGLCubeRenderTarget(768, { generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  skyRT.texture.colorSpace = THREE.SRGBColorSpace;
+  const cubeCam = new THREE.CubeCamera(100, 60000, skyRT);
+  cubeCam.update(renderer, bake);
+  bake.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+  // drawn on a sphere around the camera with a one-texture-lookup shader
+  const skyBox = new THREE.Mesh(new THREE.SphereGeometry(40000, 32, 20), new THREE.ShaderMaterial({
+    uniforms: { uCube: { value: skyRT.texture } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vDir; uniform samplerCube uCube; void main(){ gl_FragColor = vec4(textureCube(uCube, normalize(vDir)).rgb, 1.0); }`,
+    side: THREE.BackSide, depthWrite: false,
+  }));
+  skyBox.renderOrder = -10;
+  skyGroup.add(skyBox);
 
   // lights
   const light = new THREE.DirectionalLight(0xfff1dd, 2.3);
@@ -321,8 +353,6 @@ export function createEnvironment(scene, renderer, opts) {
   dust.frustumCulled = false;
   scene.add(dust);
 
-  const pDir = planet ? new THREE.Vector3(...(opts.planetDir || [-0.6, -0.25, 0.75])).normalize() : null;
-  const pAng = Math.asin(7000 / 24000);
   return {
     sunDir,
     /** 0 when the planet hides the sun, 1 when it is in plain view (for the HUD's lens flare) */
@@ -335,7 +365,9 @@ export function createEnvironment(scene, renderer, opts) {
       skyGroup.position.copy(camera.position);
       dustMat.uniforms.uCam.value.copy(camera.position);
     },
-    dispose() { envRT.dispose(); },
+    /** pixel ratio the scene is drawn at (stars keep their size in screen pixels) */
+    setPixelRatio(pr) { starMat.uniforms.uPR.value = pr; },
+    dispose() { envRT.dispose(); skyRT.dispose(); },
   };
 }
 
@@ -374,12 +406,48 @@ function rockShader(sh) {
       }`);
 }
 
+const _rq = new THREE.Quaternion(), _rl = new THREE.Vector3(), _ro = new THREE.Vector3(), _rd = new THREE.Vector3();
+/**
+ * How deep point p is inside asteroid a (its ellipsoid grown by margin); 0 when outside.
+ * With n, also writes the outward surface normal there (world space).
+ */
+export function rockDepth(a, p, margin = 0, n = null) {
+  const R = a.radius + margin;
+  if (p.distanceToSquared(a.pos) > R * R) return 0;
+  _rq.copy(a.mesh.quaternion).invert();
+  _rl.copy(p).sub(a.pos).applyQuaternion(_rq);
+  const ex = a.ext.x + margin, ey = a.ext.y + margin, ez = a.ext.z + margin;
+  const k = Math.hypot(_rl.x / ex, _rl.y / ey, _rl.z / ez);
+  if (k >= 1) return 0;
+  if (n) {
+    n.set(_rl.x / (ex * ex), _rl.y / (ey * ey), _rl.z / (ez * ez));
+    if (n.lengthSq() < 1e-12) n.set(0, 1, 0);
+    n.normalize().applyQuaternion(a.mesh.quaternion);
+  }
+  return (1 - k) * Math.min(ex, ey, ez);
+}
+/** distance along a ray (origin o, unit dir d) to asteroid a's ellipsoid, or -1 */
+export function rockRay(a, o, d, maxD) {
+  _ro.copy(o).sub(a.pos);
+  const b0 = _ro.dot(d), c0 = _ro.lengthSq() - a.radius * a.radius;
+  if (c0 > 0 && b0 > 0) return -1; // pointing away from the bounding sphere
+  if (b0 * b0 - c0 < 0) return -1;
+  _rq.copy(a.mesh.quaternion).invert();
+  _ro.applyQuaternion(_rq).divide(a.ext); _rd.copy(d).applyQuaternion(_rq).divide(a.ext);
+  const A = _rd.lengthSq(), B = _ro.dot(_rd), C = _ro.lengthSq() - 1, D = B * B - A * C;
+  if (D < 0) return -1;
+  const t = (-B - Math.sqrt(D)) / A;
+  const tt = t >= 0 ? t : C < 0 ? 0 : -1;
+  return tt >= 0 && tt <= maxD ? tt : -1;
+}
+
 const ROCK_GEOS = [];
 let rockMat = null;
 export function createAsteroids(scene, center, count, spread = 1500) {
   if (!ROCK_GEOS.length) {
     // per shape: a detailed mesh for close passes and a lighter one for distance
-    for (let i = 0; i < 6; i++) ROCK_GEOS.push([rockGeometry(i + 1, 5), rockGeometry(i + 1, 3)]);
+    // IcosahedronGeometry(1, n) has 20·(n+1)² triangles: 4500 close up, 720 at a distance
+    for (let i = 0; i < 6; i++) ROCK_GEOS.push([rockGeometry(i + 1, 14), rockGeometry(i + 1, 5)]);
     rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0.03, envMapIntensity: 0.25 });
     rockMat.onBeforeCompile = rockShader;
     rockMat.userData.shared = true;
@@ -391,13 +459,14 @@ export function createAsteroids(scene, center, count, spread = 1500) {
     const m = new THREE.LOD();
     m.addLevel(new THREE.Mesh(hi, rockMat), 0);
     m.addLevel(new THREE.Mesh(lo, rockMat), r * 14);
+    m.addLevel(new THREE.Object3D(), r * 160); // far away: a speck not worth a draw call
     const u = Math.random() * 2 - 1, th = Math.random() * 6.283, s = Math.sqrt(1 - u * u);
     const d = (0.25 + Math.random() * 0.75) * spread;
     m.position.set(center.x + s * Math.cos(th) * d, center.y + u * d * 0.45, center.z + s * Math.sin(th) * d);
     m.scale.setScalar(r);
     m.quaternion.random();
     scene.add(m);
-    list.push({ mesh: m, pos: m.position, radius: r * 1.05, axis: new THREE.Vector3().randomDirection(), rate: (Math.random() - 0.5) * 0.12 });
+    list.push({ mesh: m, pos: m.position, radius: r * 1.05, ext: hi.userData.ext.clone().multiplyScalar(r), axis: new THREE.Vector3().randomDirection(), rate: (Math.random() - 0.5) * 0.12 });
   }
   return list;
 }

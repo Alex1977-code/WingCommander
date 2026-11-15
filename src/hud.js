@@ -311,12 +311,19 @@ export function drawHud(ctx, g, P) {
   ctx.fillText(`NEUTRON ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
   // --- ship status (left) and wingman status (right) as green line schematics ---
-  shipStatus(ctx, p, P, px, by + (bh + 4 * s) * 3 + 22 * s, 74 * s, s, t, false);
+  // touch screens, chase view: the radar sits up here next to a smaller schematic - the lower left is
+  // where the thumb lands on the virtual stick, and the ship itself fills the bottom centre
+  const chaseTouch = solo && P.view !== 'cockpit' && document.body.classList.contains('touch');
+  const stY = by + (bh + 4 * s) * 3 + 22 * s, stD = (chaseTouch ? 50 : 74) * s;
+  shipStatus(ctx, p, P, px, stY, stD, s, t, false);
   const wm = g.wingman;
   if (wm && solo) {
     // on touch screens keep clear of the throttle slider (right edge) and the ZIEL button below
-    const touch = document.body.classList.contains('touch'), D = (touch ? 60 : 74) * s;
-    shipStatus(ctx, wm, null, w - D - (touch ? 62 : 12 * s) - safeR, (tg && tg.alive ? (touch ? 96 : 128) : 58) * s, D, s, t, true);
+    const touch = document.body.classList.contains('touch'), D = (touch ? 54 : 74) * s;
+    const wy = (tg && tg.alive ? (touch ? 96 : 128) : 58) * s;
+    // the captions must stay above the ZIEL button (its top is 184 px above the bottom edge)
+    const caps = !touch || wy + D + 26 * s <= h - (g.safeB || 0) - 188;
+    shipStatus(ctx, wm, null, w - D - (touch ? 62 : 12 * s) - safeR, wy, D, s, t, true, caps);
   }
 
   // --- target panel (top-right) ---
@@ -358,16 +365,9 @@ export function drawHud(ctx, g, P) {
   // between the virtual stick and the ship's wing
   if (P.view !== 'cockpit') {
   let R = (solo ? 50 : 40) * s, rx = w - R - 14 * s - safeR;
-  if (solo) {
-    const touchUi = document.body.classList.contains('touch');
-    const safeL = g.safeL || 0;
-    if (touchUi) {
-      const left = safeL + 158, right = w / 2 - h * 0.21; // stick ring's right edge … ship's left wingtip
-      R = Math.max(30 * s, Math.min(R, (right - left - 12) / 2));
-      rx = (left + right) / 2;
-    } else rx = safeL + R + 16 * s;
-  }
-  const ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
+  let ry = h - R - 10 * s - (P.vy + P.vh >= g.h - 1 ? g.safeB || 0 : 0);
+  if (chaseTouch) { R = 40 * s; rx = px + stD + 16 * s + R; ry = stY + stD / 2 + 4 * s; }
+  else if (solo) rx = (g.safeL || 0) + R + 16 * s; // desktop: bottom-left corner
   ctx.fillStyle = 'rgba(6,14,24,.6)';
   ctx.beginPath(); ctx.arc(rx, ry, R, 0, 6.283); ctx.fill();
   // sweep
@@ -571,7 +571,7 @@ function seqHud(ctx, g, P, w, h, s, t) {
  * blinking red when critical; four shield sectors around it (flashing on the side that was hit)
  * and the pilot's hull hit marks. Used for the own ship (left) and the wingman (right).
  */
-function shipStatus(ctx, ship, P, x, y, D, s, t, wing) {
+function shipStatus(ctx, ship, P, x, y, D, s, t, wing, captions = true) {
   if (!ship?.def) return;
   const ol = shipOutline(ship.type);
   const alive = ship.alive;
@@ -613,6 +613,7 @@ function shipStatus(ctx, ship, P, x, y, D, s, t, wing) {
     }
   }
   // caption
+  if (!captions) { ctx.restore(); return; }
   ctx.font = `700 ${8.5 * s}px ${FONT}`; ctx.textBaseline = 'top'; ctx.textAlign = wing ? 'right' : 'left';
   const tx = wing ? x + D : x;
   ctx.fillStyle = col;

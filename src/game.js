@@ -4,7 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildShip, SHIPS, BAY, BAY_LIGHTS } from './ships.js';
-import { createEnvironment, createAsteroids } from './env.js';
+import { createEnvironment, createAsteroids, rockDepth, rockRay } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
 import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
@@ -165,6 +165,7 @@ export class Game {
     this.safeL = parseFloat(cs.getPropertyValue('--sal')) || 0;
     this.safeR = parseFloat(cs.getPropertyValue('--sar')) || 0;
     this.safeB = parseFloat(cs.getPropertyValue('--sab')) || 0;
+    this.env?.setPixelRatio?.(this.drawRatio());
   }
 
   setQuality(q) {
@@ -581,8 +582,8 @@ export class Game {
       }
     }
     for (const a of this.asteroids) {
-      const iv = sphere(a.pos, a.radius * 0.92);
-      if (iv && iv[0] < best) { best = iv[0]; hit = null; }
+      const d = rockRay(a, from, dir, best);
+      if (d >= 0 && d < best) { best = d; hit = null; }
     }
     return best < maxD ? { d: best, ship: hit } : null;
   }
@@ -1094,9 +1095,8 @@ export class Game {
     }
 
     for (const a of this.asteroids) {
-      t2.copy(p.pos).sub(a.pos);
-      const d = t2.length();
-      if (d < a.radius + 5) this.bump(P, t2.divideScalar(d), a.radius + 5 - d);
+      const depth = rockDepth(a, p.pos, 5, t2); // the rock's real (ellipsoid) shape, not its bounding sphere
+      if (depth > 0) this.bump(P, t2, depth);
     }
     for (const cap of this.ships) {
       if (!cap.def.capital || !cap.alive || cap.def.ghost) continue;
@@ -1853,7 +1853,7 @@ export class Game {
       }
       if (!hit) {
         for (const a of this.asteroids) {
-          if (pos.distanceToSquared(a.pos) < a.radius * a.radius) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
+          if (rockDepth(a, pos) > 0) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
         }
       }
       if (!hit && b.team === 0) {
@@ -1910,7 +1910,7 @@ export class Game {
           }
         }
       }
-      if (!boom) for (const a of this.asteroids) if (m.pos.distanceToSquared(a.pos) < a.radius * a.radius) { boom = true; break; }
+      if (!boom) for (const a of this.asteroids) if (rockDepth(a, m.pos) > 0) { boom = true; break; }
       if (boom) {
         // plasma burst: a white-hot flash, an expanding shock ring and a spray of charged sparks
         // (smaller when it bursts right at a player's ship, so the camera isn't blinded)
