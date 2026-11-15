@@ -1424,7 +1424,7 @@ export class Game {
         if (nav.type === 'survive') m.surv = nav.survive;
         if (nav.type === 'pickup') this.spawnPickups(nav);
         if (nav.type === 'convoy') {
-          const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 320));
+          const to = nav.convoy.to ? new THREE.Vector3(...nav.convoy.to) : this.carrier.pos.clone().add(new THREE.Vector3(0, -40, 450));
           m.convoyFollow = nav.convoy.to ? null : to; // docking point moves with the carrier
           m.convoy = nav.convoy.types.map((type, i) => {
             const c = this.spawn(type, nav._pos.clone().add(new THREE.Vector3(i * 90 - 45, i * 20, i * 60)), to.clone().sub(nav._pos).normalize());
@@ -1490,7 +1490,7 @@ export class Game {
         if (!alive.length) return this.fail(nav.failText || 'Der Konvoi wurde vernichtet.');
         if (alive.length < (m.convoyAlive ?? m.convoy.length)) { this.setBanner('KONVOISCHIFF VERLOREN'); this.audio.warn(); }
         m.convoyAlive = alive.length;
-        if (m.convoyFollow && this.carrier?.alive) m.convoyFollow.copy(this.carrier.pos).add(tLoc.set(0, -40, 320));
+        if (m.convoyFollow && this.carrier?.alive) m.convoyFollow.copy(this.carrier.pos).add(tLoc.set(0, -40, 450));
         done = alive.every((c) => c.pos.distanceTo(c.dest) < 300);
         break;
       }
