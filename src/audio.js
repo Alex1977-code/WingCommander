@@ -115,17 +115,31 @@ class Music {
     this.out = ctx.createGain();
     this.out.gain.value = 0;
     this.out.connect(audio.musicBus);
-    this.dry = ctx.createGain(); this.dry.connect(this.out);
     // a concert-hall reverb of its own: the orchestra needs more room than the effects
     this.hall = ctx.createConvolver(); this.hall.buffer = impulse(ctx, 3.6, 3.2);
     const hallOut = ctx.createGain(); hallOut.gain.value = 0.55; this.hall.connect(hallOut); hallOut.connect(this.out);
-    this.wet = ctx.createGain(); this.wet.gain.value = 0.6; this.wet.connect(this.hall);
-    this.delay = ctx.createDelay(1); this.delay.delayTime.value = 0.36;
-    const fb = ctx.createGain(); fb.gain.value = 0.28;
-    this.delay.connect(fb); fb.connect(this.delay);
-    this.delay.connect(this.wet);
+    this.newBus();
     this.mood = null; this.next = null; this.step = 0; this.time = 0;
     this.timer = setInterval(() => this.tick(), 25);
+  }
+
+  /** each mood plays into its own bus, so a mood change can silence the old notes still ringing */
+  newBus() {
+    const ctx = this.ctx, old = this.bus;
+    const bus = { gate: ctx.createGain() };
+    bus.gate.connect(this.out);
+    bus.dry = ctx.createGain(); bus.dry.connect(bus.gate);
+    bus.wet = ctx.createGain(); bus.wet.gain.value = 0.6; bus.wet.connect(this.hall);
+    bus.delay = ctx.createDelay(1); bus.delay.delayTime.value = 0.36;
+    const fb = ctx.createGain(); fb.gain.value = 0.28;
+    bus.delay.connect(fb); fb.connect(bus.delay); bus.delay.connect(bus.wet);
+    bus.fb = fb;
+    this.bus = bus; this.dry = bus.dry; this.wet = bus.wet; this.delay = bus.delay;
+    if (old) {
+      const t = ctx.currentTime;
+      for (const g of [old.gate, old.wet, old.fb]) { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.08); }
+      setTimeout(() => { for (const n of [old.gate, old.dry, old.wet, old.delay, old.fb]) n.disconnect(); }, 6000);
+    }
   }
 
   setMood(name) {
@@ -147,6 +161,7 @@ class Music {
     if (ctx.state !== 'running') return;
     if (this.pending && ctx.currentTime >= this.switchAt) {
       this.moodName = this.pending; this.mood = MOODS[this.pending]; this.pending = null;
+      this.newBus();
       this.step = 0; this.time = ctx.currentTime + 0.05;
       this.out.gain.cancelScheduledValues(ctx.currentTime);
       this.out.gain.setTargetAtTime(1, ctx.currentTime, 0.6);
@@ -154,7 +169,9 @@ class Music {
     // while fading out for a mood change, start no new notes: they would ring on into the next mood
     if (this.pending || !this.mood) return;
     // after a main-thread stall (scene load, GC) or while music is off, skip ahead instead of firing every missed note at once
-    if (this.time < ctx.currentTime || !this.a.musicOn) { this.time = ctx.currentTime + 0.05; if (!this.a.musicOn) return; }
+    // (sound switched off counts as music off: no silent orchestra draining the battery)
+    const on = this.a.musicOn && this.a.enabled;
+    if (this.time < ctx.currentTime || !on) { this.time = ctx.currentTime + 0.05; if (!on) return; }
     const sd = 60 / this.mood.bpm / 4;
     while (this.time < ctx.currentTime + 0.15) {
       this.schedule(this.step, this.time, sd);
@@ -177,9 +194,9 @@ class Music {
       if (m.brass && (tutti || inPhrase % 4 === 0 || m.bpm > 120)) this.hornChord(ch.slice(1).map(midi), t, sd * (m.bpm > 120 ? 8 : 15), m.brass * big);
       // trombones and tuba: a sustained foundation (or a riff in battle, see below)
       if (m.lowBrass && !m.riff && (tutti || m.brassSwell || inPhrase % 2 === 0)) this.lowBrass(midi(ch[0]), t, sd * 14, m.lowBrass * big, m.brassSwell);
-      if (m.choir && (tutti || m.brassSwell)) this.choir(ch.slice(1).map((n) => midi(n + 12)), t, sd * 16, m.choir);
+      if (m.choir && (tutti || m.brassSwell || !m.tuttiEvery)) this.choir(ch.slice(1).map((n) => midi(n + 12)), t, sd * 16, m.choir);
       if (m.crash && tutti && inPhrase === 0) this.crash(t, m.crash);
-      if (m.drum && (tutti || m.brassSwell) && (inPhrase % 4 === 0 || (m.bpm > 120 && inPhrase % 2 === 0))) this.bassDrum(t, m.drum);
+      if (m.drum && !m.riff && (tutti || m.brassSwell) && inPhrase % 4 === 0) this.bassDrum(t, m.drum);
     }
     // battle: low brass riff driving with the ostinato, bass drum on the downbeats
     if (m.riff) {
@@ -267,7 +284,7 @@ class Music {
       tg.connect(lp); dest = tg;
     }
     const vib = this.vibrato(t, end, 5.4, 7, 0.6);
-    for (const n of notes) for (const d of [-11, 1, 12]) { const o = this.osc('sawtooth', midi(n), t, end, dest, d + (Math.random() - 0.5) * 4); vib.connect(o.detune); }
+    for (const n of notes) for (const d of [-10, 11]) { const o = this.osc('sawtooth', midi(n), t, end, dest, d + (Math.random() - 0.5) * 4); vib.connect(o.detune); }
   }
   /** short, accented low strings (spiccato) */
   staccato(f0, t, dur, vol) {
@@ -279,7 +296,7 @@ class Music {
   }
   /** French horn: round, darker brass that blooms after the attack */
   horn(f0, t, dur, vol, swell = false) {
-    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter(), end = t + dur + 0.8;
+    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter(), end = t + dur + (swell ? 2.6 : 1.0); // let the release finish
     f.type = 'lowpass'; f.Q.value = 0.8;
     const a = swell ? dur * 0.6 : 0.09;
     f.frequency.setValueAtTime(380, t); f.frequency.linearRampToValueAtTime(swell ? 1300 : 1500, t + a + 0.08); f.frequency.setTargetAtTime(1050, t + a + 0.1, 0.4);
@@ -333,18 +350,18 @@ class Music {
     this.osc('sine', f0 * 4.01, t, t + 0.6, h);
   }
   /** timpani: tuned membrane with a short skin noise */
-  timpani(f0, t, vol) {
+  timpani(f0, t, vol, quiet = false) {
     const ctx = this.ctx, g = ctx.createGain();
     g.connect(this.dry); g.connect(this.wet);
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.004); g.gain.setTargetAtTime(0.0001, t + 0.02, 0.38);
     const o = this.osc('sine', f0 * 1.02, t, t + 2.2, g); o.frequency.exponentialRampToValueAtTime(f0, t + 0.25);
     const h = ctx.createGain(); h.gain.value = 0.3; h.connect(g);
     this.osc('sine', f0 * 1.51, t, t + 1.2, h);
-    this.a.noiseAt(t, 0.12, vol * 0.35, 'lowpass', 700, 200, this.dry);
+    if (!quiet) this.a.noiseAt(t, 0.12, vol * 0.35, 'lowpass', 700, 200, this.dry);
   }
   roll(f0, t, dur, vol) {
-    const n = Math.max(4, Math.floor(dur / 0.055));
-    for (let i = 0; i < n; i++) this.timpani(f0, t + i * (dur / n), vol * (0.35 + 0.65 * (i / n)) * 0.6);
+    const n = Math.min(12, Math.max(4, Math.floor(dur / 0.07))); // capped: a roll of 40+ voices chokes a phone
+    for (let i = 0; i < n; i++) this.timpani(f0, t + i * (dur / n), vol * (0.35 + 0.65 * (i / n)) * 0.6, i > 0);
   }
   /** suspended cymbal swelling into the downbeat */
   swell(t, dur, vol) {
@@ -364,7 +381,7 @@ class Music {
   }
   /** horn section in unison: three players, slightly apart in pitch and timing */
   horns(f0, t, dur, vol) {
-    for (const [d, dt] of [[-7, 0], [0, 0.012], [8, 0.02]]) this.horn(f0 * Math.pow(2, d / 1200), t + dt, dur, vol * 0.5);
+    for (const [d, dt] of [[-7, 0], [8, 0.015]]) this.horn(f0 * Math.pow(2, d / 1200), t + dt, dur, vol * 0.62);
   }
   /** trumpets in unison, bright and heroic */
   trumpets(f0, t, dur, vol) {
@@ -376,7 +393,7 @@ class Music {
   }
   /** trombones (root and fifth) over a tuba an octave down: the weight of the brass section */
   lowBrass(f0, t, dur, vol, swell = false, short = false) {
-    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter(), end = t + dur + 0.8;
+    const ctx = this.ctx, g = ctx.createGain(), f = ctx.createBiquadFilter(), end = t + dur + (swell ? 3.2 : 1.3);
     f.type = 'lowpass'; f.Q.value = 0.9;
     const a = swell ? dur * 0.55 : short ? 0.02 : 0.12;
     f.frequency.setValueAtTime(220, t); f.frequency.linearRampToValueAtTime(short ? 1700 : 1300, t + a + 0.05); f.frequency.setTargetAtTime(800, t + a + 0.1, short ? 0.08 : 0.5);
@@ -480,10 +497,10 @@ export class Audio {
     o.start(t); o.stop(t + dur + 0.02);
     this.release(dur * 1000 + 50);
   }
-  noiseAt(t, dur, vol, type, f0, f1, dest, wet) {
+  noiseAt(t, dur, vol, type, f0, f1, dest, wet, q = null) {
     const ctx = this.ctx, s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
     s.buffer = this.noiseBuf;
-    f.type = type; f.Q.value = type === 'bandpass' ? 1.2 : 0.7;
+    f.type = type; f.Q.value = q ?? (type === 'bandpass' ? 1.2 : 0.7);
     f.frequency.setValueAtTime(f0, t);
     f.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
     g.gain.setValueAtTime(vol, t);
@@ -495,7 +512,7 @@ export class Audio {
   }
   noise(dur, vol, f0, f1, q = 0.8, type = 'lowpass', wet = 0.3) {
     if (!this.live || !(vol >= 0.005) || !Number.isFinite(f0 + f1 + dur) || !this.grab()) return;
-    this.noiseAt(this.ctx.currentTime, dur, vol, type, f0, f1, this.sfx, wet ? this.sfxWet : null);
+    this.noiseAt(this.ctx.currentTime, dur, vol, type, f0, f1, this.sfx, wet ? this.sfxWet : null, q);
     this.release(dur * 1000 + 50);
   }
 
