@@ -92,7 +92,7 @@ export function drawHud(ctx, g, P) {
     if (g.coop && g.alivePilots().length) {
       ctx.font = `600 ${11 * s}px ${FONT}`;
       ctx.fillStyle = '#eaf6ff';
-      ctx.fillText(`Ersatzmaschine startet in ${Math.max(0, Math.ceil(P.deadT))} s`, w / 2, h / 2 + 14 * s);
+      ctx.fillText(`Ersatzjäger startet in ${Math.max(0, Math.ceil(P.deadT))} s`, w / 2, h / 2 + 14 * s);
     }
     ctx.restore();
     return;
@@ -304,9 +304,10 @@ export function drawHud(ctx, g, P) {
   const by = py + (solo ? 0 : 16 * s);
   bar(ctx, px, by, bw, bh, p.shield / p.maxShield, 'rgba(70,170,255,.85)', `SCHILD ${Math.max(0, Math.round(p.shield / p.maxShield * 100))}%`, s);
   bar(ctx, px, by + bh + 4 * s, bw, bh, p.hp / p.maxHp, p.hp / p.maxHp < 0.3 ? 'rgba(255,70,90,.9)' : 'rgba(110,230,160,.8)', `HÜLLE ${Math.max(0, Math.round(p.hp / p.maxHp * 100))}%`, s);
-  bar(ctx, px, by + (bh + 4 * s) * 2, bw, bh, P.energy, 'rgba(255,170,60,.85)', 'NACHBRENNER', s);
+  const impLbl = P.impulse ? 'IMPULSANTRIEB' : P.impProg > 0 ? `IMPULS ${Math.round(P.impProg * 100)}%` : 'BOOST';
+  bar(ctx, px, by + (bh + 4 * s) * 2, bw, bh, P.energy, P.impulse || P.impProg > 0 ? 'rgba(127,214,255,.85)' : 'rgba(255,170,60,.85)', impLbl, s);
   ctx.fillStyle = '#dff4ff'; ctx.font = `700 ${12 * s}px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(`${Math.round(p.speed)} M/S`, px, by + (bh + 4 * s) * 3 + 2 * s);
+  ctx.fillText(speedText(p.speed), px, by + (bh + 4 * s) * 3 + 2 * s);
   ctx.fillStyle = C.warn;
   ctx.fillText(`NEUTRON ${p.missiles}`, px + 72 * s, by + (bh + 4 * s) * 3 + 2 * s);
 
@@ -457,6 +458,9 @@ function arrow(ctx, P, pos, color, s) {
   ctx.restore();
 }
 
+/** speed readout: metres per second in combat, kilometres per second under the impulse drive */
+function speedText(v) { return v >= 1000 ? `${(v / 1000).toFixed(2).replace('.', ',')} KM/S` : `${Math.round(v)} M/S`; }
+
 /** speed tape (left), throttle / afterburner scale (right) and a pitch-roll ladder, projected on the combiner */
 function cockpitHud(ctx, P, w, h, s, t) {
   const p = P.ship, def = p.def;
@@ -494,10 +498,10 @@ function cockpitHud(ctx, P, w, h, s, t) {
   ctx.fillStyle = 'rgba(0,20,10,.55)'; ctx.fillRect(x0 - bw - 4 * s, cy - bh / 2, bw, bh);
   ctx.strokeRect(x0 - bw - 4 * s, cy - bh / 2, bw, bh);
   ctx.fillStyle = col; ctx.font = `800 ${12 * s}px ${DISPLAY}`; ctx.textAlign = 'right';
-  ctx.fillText(String(Math.round(spd)), x0 - 8 * s, cy + 1);
+  ctx.fillText(spd >= 1000 ? (spd / 1000).toFixed(2).replace('.', ',') : String(Math.round(spd)), x0 - 8 * s, cy + 1);
   ctx.font = `700 ${8 * s}px ${FONT}`; ctx.textAlign = 'left';
-  ctx.fillText('M/S', x0 - bw - 2 * s, cy - th / 2 - 9 * s);
-  if (P.boosting && Math.sin(t * 10) > -0.3) { ctx.fillStyle = '#7fd6ff'; ctx.fillText('NACHBRENNER', x0 - bw - 2 * s, cy + th / 2 + 9 * s); }
+  ctx.fillText(spd >= 1000 ? 'KM/S' : 'M/S', x0 - bw - 2 * s, cy - th / 2 - 9 * s);
+  if (P.impulse || P.boosting && Math.sin(t * 10) > -0.3) { ctx.fillStyle = '#7fd6ff'; ctx.fillText(P.impulse ? 'IMPULS' : 'BOOST', x0 - bw - 2 * s, cy + th / 2 + 9 * s); }
 
   // throttle / energy scale on the right
   const x1 = w / 2 + half;
@@ -510,7 +514,7 @@ function cockpitHud(ctx, P, w, h, s, t) {
   ctx.fillRect(x1 + 14 * s, cy + th / 2 - P.energy * th, 4 * s, P.energy * th);
   ctx.fillStyle = col; ctx.font = `700 ${8 * s}px ${FONT}`; ctx.textAlign = 'left';
   ctx.fillText(`SCHUB ${Math.round(P.throttle * 100)}%`, x1 - 8 * s, cy - th / 2 - 9 * s);
-  ctx.fillText('NB', x1 + 12 * s, cy + th / 2 + 9 * s);
+  ctx.fillText('BST', x1 + 12 * s, cy + th / 2 + 9 * s);
 
   // roll scale + bank pointer around the reticle area
   ctx.strokeStyle = dimc; ctx.lineWidth = 1.2 * s;

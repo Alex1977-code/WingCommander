@@ -309,7 +309,7 @@ function addCrack(c) {
 const IDLE_LINES = [
   'SCHILDGENERATOR · PHASE NOMINAL', 'KÜHLMITTELDRUCK 2,4 BAR', 'TRÄGHEITSDÄMPFER AKTIV', 'NAV-SYNC MIT TUS AURORA',
   'REAKTOR 1 · 98,2 %', 'REAKTOR 2 · 97,9 %', 'IFF-TRANSPONDER: NACHTFALKE', 'LEBENSERHALTUNG OK · O2 21 %', 'KALIBRIERE ZIELRECHNER…',
-  'SENSORPAKET 3 · RAUSCHEN 0,4', 'KANZELDRUCK STABIL', 'PULSLASER 1–4 · LADUNG 100 %', 'DATENBUS 4 · 1 PAKETVERLUST', 'TELEMETRIE → AURORA',
+  'SENSORPAKET 3 · RAUSCHEN 0,4', 'KABINENDRUCK STABIL', 'PULSLASER 1–4 · LADUNG 100 %', 'DATENBUS 4 · 1 PAKETVERLUST', 'TELEMETRIE → AURORA',
   'TRIEBWERKSTEMPERATUR 1180 K', 'FREQUENZSPRUNG KANAL 07', 'SELBSTTEST BESTANDEN', 'KOMPENSATOR DRIFT 0,02°',
 ];
 
@@ -696,7 +696,7 @@ export class Cockpit {
     const kp = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.012, 0.003), this.steel); kp.position.set(0.076, -0.016, 0.02); pr.add(kp);
     this.podR = pr;
     this.toggles = [];
-    ['NB', 'AUTO', 'WAFFE', 'ECM'].forEach((key, i) => {
+    ['BOOST', 'AUTO', 'WAFFE', 'ECM'].forEach((key, i) => {
       const base = new THREE.Group(); base.position.set(-0.06 + i * 0.04, 0.037 + 0.006, 0.012); pr.add(base);
       const nut = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.004, 6), this.steel); base.add(nut);
       const lever = new THREE.Group(); base.add(lever);
@@ -880,7 +880,7 @@ export class Cockpit {
       if (fb === 'dead' || (fb === 'flicker' && Math.random() < 0.35)) this.drawStatic(bg, BW, BH, fb === 'dead');
       else {
         bg.fillStyle = '#080808'; bg.fillRect(0, 0, BW, BH);
-        const cols = [['SCHILD', p.shield / p.maxShield], ['NB', P.energy]];
+        const cols = [['SCHILD', p.shield / p.maxShield], ['BST', P.energy]];
         cols.forEach(([label, k], ci) => {
           const x = 30 + ci * 112, n = 12;
           for (let i = 0; i < n; i++) {
@@ -897,7 +897,7 @@ export class Cockpit {
       live(B.tex);
     }
     // guarded toggles flip with the systems they control; the covers swing open when armed
-    const st = { NB: P.boosting, AUTO: !!game.autoAvailable?.(), WAFFE: !!P.ctrl.firing || !!P.aimLocked, ECM: !!P.missileWarn };
+    const st = { BOOST: P.boosting, AUTO: !!game.autoAvailable?.(), WAFFE: !!P.ctrl.firing || !!P.aimLocked, ECM: !!P.missileWarn };
     for (const T of this.toggles) {
       const on = st[T.key];
       T.lever.rotation.x += ((on ? 0.55 : -0.55) - T.lever.rotation.x) * Math.min(1, dt * 18);
@@ -1220,8 +1220,8 @@ export class Cockpit {
       const bar = (y, label, k, col) => { g.fillStyle = G; g.fillText(label, W * 0.58, y); g.strokeStyle = G; g.strokeRect(W * 0.58, y + 22, W * 0.36, 12); g.fillStyle = col; g.fillRect(W * 0.58 + 2, y + 24, (W * 0.36 - 4) * Math.max(0, Math.min(1, k)), 8); };
       bar(36, `SCHILD ${Math.round(sk * 100)}%`, sk, sk > 0.2 ? G : R);
       bar(84, `HÜLLE ${Math.round(hk * 100)}%`, hk, hk > 0.3 ? G : R);
-      bar(132, 'NACHBRENNER', P.energy, A);
-      g.fillStyle = A; g.fillText(`NEUTR ${p.missiles}  ${Math.round(p.speed)} M/S`, W * 0.58, 184);
+      bar(132, P.impulse ? 'IMPULSANTRIEB' : 'BOOST', P.energy, A);
+      g.fillStyle = A; g.fillText(`NEUTR ${p.missiles}  ${p.speed >= 1000 ? (p.speed / 1000).toFixed(2).replace('.', ',') + ' KM/S' : Math.round(p.speed) + ' M/S'}`, W * 0.58, 184);
     } else if (m.kind === 'RAD') {
       this.drawRadar(g, W, H, P, game);
     } else {

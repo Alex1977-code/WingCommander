@@ -19,7 +19,7 @@ export const SHIPS = {
   gate: { name: 'Sprungtor', team: 3, capital: true, ghost: true, invulnerable: true, hp: 1e9, speed: 0, radius: 340, box: [1, 1, 1], turrets: [] },
   prison: { name: 'Ketten', team: 3, capital: true, invulnerable: true, hp: 1e9, speed: 22, radius: 55, box: [15, 13, 48], turrets: [] },
   valkyrie: { name: 'TUS Valkyrie', team: 3, capital: true, invulnerable: true, wreck: true, hp: 1e9, speed: 0, radius: 240, box: [6, 4, 30], turrets: [] },
-  tanker: { name: 'Tanker', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [19, 9.5, 48], dmg: 5, turrets: [[0, 13.7, 0]] },
+  tanker: { name: 'Versorger', team: 0, capital: true, hp: 900, speed: 70, radius: 55, box: [19, 9.5, 48], dmg: 5, turrets: [[0, 13.7, 0]] },
   habitat: { name: 'Habitat Keth IV', team: 0, capital: true, hp: 3600, speed: 0, radius: 200, box: [46, 46, 46], torus: [150, 17], dmg: 6, turrets: [[0, 50, 0], [0, -50, 0], [150, 0, 0], [-150, 0, 0]] },
   relay: { name: 'Relaisstation', team: 1, capital: true, hp: 900, speed: 0, radius: 75, box: [14, 52, 14], dmg: 7, score: 900, turrets: [[0, 44, 12], [0, -30, 12], [12, 0, 0]] },
   aurora: { name: 'TUS Aurora', team: 0, capital: true, hp: 4200, speed: 12, radius: 240, box: [6, 4, 30], dmg: 7, turrets: [[18, 21.5, 132], [-18, 21.5, 132], [18, 21.5, 70], [-18, 21.5, 70], [0, 20.8, 150], [0, -42.6, -40], [24.4, -22, -90], [-24.4, -22, -90]] },
@@ -1021,7 +1021,7 @@ function tankerShip(g, engines, M) {
   mk(g, uvBox(18, 14, 14), dark, 0, 0, -44);
   for (const sx of [-1, 1]) { freightNacelle(g, M, engines, sx * 14, 7, -42, 3, 22); beam(g, hull, sx * 4, 3, -42, sx * 12, 6.5, -42, 1.2, 8); }
   for (const ex of [-5, 5]) engine(g, engines, ex, 0, -52, 3.4, M.glow, dark, M.pal.glow);
-  const reg = new THREE.MeshStandardMaterial({ map: registryTexture('TANKER', 'TF-11 · FLOTTENVERSORGUNG'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  const reg = new THREE.MeshStandardMaterial({ map: registryTexture('VERSORGER', 'DV-11 · DEUTERIUMTRANSPORT'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(16, 2.5), reg, sx * 4.05, 11.6, 4); d.rotation.y = sx * Math.PI / 2; }
   for (const sx of [-1, 1]) blinker(g, sx * 19, 0, 4, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 3);
   blinker(g, 0, 14.5, 4, new THREE.Color(3, 3, 3), 1.1, 0.2, 3.5);

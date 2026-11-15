@@ -339,11 +339,12 @@ export function createEnvironment(scene, renderer, opts) {
   const dg = new THREE.BufferGeometry();
   dg.setAttribute('position', new THREE.BufferAttribute(dp, 3));
   const dustMat = new THREE.ShaderMaterial({
-    uniforms: { uCam: { value: new THREE.Vector3() } },
-    vertexShader: `uniform vec3 uCam; varying float vA;
+    uniforms: { uCam: { value: new THREE.Vector3() }, uSpd: { value: 0 } },
+    vertexShader: `uniform vec3 uCam; uniform float uSpd; varying float vA;
       void main(){ vec3 p = mod(position - uCam, 700.0) - 350.0;
         vec4 mv = viewMatrix * vec4(p + uCam, 1.0);
-        vA = smoothstep(350.0, 120.0, length(p)) * smoothstep(4.0, 30.0, -mv.z);
+        // at impulse speed the specks would flicker past: the streaks below take over
+        vA = smoothstep(350.0, 120.0, length(p)) * smoothstep(4.0, 30.0, -mv.z) * (1.0 - smoothstep(700.0, 1300.0, uSpd));
         gl_PointSize = clamp(260.0 / max(1.0,-mv.z), 1.0, 5.0);
         gl_Position = projectionMatrix * mv; }`,
     fragmentShader: `varying float vA; void main(){ float d = length(gl_PointCoord-.5)*2.; gl_FragColor = vec4(vec3(.55,.7,.9)*vA*smoothstep(1.,0.,d)*.7,1.); }`,
@@ -353,6 +354,31 @@ export function createEnvironment(scene, renderer, opts) {
   dust.frustumCulled = false;
   scene.add(dust);
 
+  // impulse streaks: the same kind of wrapped dust field, each speck drawn as a line along the velocity
+  const SN = 220, stP = new Float32Array(SN * 6), se = new Float32Array(SN * 2);
+  for (let i = 0; i < SN; i++) {
+    const x = Math.random() * 900, y = Math.random() * 900, z = Math.random() * 900;
+    stP.set([x, y, z, x, y, z], i * 6); se[i * 2 + 1] = 1;
+  }
+  const sgeo = new THREE.BufferGeometry();
+  sgeo.setAttribute('position', new THREE.BufferAttribute(stP, 3));
+  sgeo.setAttribute('aEnd', new THREE.BufferAttribute(se, 1));
+  const streakMat = new THREE.ShaderMaterial({
+    uniforms: { uCam: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3() } },
+    vertexShader: `uniform vec3 uCam; uniform vec3 uVel; attribute float aEnd; varying float vA;
+      void main(){ vec3 p = mod(position - uCam, 900.0) - 450.0;
+        float spd = length(uVel);
+        p -= uVel * (0.05 * aEnd);
+        vec4 mv = viewMatrix * vec4(p + uCam, 1.0);
+        vA = smoothstep(450.0, 160.0, length(p)) * smoothstep(10.0, 60.0, -mv.z) * smoothstep(700.0, 1700.0, spd) * (1.0 - 0.8 * aEnd);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying float vA; void main(){ gl_FragColor = vec4(vec3(.62,.8,1.)*vA*.75,1.); }`,
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+  });
+  const streaks = new THREE.LineSegments(sgeo, streakMat);
+  streaks.frustumCulled = false; streaks.visible = false;
+  scene.add(streaks);
+
   return {
     sunDir,
     /** 0 when the planet hides the sun, 1 when it is in plain view (for the HUD's lens flare) */
@@ -361,9 +387,14 @@ export function createEnvironment(scene, renderer, opts) {
       const a = Math.acos(THREE.MathUtils.clamp(pDir.dot(sunDir), -1, 1));
       return THREE.MathUtils.smoothstep(a, pAng - 0.02, pAng + 0.06);
     },
-    update(camera) {
+    /** vel: the viewer's velocity (m/s); fast flight swaps the dust specks for streaks */
+    update(camera, vel = null) {
       skyGroup.position.copy(camera.position);
       dustMat.uniforms.uCam.value.copy(camera.position);
+      const spd = vel ? vel.length() : 0;
+      dustMat.uniforms.uSpd.value = spd;
+      streaks.visible = spd > 700;
+      if (streaks.visible) { streakMat.uniforms.uCam.value.copy(camera.position); streakMat.uniforms.uVel.value.copy(vel); }
     },
     /** pixel ratio the scene is drawn at (stars keep their size in screen pixels) */
     setPixelRatio(pr) { starMat.uniforms.uPR.value = pr; },
