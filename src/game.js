@@ -10,6 +10,7 @@ import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
 import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
+import { WeaponsFx, WFX_TIME } from './weapons-fx.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
@@ -59,6 +60,22 @@ const PLASMA = {
   foe: { core: new THREE.Color(3.8, 0.9, 1.9), halo: new THREE.Color(2.6, 0.35, 0.9), trail: new THREE.Color(2.2, 0.3, 0.8) },
   heavy: { core: new THREE.Color(3.2, 1.4, 3.8), halo: new THREE.Color(1.9, 0.5, 2.8), trail: new THREE.Color(1.5, 0.4, 2.2) },
 };
+/** ion tail: bright at the head, fading to nothing at the tip, with bands rippling backwards */
+function plasmaTail(col) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uCol: { value: col.clone().multiplyScalar(0.5) }, uTime: WFX_TIME },
+    vertexShader: `varying vec2 vUv; varying float vF;
+      void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vF = abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))); gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform vec3 uCol; uniform float uTime; varying vec2 vUv; varying float vF;
+      void main(){ float k = 1.0 - vUv.y; float band = 0.7 + 0.3 * sin(vUv.y * 26.0 - uTime * 45.0);
+        gl_FragColor = vec4(uCol * k * k * band * (0.35 + 0.65 * vF), 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+}
 function missileRes() {
   if (MISSILE) return MISSILE;
   const shared = (o) => { o.userData.shared = true; return o; };
@@ -68,7 +85,7 @@ function missileRes() {
   for (const [k, c] of Object.entries(PLASMA)) {
     mats[k] = {
       core: shared(new THREE.MeshBasicMaterial({ color: c.core, toneMapped: false })),
-      tail: shared(new THREE.MeshBasicMaterial({ color: c.halo.clone().multiplyScalar(0.35), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+      tail: shared(plasmaTail(c.halo)),
       halo: shared(new THREE.SpriteMaterial({ map: glowTexture(), color: c.halo, blending: THREE.AdditiveBlending, depthWrite: false })),
     };
   }
@@ -112,12 +129,8 @@ export class Game {
     this.mode = 'idle';
     this.paused = false;
     this.pilots = [];
-    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = [];
+    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = [];
     this.boltPool = [];
-    this.boltGeo = new THREE.BoxGeometry(0.55, 0.55, 18);
-    this.boltGeo.userData.shared = true;
-    this.boltMats = {};
-    for (const k of ['ally', 'foe', 'turret', 'turretFoe']) { this.boltMats[k] = new THREE.MeshBasicMaterial({ color: COL[k] }); this.boltMats[k].userData.shared = true; }
     this.safeL = 0; this.safeR = 0;
     this.last = 0;
     this.resize();
@@ -224,7 +237,8 @@ export class Game {
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
     this.fx = new Fx(this.scene, this.quality);
-    this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = []; this.impHintShown = false;
+    this.wfx = new WeaponsFx(this.scene, this.fx); // bolts, muzzle flashes, impacts, neutron beams
+    this.ships = []; this.bolts = []; this.missiles = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = []; this.impHintShown = false;
     this.composer = this.makeComposer(this.camera);
     this.resize();
   }
@@ -539,18 +553,17 @@ export class Game {
 
   fwd(s, out) { return out.copy(FWD).applyQuaternion(s.quat); }
 
+  /** matKey: the bolt's look (ally, foe, turret, turretFoe); WeaponsFx draws all bolts in one call */
   spawnBolt(pos, dir, owner, dmg, matKey) {
     let b = this.boltPool.pop();
-    if (!b) b = { mesh: new THREE.Mesh(this.boltGeo, this.boltMats[matKey]), vel: new THREE.Vector3(), prev: new THREE.Vector3() };
-    b.mesh.material = this.boltMats[matKey];
-    b.mesh.position.copy(pos);
-    m1.lookAt(dir, ZERO, UP);
-    b.mesh.quaternion.setFromRotationMatrix(m1);
+    if (!b) b = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), prev: new THREE.Vector3() };
+    b.key = matKey;
+    b.pos.copy(pos);
     b.vel.copy(dir).multiplyScalar(BOLT_SPEED);
     b.prev.copy(pos);
-    b.life = this.mode === 'cut' ? 3 : BOLT_LIFE; b.team = owner.team; b.owner = owner; b.dmg = dmg;
-    this.scene.add(b.mesh);
+    b.life = b.life0 = this.mode === 'cut' ? 3 : BOLT_LIFE; b.team = owner.team; b.owner = owner; b.dmg = dmg;
     this.bolts.push(b);
+    this.wfx.muzzle(pos, owner, matKey);
   }
 
   fire(s, dir) {
@@ -645,35 +658,15 @@ export class Game {
       this.damage(h, s.isPlayer || s.team !== 0 ? dmg : dmg * 0.35, s, end);
     }
     if (s.isPlayer) this.stats.shots += 1;
-    this.addBeam(from, fwd, end, !!hit);
+    this.addBeam(from, fwd, end, !!hit, s);
     if (this.ear(from) < 1500) this.audio.lance(Math.max(0.3, 1 - this.ear(from) / 1500));
     return hit?.ship || null;
   }
 
   /** Beam visual: a curve that leaves the emitter straight ahead and bends onto the hit point. */
-  addBeam(from, fwd, end, impact) {
-    const len = from.distanceTo(end);
-    const ctrl = from.clone().addScaledVector(fwd, len * 0.45);
-    const curve = new THREE.QuadraticBezierCurve3(from.clone(), ctrl, end.clone());
-    const seg = Math.max(8, Math.min(40, Math.round(len / 40)));
-    const mk = (r, color, op) => new THREE.Mesh(
-      new THREE.TubeGeometry(curve, seg, r, 6, false),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-    );
-    const g = new THREE.Group();
-    const core = mk(0.5, LANCE_COL.core, 1), glow = mk(2.2, LANCE_COL.glow, 0.6), haze = mk(6, LANCE_COL.glow, 0.16);
-    // crackling arc wound round the beam, re-rolled every few frames
-    const n = seg * 3 + 1;
-    const arcGeo = new THREE.BufferGeometry();
-    arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-    const arc = new THREE.Line(arcGeo, new THREE.LineBasicMaterial({ color: LANCE_COL.arc, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-    arc.frustumCulled = false;
-    g.add(haze, glow, core, arc);
-    this.scene.add(g);
-    const pts = curve.getSpacedPoints(n - 1);
-    const b = { g, core, glow, haze, arc, pts, life: LANCE.life, rollT: 0 };
-    this.rollArc(b);
-    this.beams.push(b);
+  addBeam(from, fwd, end, impact, owner = null) {
+    const ctrl = tL1.copy(from).addScaledVector(fwd, from.distanceTo(end) * 0.45);
+    this.wfx.beam(from, ctrl, end, LANCE.life, LANCE_COL.core, LANCE_COL.glow, LANCE_COL.arc, owner);
     // emitter flash and, where it strikes, a white-hot ion burst
     this.fx.flash(from, 7, LANCE_COL.core, 0.12);
     if (impact) {
@@ -684,35 +677,6 @@ export class Game {
       this.fx.sparks(end, LANCE_COL.arc, 24, 160);
       this.fx.light(end, 4 * k, 0.35, 0x66bbff);
       this.audio.plasmaHit(Math.max(0, 0.7 - this.ear(end) / 2500));
-    }
-  }
-
-  rollArc(b) {
-    const a = b.arc.geometry.attributes.position, pts = b.pts, n = pts.length;
-    for (let i = 0; i < n; i++) {
-      const p = pts[i], j = i === 0 || i === n - 1 ? 0 : rnd(0.6, 2.4);
-      tL1.randomDirection().multiplyScalar(j);
-      a.setXYZ(i, p.x + tL1.x, p.y + tL1.y, p.z + tL1.z);
-    }
-    a.needsUpdate = true;
-  }
-
-  updateBeams(dt) {
-    for (let i = this.beams.length - 1; i >= 0; i--) {
-      const b = this.beams[i];
-      b.life -= dt;
-      const k = Math.max(0, b.life / LANCE.life);
-      b.core.material.opacity = Math.min(1, k * 1.6);
-      b.glow.material.opacity = 0.6 * k * (0.8 + Math.random() * 0.3);
-      b.haze.material.opacity = 0.16 * k;
-      b.arc.material.opacity = k > 0.25 ? 0.9 : k * 3.6;
-      b.rollT -= dt;
-      if (b.rollT <= 0) { b.rollT = 0.035; this.rollArc(b); }
-      if (b.life <= 0) {
-        this.scene.remove(b.g);
-        disposeObj(b.g);
-        this.beams.splice(i, 1);
-      }
     }
   }
 
@@ -1979,7 +1943,7 @@ export class Game {
 
   updateBolts(dt) {
     for (let i = this.bolts.length - 1; i >= 0; i--) {
-      const b = this.bolts[i], pos = b.mesh.position;
+      const b = this.bolts[i], pos = b.pos;
       b.prev.copy(pos);
       pos.addScaledVector(b.vel, dt);
       b.life -= dt;
@@ -1997,20 +1961,20 @@ export class Game {
               t2.copy(b.prev).lerp(pos, j / n);
               if (this.hullDist(s, t2, t1) < 2.5) { hp = t2; break; }
             }
-            if (hp) { this.damage(s, b.dmg, b.owner, hp); hit = true; break; }
+            if (hp) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, hp); this.wfx.impact(hp, b.key, sh, b.vel); hit = true; break; }
           } else {
             t1.copy(pos).sub(b.prev);
             const len2 = t1.lengthSq();
             const k = THREE.MathUtils.clamp(t2.copy(s.pos).sub(b.prev).dot(t1) / len2, 0, 1);
             t2.copy(b.prev).addScaledVector(t1, k);
             const rr = s.isPlayer ? s.radius * 0.85 : Math.max(s.radius * 1.15, (s.def.modelR || 0) * 0.92);
-            if (t2.distanceToSquared(s.pos) < rr * rr) { this.damage(s, b.dmg, b.owner, t2); hit = true; break; }
+            if (t2.distanceToSquared(s.pos) < rr * rr) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, t2); this.wfx.impact(t2, b.key, sh, b.vel); hit = true; break; }
           }
         }
       }
       if (!hit) {
         for (const a of this.asteroids) {
-          if (rockDepth(a, pos) > 0) { this.fx.sparks(pos, COL.spark, 4, 40); hit = true; break; }
+          if (rockDepth(a, pos) > 0) { this.fx.sparks(pos, COL.spark, 4, 40); this.wfx.impact(pos, b.key, false, b.vel); hit = true; break; }
         }
       }
       if (!hit && b.team === 0) {
@@ -2023,7 +1987,6 @@ export class Game {
         }
       }
       if (hit) {
-        this.scene.remove(b.mesh);
         this.bolts.splice(i, 1);
         this.boltPool.push(b);
       }
@@ -2031,7 +1994,6 @@ export class Game {
   }
 
   updateMissiles(dt) {
-    this.updateBeams(dt);
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i];
       m.life -= dt;
@@ -2055,6 +2017,8 @@ export class Game {
       if (Math.random() < dt * 14) this.fx.particle(m.pos.x, m.pos.y, m.pos.z, rnd(-30, 30), rnd(-30, 30), rnd(-30, 30), pc.r * 1.5, pc.g * 1.5, pc.b * 1.5, 1.2, 0.18, 2);
       m.phase += dt * 32;
       m.glow.scale.setScalar(m.glow.userData.base * (0.85 + Math.sin(m.phase) * 0.15 + Math.random() * 0.06));
+      // white-hot, flickering head with a four-point flare
+      this.wfx.spot(m.pos, PLASMA[m.kind].halo, (m.torpedo ? 8 : 5.5) * (0.9 + Math.random() * 0.2), m.phase * 0.05, 0.8);
       let boom = m.life <= 0;
       if (!boom) {
         for (const s of this.ships) {
@@ -2084,6 +2048,7 @@ export class Game {
         this.missiles.splice(i, 1);
       }
     }
+    this.wfx.update(dt, this.bolts, BOLT_SPEED);
   }
 }
 
