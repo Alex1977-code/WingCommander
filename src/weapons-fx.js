@@ -94,7 +94,7 @@ const BOLT_FS = /* glsl */ `
     float t = clamp(vQ.x / (vLw + 1.0) * 0.5 + 0.5, 0.0, 1.0); // 0 tail .. 1 head
     float h = 1.0 - r;
     float glow = exp(-r * r * 7.0) * 0.7 + h * h * h * 0.3;
-    float core = smoothstep(0.3, 0.05, r);
+    float core = 1.0 - smoothstep(0.05, 0.3, r);
     gl_FragColor = vec4(vHalo * glow * (0.3 + 0.7 * t) + vCore * core * (0.45 + 0.55 * t), 1.0);
     ${OUT}
   }`;
@@ -192,7 +192,7 @@ export class WeaponsFx {
     this.boltMat = new THREE.ShaderMaterial({
       // with bloom ('high') the halo is partly drawn by the bloom pass, so the bolt's own halo is fainter
       uniforms: { uPx: this.boltPx, uHalo: { value: this.hi ? 0.7 : 1 } }, vertexShader: BOLT_VS, fragmentShader: BOLT_FS,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, // winding follows the bolt's direction
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true, // winding follows the bolt's direction
     });
     this.bolts = new THREE.Mesh(this.makeBoltGeo(512), this.boltMat);
     this.bolts.frustumCulled = false;
@@ -231,7 +231,7 @@ export class WeaponsFx {
       };
       const m = new THREE.Mesh(beamGeo, new THREE.ShaderMaterial({
         uniforms: u, vertexShader: BEAM_VS, fragmentShader: BEAM_FS,
-        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
       }));
       m.frustumCulled = false;
       m.visible = false;

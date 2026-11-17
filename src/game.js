@@ -70,7 +70,7 @@ function plasmaTail(col) {
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
-    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true,
   });
 }
 function missileRes() {
@@ -237,12 +237,15 @@ export class Game {
     this.resize();
   }
 
-  /** start compiling the scene's shaders now (in parallel where the driver allows), not on the first visible frame */
+  /**
+   * Compile the scene's shaders now, during the fade, not on the first visible frame. Synchronous on purpose:
+   * three's compileAsync keeps polling materials that a quick scene change may already have disposed.
+   */
   compileScene(cam = this.camera) {
     const prev = this.renderer.getRenderTarget();
     try {
       this.renderer.setRenderTarget(this.quality === 'high' && this.composer ? this.composer.readBuffer : null);
-      this.renderer.compileAsync?.(this.scene, cam)?.catch?.(() => {});
+      this.renderer.compile(this.scene, cam);
     } catch { /* only an optimisation */ } finally { this.renderer.setRenderTarget(prev); }
   }
 

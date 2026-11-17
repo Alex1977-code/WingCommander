@@ -255,7 +255,7 @@ class Streaks {
     this.mat = new THREE.ShaderMaterial({
       uniforms: { uMinW: { value: 0.001 } },
       vertexShader: STREAK_VERT, fragmentShader: STREAK_FRAG,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
@@ -374,7 +374,7 @@ function ringMaterial() {
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
-    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
   });
 }
 
@@ -422,7 +422,7 @@ function shieldMaterial() {
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
-    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
   });
 }
 

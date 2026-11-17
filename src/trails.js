@@ -99,7 +99,7 @@ function plumeMaterial(color) {
     plumeMats.set(k, shared(new THREE.ShaderMaterial({
       uniforms: { uColor: { value: color.clone() }, uHot: { value: hotOf(color) }, uTime: CLOCK },
       vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
     })));
   }
   return plumeMats.get(k);
@@ -211,7 +211,7 @@ export class Trails {
     this.mat = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 }, uLife: { value: this.life }, uK: { value: hi ? 0.3 : 0.34 } },
       vertexShader: TRAIL_VERT, fragmentShader: TRAIL_FRAG,
-      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
     });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
