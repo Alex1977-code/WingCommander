@@ -10,10 +10,11 @@ import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
  * no extra pass: edge-only chromatic fringe, ACES, a gentle teal/orange split tone, vignette and fine grain.
  * 'low' never builds any of this and renders straight to the canvas.
  */
-const BLOOM = { strength: 0.72, radius: 0.4, threshold: 0.9 };
+// narrow knee: env.js caps planets/stars at 0.85 so they never glow; only HDR emitters (> 0.9) do
+const BLOOM = { strength: 0.72, radius: 0.4, threshold: 0.9, knee: 0.05 };
 
 /**
- * Bloom bright-pass with a soft knee: only the energy above the threshold glows, and very hot pixels
+ * Bloom bright-pass with a narrow soft knee: only the energy above the threshold glows, and very hot pixels
  * (engine cores, laser bolts at HDR 5-10) are compressed so their halo stays a soft glow instead of
  * flooding the hull around them. Same uniforms as three's LuminosityHighPassShader.
  */
@@ -61,8 +62,19 @@ void main() {
   vec2 ca = d * (0.003 * r2 * r2);
   vec3 c = vec3(texture2D(tDiffuse, vUv - ca).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv + ca).b);
   c = clamp(c, 0.0, 1e4);
-  #ifdef ACES_FILMIC_TONE_MAPPING
+  // same ladder as three's OutputShader (the define follows renderer.toneMapping)
+  #if defined( LINEAR_TONE_MAPPING )
+    c = LinearToneMapping(c);
+  #elif defined( REINHARD_TONE_MAPPING )
+    c = ReinhardToneMapping(c);
+  #elif defined( CINEON_TONE_MAPPING )
+    c = CineonToneMapping(c);
+  #elif defined( ACES_FILMIC_TONE_MAPPING )
     c = ACESFilmicToneMapping(c);
+  #elif defined( AGX_TONE_MAPPING )
+    c = AgXToneMapping(c);
+  #elif defined( NEUTRAL_TONE_MAPPING )
+    c = NeutralToneMapping(c);
   #endif
   c = sRGBTransferOETF(vec4(c, 1.0)).rgb;
   // split tone: cool teal shadows, warm highlights, a touch more saturation in the mids
@@ -71,12 +83,21 @@ void main() {
   c += sh * vec3(-0.012, 0.010, 0.020) * (0.4 + l * 4.0) + hi * vec3(0.030, 0.008, -0.030);
   c = mix(vec3(l), c, 1.08);
   // vignette, round regardless of aspect
-  c *= mix(1.0, smoothstep(1.25, 0.25, r2), 0.32);
+  c *= mix(1.0, 1.0 - smoothstep(0.25, 1.25, r2), 0.32);
   // fine grain, strongest in the mids, also dithers the 8-bit gradients of the nebula
   float n = hash12(gl_FragCoord.xy + uSeed) - 0.5;
   c += n * (0.022 * (1.0 - l * 0.7));
   gl_FragColor = vec4(max(c, 0.0), 1.0);
 }`;
+
+const TONE_DEFINES = {
+  [THREE.LinearToneMapping]: 'LINEAR_TONE_MAPPING',
+  [THREE.ReinhardToneMapping]: 'REINHARD_TONE_MAPPING',
+  [THREE.CineonToneMapping]: 'CINEON_TONE_MAPPING',
+  [THREE.ACESFilmicToneMapping]: 'ACES_FILMIC_TONE_MAPPING',
+  [THREE.AgXToneMapping]: 'AGX_TONE_MAPPING',
+  [THREE.NeutralToneMapping]: 'NEUTRAL_TONE_MAPPING',
+};
 
 class FilmPass extends Pass {
   constructor() {
@@ -99,7 +120,8 @@ class FilmPass extends Pass {
     // the tone-mapping define is set once per renderer setting (the game never changes it mid-fight)
     if (this.toneMapping !== renderer.toneMapping) {
       this.toneMapping = renderer.toneMapping;
-      this.material.defines = renderer.toneMapping === THREE.ACESFilmicToneMapping ? { ACES_FILMIC_TONE_MAPPING: '' } : {};
+      const def = TONE_DEFINES[renderer.toneMapping];
+      this.material.defines = def ? { [def]: '' } : {};
       this.material.needsUpdate = true;
     }
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
@@ -116,12 +138,32 @@ export function makeComposer(renderer, scene, camera) {
   // the resolution is only the start value: the composer resizes the bloom chain to half the render size
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const bloom = new UnrealBloomPass(size, BLOOM.strength, BLOOM.radius, BLOOM.threshold);
-  bloom.highPassUniforms.smoothWidth.value = 0.35;
+  bloom.highPassUniforms.smoothWidth.value = BLOOM.knee;
   bloom.materialHighPassFilter.fragmentShader = HIGH_PASS;
   bloom.materialHighPassFilter.needsUpdate = true;
   c.addPass(bloom);
   c.addPass(new FilmPass());
   return c;
+}
+
+/**
+ * Compile the post programs and allocate their render targets now (e.g. during the start fade) instead
+ * of on the first frame. Runs the chain once off-screen, without the scene pass (renderer.compile covers
+ * the scene): the film pass is a raw shader, so its program does not depend on the target.
+ */
+export function warmComposer(c) {
+  if (!c) return;
+  const r = c.renderer, prev = r.getRenderTarget(), scenePass = c.passes[0], toScreen = c.renderToScreen;
+  const was = scenePass.enabled;
+  try {
+    scenePass.enabled = false;
+    c.renderToScreen = false;
+    c.render(0);
+  } catch { /* warming is only an optimisation */ } finally {
+    scenePass.enabled = was;
+    c.renderToScreen = toScreen;
+    r.setRenderTarget(prev);
+  }
 }
 
 export function disposeComposer(c) {

@@ -32,10 +32,13 @@ const PLUME_VERT = `
       return;
     }
     vec3 ax = axW / len;
-    vec3 p = o + axW * corner.x;
+    // close to the camera (own ship in chase view) the plume shortens and fades: no 'searchlight'
+    // beams towards the lens, and less fill on phones; the glow billboard keeps the hot spot
+    vec3 p = o + axW * corner.x * mix(0.45, 1.0, smoothstep(8.0, 40.0, distance(cameraPosition, o)));
     vec3 sd = cross(ax, normalize(cameraPosition - p));
     float s = length(sd);
-    vFace = smoothstep(0.06, 0.45, s); // seen end-on the glow carries the look
+    vFace = smoothstep(0.06, 0.45, s) // seen end-on the glow carries the look
+          * smoothstep(8.0, 40.0, distance(cameraPosition, p));
     p += (s > 1e-4 ? sd / s : vec3(0.0)) * corner.y * wid * 0.25;
     gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   }`;
@@ -142,16 +145,24 @@ const TRAIL_VERT = `
   void main(){
     float age = uTime - tw.x;
     float k = age / uLife;
-    if (k >= 1.0 || k < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vA = 0.0; vCol = vec3(0.0); vSide = 0.0; return; }
+    vSide = float(gl_VertexID & 1) * 2.0 - 1.0;
+    if (k >= 1.0 || k < 0.0) {
+      // dead point: stays where it is with no width and no alpha, so its segments collapse
+      gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.0);
+      vA = 0.0; vCol = vec3(0.0);
+      return;
+    }
     vec3 toCam = cameraPosition - position;
     float dc = length(toCam);
     vec3 sd = cross(dir, toCam / dc);
     float s = length(sd);
     sd = s > 1e-4 ? sd / s : vec3(0.0);
-    vSide = float(gl_VertexID & 1) * 2.0 - 1.0;
-    vec3 p = position + sd * vSide * tw.y * (0.5 + k * 1.5); // the exhaust spreads as it cools
-    // fade in behind the nozzle (the plume covers that part), out with age and right at the camera
-    vA = (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.08, age) * smoothstep(12.0, 70.0, dc);
+    float w = tw.y * (0.5 + k * 1.5);                // the exhaust spreads as it cools
+    float wd = max(w, dc * 0.0015);                  // at least ~1.5 px: far ribbons stay lines, not crawling dots
+    vec3 p = position + sd * vSide * wd;
+    // fade in behind the nozzle (the plume covers that part), out with age and right at the camera;
+    // a widened ribbon dims by the same ratio, so its brightness on screen stays the same
+    vA = (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.08, age) * smoothstep(12.0, 70.0, dc) * (w / wd);
     vCol = tcol * mix(vec3(1.0), vec3(0.7, 0.55, 0.9), k); // cools slightly towards violet
     gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   }`;
@@ -172,7 +183,7 @@ export class Trails {
   constructor(scene, quality) {
     const hi = quality === 'high';
     this.N = hi ? 22 : 14;          // points per ribbon
-    this.max = hi ? 64 : 32;        // ribbons
+    this.max = hi ? 64 : 48;        // ribbons
     this.step = hi ? 1 / 36 : 1 / 24; // seconds between frozen points
     this.life = (this.N - 2) * this.step;
     this.time = 0; this.frame = 0;
@@ -206,21 +217,42 @@ export class Trails {
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 2;
     scene.add(this.mesh);
-    // per ribbon: owner engine, frame last fed, time since the last frozen point, live flag
+    // per ribbon: owner engine, frame last fed, time since the last frozen point, live flag,
+    // time claimed, priority owner (the player's ship)
     this.owner = new Array(this.max).fill(null);
     this.fed = new Int32Array(this.max).fill(-1);
     this.acc = new Float32Array(this.max);
     this.used = new Uint8Array(this.max);
+    this.born = new Float32Array(this.max);
+    this.pri = new Uint8Array(this.max);
     this.top = 0; // ribbons [0, top) may be live
   }
 
-  claim(e) {
+  /**
+   * A ribbon for engine e: a free one, else the fading one closest to its end, else (priority
+   * engines only) the oldest live ribbon of a non-priority engine. Non-priority engines never take
+   * a live ribbon, so a full pool cannot make them steal from each other every frame.
+   */
+  claim(e, pri) {
     let id = -1;
     for (let i = 0; i < this.max; i++) if (!this.used[i]) { id = i; break; }
-    if (id < 0) for (let i = 0; i < this.max; i++) if (this.fed[i] !== this.frame && this.fed[i] !== this.frame - 1) { id = i; break; } // steal one that is fading out
+    if (id < 0) {
+      const b = this.buf, S2 = this.N * 2 * STRIDE;
+      let best = Infinity;
+      for (let i = 0; i < this.max; i++) {
+        if (this.fed[i] === this.frame || this.fed[i] === this.frame - 1) continue;
+        const t = b[i * S2 + 6]; // newest point
+        if (t < best) { best = t; id = i; }
+      }
+    }
+    if (id < 0 && pri) {
+      let best = Infinity;
+      for (let i = 0; i < this.max; i++) if (!this.pri[i] && this.born[i] < best) { best = this.born[i]; id = i; }
+    }
     if (id < 0) return -1;
     if (this.owner[id] && this.owner[id].userData.trail === id) this.owner[id].userData.trail = -1;
     this.used[id] = 1; this.owner[id] = e; e.userData.trail = id;
+    this.born[id] = this.time; this.pri[id] = pri ? 1 : 0;
     this.top = Math.max(this.top, id + 1);
     return id;
   }
@@ -237,17 +269,22 @@ export class Trails {
 
   /**
    * Engine group e (see exhaust()) is at world position p this frame. width: ribbon half width,
-   * c: [r, g, b] colour. Call once per frame for every engine that should leave a trail.
+   * c: [r, g, b] colour. pri: the player's engines, which always get a ribbon (taken from
+   * another ship if the pool is full). Call once per frame for every engine that should leave a trail.
    */
-  feed(e, p, width, c, dt) {
+  feed(e, p, width, c, dt, pri = false) {
     let id = e.userData.trail ?? -1;
     if (id < 0 || this.owner[id] !== e) id = -1;
     const N = this.N, b = this.buf, S = STRIDE;
-    const head = id >= 0 ? (id * N) * 2 * S : 0;
-    // a jump (spawn, autopilot, cut-scene hop) starts a fresh ribbon instead of a streak across space
-    if (id >= 0 && (p.x - b[head]) ** 2 + (p.y - b[head + 1]) ** 2 + (p.z - b[head + 2]) ** 2 > 400 * 400) id = -1;
-    if (id < 0) {
-      id = this.claim(e);
+    let fresh = id < 0;
+    // a jump (spawn, autopilot, cut-scene hop) restarts the ribbon instead of a streak across space
+    if (!fresh) {
+      const head = (id * N) * 2 * S;
+      fresh = (p.x - b[head]) ** 2 + (p.y - b[head + 1]) ** 2 + (p.z - b[head + 2]) ** 2 > 400 * 400;
+      if (fresh) { this.born[id] = this.time; this.pri[id] = pri ? 1 : 0; }
+    }
+    if (fresh) {
+      if (id < 0) id = this.claim(e, pri);
       if (id < 0) return;
       for (let i = 0; i < N; i++) this.put(id, i, p.x, p.y, p.z, 0, 0, 1, i ? DEAD : this.time, width, c);
       this.acc[id] = 0;
@@ -279,7 +316,7 @@ export class Trails {
       if (!this.used[id]) continue;
       // not fed this frame: fades where it is; back to the pool once its newest point is too old
       if (this.fed[id] !== this.frame && this.time - b[(id * N) * 2 * S + 6] > this.life) {
-        this.used[id] = 0;
+        this.used[id] = 0; this.pri[id] = 0;
         if (this.owner[id]?.userData.trail === id) this.owner[id].userData.trail = -1;
         this.owner[id] = null;
         for (let i = 0; i < N * 2; i++) b[(id * N * 2 + i) * S + 6] = DEAD;

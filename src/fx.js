@@ -139,7 +139,7 @@ class Particles {
       uniforms: { uScale: { value: 600 }, uTex: { value: additive ? null : puffTexture() } },
       vertexShader: additive ? VERT : SMOKE_VERT,
       fragmentShader: additive
-        ? `varying vec4 vCol; void main(){ float d = length(gl_PointCoord - 0.5) * 2.0; float a = smoothstep(1.0, 0.0, d); gl_FragColor = vec4(vCol.rgb * a * a * vCol.a, 1.0); }`
+        ? `varying vec4 vCol; void main(){ float d = length(gl_PointCoord - 0.5) * 2.0; float a = 1.0 - smoothstep(0.0, 1.0, d); gl_FragColor = vec4(vCol.rgb * a * a * vCol.a, 1.0); }`
         : SMOKE_FRAG,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       depthWrite: false,
@@ -311,7 +311,7 @@ function fireballMaterial(hi) {
   return new THREE.ShaderMaterial({
     uniforms: { uAge: { value: 0 }, uSeed: { value: new THREE.Vector3() }, uFade: { value: 1 }, uHot: { value: 1.05 } },
     vertexShader: `uniform float uAge; uniform vec3 uSeed;
-      varying vec3 vP; varying vec3 vN; varying vec3 vV;
+      varying vec3 vP; varying vec3 vN; varying vec3 vV; varying float vIn;
       ${NOISE}
       void main(){
         vec3 q = position * 1.6 + uSeed + vec3(0.0, uAge * 1.3, 0.0);
@@ -320,10 +320,13 @@ function fireballMaterial(hi) {
         vP = position;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         vN = normalize(normalMatrix * normal); vV = -mv.xyz;
+        // 0 while the camera is clear of the ball, 1 once it is inside: back faces are drawn only then
+        float cd = length(cameraPosition - modelMatrix[3].xyz) / length(modelMatrix[0].xyz);
+        vIn = clamp((1.35 - cd) / 0.35, 0.0, 1.0);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `uniform float uAge; uniform vec3 uSeed; uniform float uFade; uniform float uHot;
-      varying vec3 vP; varying vec3 vN; varying vec3 vV;
+      varying vec3 vP; varying vec3 vN; varying vec3 vV; varying float vIn;
       ${NOISE}
       float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < ${OCT}; i++){ s += a * vnoise(p); p = p * 2.07 + vec3(3.1, 1.7, 5.3); a *= 0.5; } return s / ${(1 - Math.pow(0.5, OCT)).toFixed(4)}; }
       vec3 ramp(float t){
@@ -333,16 +336,19 @@ function fireballMaterial(hi) {
         return mix(c, vec3(2.4, 1.95, 1.4), smoothstep(0.78, 1.05, t));
       }
       void main(){
-        float face = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
+        if (!gl_FrontFacing && vIn <= 0.0) discard; // seen from outside: skip the far side before any noise
+        float face = clamp(dot(normalize(gl_FrontFacing ? vN : -vN), normalize(vV)), 0.0, 1.0);
         float n = fbm(vP * 2.1 + uSeed + vec3(0.0, -uAge * 1.8, uAge * 0.9));
         // hot where the shell is thick (facing us) and early on; cooler in the turbulent edges
         float t = uHot - pow(uAge, 0.7) * 1.25 + (n - 0.5) * 1.3 + face * 0.35;
         float a = smoothstep(uAge * 1.05 - 0.15, uAge * 1.05 + 0.2, n * 0.9 + face * 0.45) * smoothstep(0.0, 0.6, face + (n - 0.5) * 0.5) * uFade; // ragged silhouette
+        if (!gl_FrontFacing) a *= 0.5 * vIn; // engulfed: a dimmer inner shell instead of nothing
         gl_FragColor = vec4(ramp(t), a);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
-    depthWrite: false, transparent: true,
+    // one pass for both sides (the default two-pass DoubleSide would double the draws)
+    depthWrite: false, transparent: true, side: THREE.DoubleSide, forceSinglePass: true,
   });
 }
 
@@ -359,10 +365,10 @@ function ringMaterial() {
       }`,
     fragmentShader: `uniform float uK; uniform float uW; uniform vec3 uColor; uniform float uSeed; varying vec2 vUv;
       void main(){
-        float ang = atan(vUv.y, vUv.x);
+        float ang = atan(vUv.y, vUv.x + 1e-5); // never atan(0,0)
         float d = length(vUv) + (0.012 * sin(ang * 7.0 + uSeed) + 0.006 * sin(ang * 17.0 - uSeed * 2.3)) * (1.0 - uK);
         float x = clamp((1.0 - d) / uW, 0.0, 1.0);
-        float band = smoothstep(1.0, 0.985, d) * (1.0 - x) * (1.0 - x);
+        float band = (1.0 - smoothstep(0.985, 1.0, d)) * (1.0 - x) * (1.0 - x);
         vec3 col = uColor * band * 0.7 + vec3(0.6) * pow(band, 6.0) * uK; // kept modest: a bloomed ring fills in
         gl_FragColor = vec4(col * uK, 1.0);
         #include <tonemapping_fragment>
@@ -470,7 +476,7 @@ export class Fx {
     this.fireballs = [];
     const fbGeo = new THREE.IcosahedronGeometry(1, hi ? 3 : 2);
     fbGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1.5); // room for the displacement
-    for (let i = 0; i < (hi ? 24 : 12); i++) {
+    for (let i = 0; i < (hi ? 32 : 12); i++) {
       const m = new THREE.Mesh(fbGeo, fireballMaterial(hi));
       m.visible = false; m.renderOrder = 1.5;
       scene.add(m);
@@ -500,19 +506,12 @@ export class Fx {
       const m = new THREE.Mesh(sGeo, shieldMaterial());
       m.visible = false;
       scene.add(m);
-      this.shields.push({ m, life: 0, ship: null });
+      this.shields.push({ m, life: 0, ship: null, k0: 0 });
     }
     // delayed secondary blasts of a dying capital ship
     this.pending = [];
     for (let i = 0; i < 16; i++) this.pending.push({ p: new THREE.Vector3(), size: 1, t: 0, on: false });
-    // one of each shader-bearing object, made visible only while Game.prewarm compiles the scene
-    this.warmSet = [this.fireballs[0].m, this.rings[0].m, this.shields[0].m, this.streaks.mesh, this.lenses[0].s, this.debris[0].m];
-  }
-
-  /** show (true) / hide (false) one object of each effect type so renderer.compile() builds their shaders up front */
-  warm(on) {
-    for (const o of this.warmSet) o.visible = on;
-    if (!on) this.streaks.mesh.visible = this.streaks.live > 0;
+    // no warm-up needed: renderer.compile() gathers materials of hidden objects too (the pooled lights stay visible)
   }
 
   // ---- primitives ----
@@ -561,12 +560,13 @@ export class Fx {
     L.life = L.max = life; L.peak = peak;
     L.l.intensity = peak;
   }
-  /** one turbulent fireball of radius r, starting after `delay` seconds */
-  fireball(p, r, life, delay = 0) {
-    let f = this.fireballs[0], best = -1;
+  /** one turbulent fireball of radius r, starting after `delay` seconds; hot = starting temperature */
+  fireball(p, r, life, delay = 0, hot = 1.05) {
+    let f = this.fireballs[0], best = -Infinity;
     for (const x of this.fireballs) {
       if (!x.on) { f = x; break; }
-      const a = x.t / x.life; // otherwise recycle the most burnt-out one
+      // otherwise recycle the most burnt-out one, sparing balls much bigger than the new one (a vanishing big one pops)
+      const a = x.t / x.life - (x.r > r * 1.5 ? 0.6 : 0);
       if (a > best) { best = a; f = x; }
     }
     f.on = true; f.t = -delay; f.life = life; f.r = r; f.spin = (Math.random() - 0.5) * 0.8;
@@ -576,7 +576,7 @@ export class Fx {
     f.m.visible = delay <= 0;
     const u = f.m.material.uniforms;
     u.uSeed.value.set(Math.random() * 50, Math.random() * 50, Math.random() * 50);
-    u.uAge.value = 0; u.uFade.value = 1;
+    u.uAge.value = 0; u.uFade.value = 1; u.uHot.value = hot;
   }
   /** glowing embers / sparks with motion-blur trails */
   embers(p, n, speed, color, w = 0.5, life = 1.2, drag = 0.7, len = 0.05, cool = true) {
@@ -601,8 +601,20 @@ export class Fx {
   }
   /** hexagonal energy ripple on a ship's bubble, centred where the shot landed, in the ship's team colour */
   shield(ship, point) {
-    let sh = this.shields[0];
-    for (const x of this.shields) if (x.life <= 0) { sh = x; break; } else if (x.life < sh.life) sh = x;
+    // at most 2 slots per ship: re-aim its newest ripple if that one is still fresh, else a second one, else its older one
+    let own = null, own2 = null;
+    for (const x of this.shields) {
+      if (x.life <= 0 || x.ship !== ship) continue;
+      if (!own || x.life > own.life) { own2 = own; own = x; } else own2 = x;
+    }
+    let sh = null;
+    if (own && (own2 || SHIELD_LIFE - own.life < 0.2)) sh = own2 && SHIELD_LIFE - own.life >= 0.2 ? own2 : own;
+    if (!sh) {
+      sh = this.shields[0];
+      for (const x of this.shields) if (x.life <= 0) { sh = x; break; } else if (x.life < sh.life) sh = x;
+    }
+    // a re-aimed ripple starts from its current brightness instead of blinking out for the fade-in
+    sh.k0 = sh.life > 0 && sh.ship === ship ? Math.min(1, sh.m.material.uniforms.uK.value) : 0;
     sh.ship = ship; sh.life = SHIELD_LIFE;
     sh.m.scale.setScalar(ship.radius * (ship.def.capital ? 1.0 : 1.35));
     sh.m.position.copy(ship.pos);
@@ -623,13 +635,15 @@ export class Fx {
     const hi = this.hi, big = size >= 3;
     const R = 6 + 9 * size, life = Math.min(3.4, 1.3 + 0.24 * size);
     // 1. white flash, lens streak and a short, strong light that cools to orange
-    this.flash(p, 45 * size, hot || C_FLASH, 0.22);
-    this.lens(p, 110 * size, C_LENS, 0.3 + size * 0.04);
+    // sizes capped: a capital kill must not white out the screen (its fireball and rings carry the scale)
+    const fs = Math.min(size, 4);
+    this.flash(p, 45 * fs, hot || C_FLASH, 0.22);
+    this.lens(p, 110 * fs, C_LENS, 0.3 + fs * 0.04);
     this.light(p, Math.min(60000, 3200 * size * size), 0.5 + size * 0.1, C_LIGHT, true);
     // 2. the fireball, plus lobes so it is not a perfect sphere
-    this.fireball(p, R, life);
+    this.fireball(p, R, life, 0, size >= 6 ? 0.85 : 1.05); // the huge one starts orange-hot, not white
     // (the 0.13 s pops of a dying capital ship stay single-lobed so the pool is not churned)
-    const lobes = size >= 6 ? (hi ? 4 : 1) : size >= 1.5 ? (hi ? 1 : 0) : (hi ? 2 : 0);
+    const lobes = size >= 6 ? (hi ? 4 : 1) : size >= 1.5 ? 0 : (hi ? 2 : 0);
     for (let i = 0; i < lobes; i++) {
       tmp.randomDirection().multiplyScalar(R * (0.45 + Math.random() * 0.3)).add(p);
       this.fireball(tmp, R * (0.4 + Math.random() * 0.25), life * (0.65 + Math.random() * 0.25), Math.random() * (big ? 0.25 : 0.08));
@@ -759,7 +773,8 @@ export class Fx {
       const age = SHIELD_LIFE - sh.life, k = sh.life / SHIELD_LIFE;
       const u = sh.m.material.uniforms;
       u.uAge.value = age;
-      u.uK.value = Math.min(1, age * 25) * k * (0.4 + 0.6 * k);
+      const fin = Math.min(1, age * 25);
+      u.uK.value = (sh.k0 + (1 - sh.k0) * fin) * k * (0.4 + 0.6 * k);
     }
   }
 }

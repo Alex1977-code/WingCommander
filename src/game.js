@@ -8,7 +8,7 @@ import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
 import { Trails, thrust } from './trails.js';
 import { WeaponsFx, WFX_TIME } from './weapons-fx.js';
-import { makeComposer, disposeComposer } from './post.js';
+import { makeComposer, disposeComposer, warmComposer } from './post.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
@@ -192,15 +192,17 @@ export class Game {
     }
     const tmp = new THREE.Group();
     for (const t of types) { try { tmp.add(buildShip(t)); } catch { /* unknown type: skip */ } }
+    tmp.add(this.wfx.warmObjects(Object.values(missileRes().mats).map((m) => m.tail))); // ion tails + neutron beam shaders
     tmp.position.copy(this.pilots[0]?.camera.position || ZERO);
     this.scene.add(tmp);
     // on 'high' the scene renders into the bloom composer's float target: compile those shader variants
     const P0 = this.pilots[0], prev = this.renderer.getRenderTarget();
-    this.fx.warm?.(true); // pooled effects are hidden: show one of each so their shaders compile too
     try {
       this.renderer.setRenderTarget(this.quality === 'high' && P0?.composer ? P0.composer.readBuffer : null);
       this.renderer.compile(this.scene, P0?.camera || this.camera);
-    } catch { /* compile is only an optimisation */ } finally { this.renderer.setRenderTarget(prev); this.fx.warm?.(false); }
+      // bloom + film programs and their render targets, off-screen (each split-screen pilot has its own)
+      if (this.quality === 'high') for (const P of this.pilots) warmComposer(P.composer);
+    } catch { /* compile is only an optimisation */ } finally { this.renderer.setRenderTarget(prev); }
     this.scene.remove(tmp);
   }
 
@@ -235,6 +237,15 @@ export class Game {
     this.resize();
   }
 
+  /** start compiling the scene's shaders now (in parallel where the driver allows), not on the first visible frame */
+  compileScene(cam = this.camera) {
+    const prev = this.renderer.getRenderTarget();
+    try {
+      this.renderer.setRenderTarget(this.quality === 'high' && this.composer ? this.composer.readBuffer : null);
+      this.renderer.compileAsync?.(this.scene, cam)?.catch?.(() => {});
+    } catch { /* only an optimisation */ } finally { this.renderer.setRenderTarget(prev); }
+  }
+
   startAttract() {
     this.loadScene({ a: '#2456ff', b: '#b03cff', seed: 2.2, planet: ['#27475f', '#d1a877'], planetDir: [-0.75, -0.15, 0.4] });
     this.mode = 'attract';
@@ -243,6 +254,7 @@ export class Game {
     this.spawn('sperber', new THREE.Vector3(70, 22, 120), FWD).speed = 0;
     this.spawn('falke', new THREE.Vector3(92, 16, 96), FWD).speed = 0;
     this.spawn('greif', new THREE.Vector3(112, 10, 70), FWD).speed = 0;
+    this.compileScene();
     this.attractT = 0;
     this.camera.fov = 62; this.camera.updateProjectionMatrix();
     this.hud.clearRect(0, 0, this.w, this.h);
@@ -555,7 +567,7 @@ export class Game {
     b.prev.copy(pos);
     b.life = b.life0 = this.mode === 'cut' ? 3 : BOLT_LIFE; b.team = owner.team; b.owner = owner; b.dmg = dmg;
     this.bolts.push(b);
-    this.wfx.muzzle(pos, owner, matKey);
+    this.wfx.muzzle(pos, owner, matKey, this.ear(pos));
   }
 
   fire(s, dir) {
@@ -1674,6 +1686,7 @@ export class Game {
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(30, 8, 40);
       this.fx.update(dt);
+      this.trails.update(dt);
       this.env.update(this.camera);
       r.setScissorTest(false);
       r.setViewport(0, 0, this.w, this.h);
@@ -1843,7 +1856,7 @@ export class Game {
     const body = s.mesh.userData.body;
     for (const e of s.mesh.userData.engines) {
       t5.copy(e.position).applyQuaternion(body.quaternion).add(body.position).applyQuaternion(s.quat).add(s.pos);
-      this.trails.feed(e, t5, e.userData.r * (boost ? 0.9 : 0.55), e.userData.rgb, dt);
+      this.trails.feed(e, t5, e.userData.r * (boost ? 0.9 : 0.55), e.userData.rgb, dt, s.isPlayer);
     }
   }
 
@@ -1920,7 +1933,7 @@ export class Game {
       }
       if (s.dieT <= 0) {
         this.fx.explode(s.pos, 9);
-        this.fx.flash(s.pos, 1000, new THREE.Color(4, 3, 2), 0.7);
+        this.fx.flash(s.pos, 500, new THREE.Color(2, 1.5, 1), 0.4);
         this.scene.remove(s.mesh);
         disposeObj(s.mesh);
         this.dying.splice(i, 1);
@@ -1950,14 +1963,14 @@ export class Game {
               t2.copy(b.prev).lerp(pos, j / n);
               if (this.hullDist(s, t2, t1) < 2.5) { hp = t2; break; }
             }
-            if (hp) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, hp); this.wfx.impact(hp, b.key, sh, b.vel); hit = true; break; }
+            if (hp) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, hp); this.wfx.impact(hp, b.key, sh, b.vel, s); hit = true; break; }
           } else {
             t1.copy(pos).sub(b.prev);
             const len2 = t1.lengthSq();
             const k = THREE.MathUtils.clamp(t2.copy(s.pos).sub(b.prev).dot(t1) / len2, 0, 1);
             t2.copy(b.prev).addScaledVector(t1, k);
             const rr = s.isPlayer ? s.radius * 0.85 : Math.max(s.radius * 1.15, (s.def.modelR || 0) * 0.92);
-            if (t2.distanceToSquared(s.pos) < rr * rr) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, t2); this.wfx.impact(t2, b.key, sh, b.vel); hit = true; break; }
+            if (t2.distanceToSquared(s.pos) < rr * rr) { const sh = s.shield > 0; this.damage(s, b.dmg, b.owner, t2); this.wfx.impact(t2, b.key, sh, b.vel, s); hit = true; break; }
           }
         }
       }

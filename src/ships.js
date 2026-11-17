@@ -246,9 +246,12 @@ function fuselageGeo(noseR, bodyR, len, seg = 12) {
 }
 /** blackened, burnt metal round nozzles and gun muzzles */
 const SOOT = new THREE.MeshStandardMaterial({ color: 0x17130f, roughness: 0.95, metalness: 0.3 });
+/** white strobes / beacons: modest HDR, so they don't outshine the ship in chase view */
+const STROBE = new THREE.Color(1.6, 1.6, 1.6);
 /**
  * nozzle throat: the drive colour, dimmer than the hull glow so the exhaust core reads as the hot
- * spot. Fighters reuse their dimmed 'line' material (set by craft()), so no extra draw call.
+ * spot. Fighters reuse their dimmed 'line' material (set by craft()), so no extra draw call; their
+ * glowing disc is small (sooty ring round it), the plume's glow billboard carries the hot spot.
  */
 const THROAT = new Map();
 let craftThroat = null;
@@ -264,9 +267,15 @@ function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   const n = new THREE.CylinderGeometry(r, r * 0.8, r * 2.2, 12, 1, true);
   n.rotateX(Math.PI / 2);
   mk(group, n, darkMat, x, y, z);
-  const disc = new THREE.CircleGeometry(r * 0.85, 12);
+  const small = !!craftThroat, dr = small ? r * 0.6 : r * 0.85;
+  const disc = new THREE.CircleGeometry(dr, 12);
   disc.rotateY(Math.PI);
   mk(group, disc, throat(color), x, y, z - r * 0.9);
+  if (small) { // SOOT is already on every fighter (soot bands): merged, no extra draw call
+    const ring = new THREE.RingGeometry(dr, r * 0.85, 12, 1);
+    ring.rotateY(Math.PI);
+    mk(group, ring, SOOT, x, y, z - r * 0.9);
+  }
   // nozzle lip and inner vanes
   mk(group, new THREE.TorusGeometry(r * 1.0, r * 0.09, 6, 18), darkMat, x, y, z - r * 1.1);
   for (let i = 0; i < 6; i++) {
@@ -356,7 +365,7 @@ function gunPod(g, m, x, y, z, len = 2.2) {
 function navLights(g, xl, y, z, tailY, tailZ) {
   blinker(g, xl, y, z, new THREE.Color(3, 0.25, 0.2), 1.1, 0, 1.8);
   blinker(g, -xl, y, z, new THREE.Color(0.2, 3, 0.6), 1.1, 0.5, 1.8);
-  blinker(g, 0, tailY, tailZ, new THREE.Color(3, 3, 3), 0.8, 0.25, 2.2);
+  blinker(g, 0, tailY, tailZ, STROBE, 0.8, 0.25, 2.2);
 }
 function decals(g, m, x, y, z, len, h) {
   for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(len, h), m.decal, sx * x, y, z); d.rotation.y = sx * Math.PI / 2; }
@@ -366,8 +375,7 @@ function craft(pal, build) {
   root.add(g);
   const m = mats(pal), engines = [];
   craftThroat = m.line;
-  build(g, m, engines);
-  craftThroat = null;
+  try { build(g, m, engines); } finally { craftThroat = null; }
   g.name = 'body';
   root.userData = {};
   return root;
@@ -585,7 +593,7 @@ function schwinge() {
     decals(g, m, 1.52, 0, -0.5, 2.4, 0.9);
     blinker(g, 6.5, 6.8, 4, new THREE.Color(0.2, 3, 0.6), 1.1, 0.5, 1.8);
     blinker(g, -4.3, -0.9, -2.4, new THREE.Color(3, 0.25, 0.2), 1.1, 0, 1.8);
-    blinker(g, 0, 1.4, -5.6, new THREE.Color(3, 3, 3), 0.8, 0.25, 2.2);
+    blinker(g, 0, 1.4, -5.6, STROBE, 0.8, 0.25, 2.2);
   });
 }
 /** Kurier: a fast, unarmed courier - a long capsule with a stabiliser ring and two big drives */
@@ -808,9 +816,9 @@ function carrier(g, engines, M, o = {}) {
     }
   }
   // white strobes on the saucer's rim and the stern, red beacon on the mast
-  lamp(0, SC.y, SC.z + 110 * SC.k, new THREE.Color(3, 3, 3), 1.1, 0.1, 7);
+  lamp(0, SC.y, SC.z + 110 * SC.k, STROBE, 1.1, 0.1, 7);
   lamp(0, SC.y + 24, SC.z - 4, new THREE.Color(3, 0.3, 0.25), 0.6, 0.3, 6);
-  lamp(0, HY + 10, -180, new THREE.Color(3, 3, 3), 1.1, 0.6, 7);
+  lamp(0, HY + 10, -180, STROBE, 1.1, 0.6, 7);
   for (const sx of [-1, 1]) lamp(sx * 110, SC.y - 0.4, SC.z, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 6);
   // lit windows: rows round the saucer rim (top and bottom) and along the drive hull's flanks
   const winPos = [], winCol = [];
@@ -1014,7 +1022,7 @@ function samariter(g, engines, M) {
   const reg = new THREE.MeshStandardMaterial({ map: registryTexture('SAMARITER', 'MED-04 · LAZARETTSCHIFF'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(16, 2.5), reg, sx * (10.5 + 6.3), 0.2, 3); d.rotation.y = sx * Math.PI / 2; }
   for (const sx of [-1, 1]) blinker(g, sx * 17, 0, 0, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 3);
-  blinker(g, 0, 14, 4, new THREE.Color(3, 3, 3), 1.1, 0.2, 3.5);
+  blinker(g, 0, 14, 4, STROBE, 1.1, 0.2, 3.5);
 }
 /** fuel tanker: a command module, a truss spine carrying six pressure tanks, a drive section with nacelles */
 function tankerShip(g, engines, M) {
@@ -1037,7 +1045,7 @@ function tankerShip(g, engines, M) {
   const reg = new THREE.MeshStandardMaterial({ map: registryTexture('VERSORGER', 'DV-11 · DEUTERIUMTRANSPORT'), transparent: true, roughness: 0.6, metalness: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   for (const sx of [-1, 1]) { const d = mk(g, new THREE.PlaneGeometry(16, 2.5), reg, sx * 4.05, 11.6, 4); d.rotation.y = sx * Math.PI / 2; }
   for (const sx of [-1, 1]) blinker(g, sx * 19, 0, 4, sx < 0 ? new THREE.Color(3, 0.25, 0.2) : new THREE.Color(0.2, 3, 0.6), 0.9, sx < 0 ? 0 : 0.5, 3);
-  blinker(g, 0, 14.5, 4, new THREE.Color(3, 3, 3), 1.1, 0.2, 3.5);
+  blinker(g, 0, 14.5, 4, STROBE, 1.1, 0.2, 3.5);
 }
 /** Ketten: glowing prisoner cells along the flanks, chain links, the bow maw a fighter can launch from */
 function prisonDetail(g, M) {

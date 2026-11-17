@@ -51,6 +51,7 @@ export function installCutscenes(Game) {
         cast[c.id] = s;
       }
       this.cut = { def, cast, shot: -1, t: 0, T: 0, onDone, shake: 0, sh: null, queue: [] };
+      this.compileScene();
       this.camera.fov = 50; this.camera.updateProjectionMatrix();
       this.nextShot();
     },

@@ -22,6 +22,8 @@ const BOLT = {
 const SHIELD_COL = new THREE.Color(0.55, 1.5, 3.2);
 
 const MAX_FLARES = 160;
+const MUZZLE0 = 112; // slots MUZZLE0..MAX_FLARES are muzzle flashes only, so gunfire never overwrites impact flashes
+const MUZZLE_FAR = 1200; // no muzzle flash beyond this distance from the viewer (sub-pixel anyway)
 const MAX_BEAMS = 4;
 const tV = new THREE.Vector3(), tV2 = new THREE.Vector3(), tVp = new THREE.Vector4(), tQ = new THREE.Quaternion();
 
@@ -81,7 +83,8 @@ const BOLT_VS = /* glsl */ `
     vLw = lw;
     float k = iB.w * smoothstep(3.0, 16.0, -mid.z); // no glare when a bolt brushes past the camera
     vHalo = iC * k * uHalo; vCore = iD * k;
-    gl_Position = projectionMatrix * vec4(p, 1.0);
+    // invisible (faded or right at the eye): collapse the quad so it costs no fill
+    gl_Position = k < 0.01 ? vec4(0.0, 0.0, 2.0, 1.0) : projectionMatrix * vec4(p, 1.0);
   }`;
 const BOLT_FS = /* glsl */ `
   varying vec3 vHalo; varying vec3 vCore; varying vec2 vQ; varying float vLw;
@@ -162,7 +165,7 @@ const BEAM_FS = /* glsl */ `
   float zig(float s, float seed){ float i = floor(s); return mix(h1(i + seed), h1(i + 1.0 + seed), fract(s)) * 2.0 - 1.0; }
   void main(){
     float a = abs(vTV.y);
-    float tick = floor(uTime * 28.0); // arcs re-roll ~28 times a second
+    float tick = mod(floor(uTime * 28.0), 61.0); // arcs re-roll ~28 times a second; small hash input keeps mobile precision
     float core = exp(-a * a * 150.0);
     float glow = exp(-a * a * 12.0) * (0.85 + 0.15 * sin(vS * 0.07 - uTime * 90.0));
     float haze = (1.0 - a) * (1.0 - a);
@@ -200,7 +203,7 @@ export class WeaponsFx {
     // ---- flares ----
     this.flares = [];
     for (let i = 0; i < MAX_FLARES; i++) this.flares.push({ pos: new THREE.Vector3(), off: new THREE.Vector3(), owner: null, col: new THREE.Color(), size: 1, grow: 0, life: 0, max: 1, ring: -1, rot: 0, star: 0 });
-    this.fCursor = 0;
+    this.fCursor = 0; this.mCursor = MUZZLE0;
     this.spots = 0; // one-frame flares (missile heads), staged in the slots after MAX_FLARES
     this.flareMesh = new THREE.Mesh(quadGeo(MAX_FLARES + 32, [['iA', 4], ['iB', 4], ['iC', 2]]), new THREE.ShaderMaterial({
       vertexShader: FLARE_VS, fragmentShader: FLARE_FS,
@@ -239,6 +242,20 @@ export class WeaponsFx {
     }
   }
 
+  /**
+   * Objects for the renderer's shader prewarm: one mesh per given material (the plasma seekers' ion tails) plus a
+   * beam, which is otherwise hidden and so skipped by compile(). Add the group to the scene while compiling, then remove it.
+   */
+  warmObjects(mats = []) {
+    const g = new THREE.Group();
+    this.warmGeo ||= new THREE.PlaneGeometry(1, 1); // position, normal and uv, as the tail shader expects
+    for (const m of mats) { const o = new THREE.Mesh(this.warmGeo, m); o.frustumCulled = false; g.add(o); }
+    const b = new THREE.Mesh(this.beams[0].m.geometry, this.beams[0].m.material);
+    b.frustumCulled = false;
+    g.add(b);
+    return g;
+  }
+
   makeBoltGeo(cap) {
     this.boltCap = cap;
     this.boltGeo = quadGeo(cap, [['iA', 4], ['iB', 4], ['iC', 3], ['iD', 3]]);
@@ -246,31 +263,43 @@ export class WeaponsFx {
   }
 
   // ---- flares ----
-  flare(p, col, k, size, life, star = 0, ring = -1, grow = 0) {
-    const f = this.flares[this.fCursor];
-    this.fCursor = (this.fCursor + 1) % MAX_FLARES;
+  flare(p, col, k, size, life, star = 0, ring = -1, grow = 0, muzzle = false) {
+    let f;
+    if (muzzle) { f = this.flares[this.mCursor]; this.mCursor = this.mCursor + 1 < MAX_FLARES ? this.mCursor + 1 : MUZZLE0; }
+    else { f = this.flares[this.fCursor]; this.fCursor = (this.fCursor + 1) % MUZZLE0; }
     f.pos.copy(p); f.owner = null;
     f.col.copy(col).multiplyScalar(k);
     f.size = size; f.grow = grow; f.life = f.max = life; f.ring = ring; f.star = star;
     f.rot = Math.random() * Math.PI;
     return f;
   }
-  /** short flash at a gun that rides along with the firing ship */
-  muzzle(p, owner, key) {
+  /** short flash at a gun that rides along with the firing ship; dist: distance to the nearest viewer (skipped when far) */
+  muzzle(p, owner, key, dist = 0) {
+    if (dist > MUZZLE_FAR) return;
     const st = BOLT[key] || BOLT.ally, cap = owner.def?.capital;
     const own = owner.isPlayer && owner.pilot?.view === 'cockpit'; // keep the pilot's own guns from glaring
-    const f = this.flare(p, st.halo, 0.9, (cap ? 5.5 : 2.6) * (own ? 0.55 : 1), 0.07, cap ? 0.7 : 0.5);
+    const f = this.flare(p, st.halo, 0.9, (cap ? 5.5 : 2.6) * (own ? 0.55 : 1), 0.07, cap ? 0.7 : 0.5, -1, 0, true);
     f.owner = owner;
+    // offset in the owner's local frame (like the beam emitter), so the flash stays on the gun while the ship rolls
     f.off.copy(p).sub(owner.pos);
+    if (owner.quat) f.off.applyQuaternion(tQ.copy(owner.quat).invert());
   }
-  /** a bolt strikes: flash and sparks in the bolt's colour, on shields a splash ring */
-  impact(p, key, shield, vel) {
-    const st = BOLT[key] || BOLT.ally, hi = this.hi;
-    this.flare(p, st.halo, 0.6, key.startsWith('turret') ? 9 : 6.5, 0.14, 0.9);
-    if (shield) this.flare(p, SHIELD_COL, 0.55, 1, 0.3, 0, 0, key.startsWith('turret') ? 16 : 11);
+  /**
+   * a bolt strikes: flash and sparks in the bolt's colour, on shields a splash ring.
+   * ship: the ship that was hit (optional); hits on a player's own ship are toned down so they don't cover the view.
+   */
+  impact(p, key, shield, vel, ship = null) {
+    const st = BOLT[key] || BOLT.ally, hi = this.hi, heavy = key.startsWith('turret');
+    const own = !!ship?.isPlayer, cockpit = own && ship.pilot?.view === 'cockpit';
+    const sc = own ? 0.45 : 1;
+    this.flare(p, st.halo, 0.6, (heavy ? 9 : 6.5) * sc, 0.14, 0.9);
+    // own ship: half-size ring in chase view, none from the cockpit
+    if (shield && !cockpit) this.flare(p, SHIELD_COL, 0.55, 1, 0.3, 0, 0, (heavy ? 16 : 11) * (own ? 0.5 : 1));
     // sparks thrown back against the bolt's flight
     tV2.copy(vel).normalize();
-    const n = shield ? (hi ? 5 : 2) : (hi ? 9 : 3), c = shield ? SHIELD_COL : st.halo;
+    let n = shield ? (hi ? 5 : 2) : (hi ? 9 : 3);
+    if (own) n = Math.ceil(n * 0.4);
+    const c = shield ? SHIELD_COL : st.halo;
     for (let i = 0; i < n; i++) {
       tV.randomDirection().addScaledVector(tV2, -1.1).multiplyScalar(40 + Math.random() * 90);
       this.fx.particle(p.x, p.y, p.z, tV.x, tV.y, tV.z, c.r * 1.2, c.g * 1.2, c.b * 1.2, 1.4, 0.18 + Math.random() * 0.25, 2);
@@ -339,7 +368,11 @@ export class WeaponsFx {
       if (f.life <= 0) continue;
       f.life -= dt;
       if (f.life <= 0) continue;
-      if (f.owner) f.pos.copy(f.owner.pos).add(f.off);
+      if (f.owner) {
+        f.pos.copy(f.off);
+        if (f.owner.quat) f.pos.applyQuaternion(f.owner.quat);
+        f.pos.add(f.owner.pos);
+      }
       const t = f.life / f.max, a = f.ring >= 0 ? t : t * t;
       const size = f.ring >= 0 ? f.grow : f.size * (1.25 - 0.45 * t);
       fg.iA.setXYZW(m, f.pos.x, f.pos.y, f.pos.z, size);
