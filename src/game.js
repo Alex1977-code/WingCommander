@@ -10,6 +10,7 @@ import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
 import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
+import { Trails, thrust } from './trails.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
@@ -38,7 +39,6 @@ const COL = {
   shield: new THREE.Color(0.6, 1.6, 3), spark: new THREE.Color(3, 1.8, 0.6),
 };
 export const PILOT_COLORS = ['#7fd6ff', '#ffb347'];
-const TRAIL_ALLY = { r: 0.35, g: 0.9, b: 2.2 }, TRAIL_FOE = { r: 2.2, g: 0.25, b: 0.7 };
 
 /** Free GPU resources of a removed object (geometries + materials; textures are shared caches). */
 function disposeObj(o) {
@@ -224,6 +224,7 @@ export class Game {
     this.scene = new THREE.Scene();
     this.env = createEnvironment(this.scene, this.renderer, sky);
     this.fx = new Fx(this.scene, this.quality);
+    this.trails = new Trails(this.scene, this.quality);
     this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = []; this.impHintShown = false;
     this.composer = this.makeComposer(this.camera);
     this.resize();
@@ -1774,7 +1775,7 @@ export class Game {
       else if (s.shield < s.maxShield) s.shield = Math.min(s.maxShield, s.shield + s.maxShield * 0.1 * dt);
       const boost = s.isPlayer && s.pilot.boosting;
       const k = (0.55 + Math.min(1.2, s.speed / s.def.speed) * 0.6) * (boost ? 1.7 : 1) * (0.92 + Math.random() * 0.16);
-      for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * k);
+      for (const e of s.mesh.userData.engines) thrust(e, k);
       for (const b of s.mesh.userData.blinkers || []) { const bl = b.userData.blink; b.visible = ((performance.now() / 1000) * bl.rate + bl.phase) % 1 < 0.14; }
       this.shipFx(s, dt, boost);
       if (!s.def.capital) this.damageSmoke(s, dt);
@@ -1807,6 +1808,7 @@ export class Game {
 
     this.updateMission(dt);
     this.fx.update(dt);
+    this.trails.update(dt);
     this.bannerT -= dt;
     this.ui.setAuto(this.autoAvailable());
     const P0 = this.leadPilot(); // the engine sound follows a living pilot
@@ -1882,15 +1884,11 @@ export class Game {
       }
       return;
     }
-    // trail points at a fixed 60 per second, whatever the display rate: on 120/144 Hz screens
-    // per-frame emission would fill the particle pool and cut explosions short
-    s.trailAcc = Math.min(3, (s.trailAcc || 0) + dt * 60);
-    if (s.trailAcc < 1) return;
-    s.trailAcc -= 1;
-    const col = s.team === 0 ? TRAIL_ALLY : TRAIL_FOE;
+    // ribbon trails: nozzle position = ship pose * banked body * engine offset (no matrix updates)
+    const body = s.mesh.userData.body;
     for (const e of s.mesh.userData.engines) {
-      e.getWorldPosition(t5);
-      this.fx.trail(t5, col, (boost ? 3.2 : 2.2) * (e.userData.base / 4), boost ? 0.5 : 0.28);
+      t5.copy(e.position).applyQuaternion(body.quaternion).add(body.position).applyQuaternion(s.quat).add(s.pos);
+      this.trails.feed(e, t5, e.userData.r * (boost ? 0.9 : 0.55), e.userData.rgb, dt);
     }
   }
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { glowTexture } from './fx.js';
+import { exhaust } from './trails.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /** Gameplay stats. team 0 = Union, team 1 = Aszendenz. Forward axis of every model is +Z. */
@@ -245,6 +246,18 @@ function fuselageGeo(noseR, bodyR, len, seg = 12) {
 }
 /** blackened, burnt metal round nozzles and gun muzzles */
 const SOOT = new THREE.MeshStandardMaterial({ color: 0x17130f, roughness: 0.95, metalness: 0.3 });
+/**
+ * nozzle throat: the drive colour, dimmer than the hull glow so the exhaust core reads as the hot
+ * spot. Fighters reuse their dimmed 'line' material (set by craft()), so no extra draw call.
+ */
+const THROAT = new Map();
+let craftThroat = null;
+function throat(color) {
+  if (craftThroat) return craftThroat;
+  const k = `${color.r},${color.g},${color.b}`;
+  if (!THROAT.has(k)) THROAT.set(k, new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(0.45) }));
+  return THROAT.get(k);
+}
 function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   const sootBand = new THREE.CylinderGeometry(r * 1.06, r * 1.0, r * 0.7, 14, 1, true); sootBand.rotateX(Math.PI / 2);
   mk(group, sootBand, SOOT, x, y, z - r * 0.75);
@@ -253,20 +266,18 @@ function engine(group, engines, x, y, z, r, glowMat, darkMat, color) {
   mk(group, n, darkMat, x, y, z);
   const disc = new THREE.CircleGeometry(r * 0.85, 12);
   disc.rotateY(Math.PI);
-  mk(group, disc, glowMat, x, y, z - r * 0.9);
+  mk(group, disc, throat(color), x, y, z - r * 0.9);
   // nozzle lip and inner vanes
   mk(group, new THREE.TorusGeometry(r * 1.0, r * 0.09, 6, 18), darkMat, x, y, z - r * 1.1);
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2, vane = mk(group, new THREE.BoxGeometry(r * 0.08, r * 0.55, r * 0.9), darkMat, x + Math.cos(a) * r * 0.55, y + Math.sin(a) * r * 0.55, z - r * 0.5);
     vane.rotation.z = a + Math.PI / 2;
   }
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: color.clone().multiplyScalar(0.45), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-  s.position.set(x, y, z - r * 1.3);
-  s.scale.setScalar(r * 4);
-  s.userData.base = r * 4;
-  s.userData.engine = true;
-  group.add(s);
-  engines.push(s);
+  // plasma core, halo and plume at the nozzle exit (scaled with the drive output by the game)
+  const e = exhaust(color, r);
+  e.position.set(x, y, z - r * 1.1);
+  group.add(e);
+  engines.push(e);
 }
 
 // hull materials with clearcoat / iridescence: switched off on the 'low' quality setting (phones)
@@ -354,7 +365,9 @@ function craft(pal, build) {
   const root = new THREE.Group(), g = new THREE.Group();
   root.add(g);
   const m = mats(pal), engines = [];
+  craftThroat = m.line;
   build(g, m, engines);
+  craftThroat = null;
   g.name = 'body';
   root.userData = {};
   return root;
@@ -1253,7 +1266,7 @@ function fitStats(type, t) {
   const bb = new THREE.Box3(), all = new THREE.Box3(), extra = [];
   const b = def.box, v = new THREE.Vector3();
   body.traverse((o) => {
-    if (!o.isMesh || !o.geometry) return;
+    if (!o.isMesh || !o.geometry || o.userData.plume) return; // exhaust plumes are not hull
     o.geometry.computeBoundingBox();
     bb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
     all.union(bb);
