@@ -312,11 +312,11 @@ export function createEnvironment(scene, renderer, opts) {
   skyGroup.add(skyBox);
 
   // lights
-  const light = new THREE.DirectionalLight(0xfff1dd, 2.3);
+  const light = new THREE.DirectionalLight(0xffedd6, 2.4);
   light.position.copy(sunDir);
   scene.add(light);
   scene.add(light.target);
-  const hemi = new THREE.HemisphereLight(new THREE.Color(a).lerp(new THREE.Color('#ffffff'), 0.3), new THREE.Color(b).multiplyScalar(0.4), 0.55);
+  const hemi = new THREE.HemisphereLight(new THREE.Color(a).lerp(new THREE.Color('#ffffff'), 0.3), new THREE.Color(b).multiplyScalar(0.4), 0.65);
   scene.add(hemi);
 
   // reflection environment from the nebula
@@ -325,6 +325,14 @@ export function createEnvironment(scene, renderer, opts) {
   const sunBall = new THREE.Mesh(new THREE.SphereGeometry(5, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 26, 20) }));
   sunBall.position.copy(sunDir).multiplyScalar(40);
   envScene.add(sunBall);
+  // baked into the reflections only (no extra lights): a wide warm glow around the sun for grazing rim
+  // highlights on metal, and a broad cool bounce opposite it so the shade side of a hull still reads
+  const sunGlow = new THREE.Mesh(new THREE.SphereGeometry(13, 16, 12), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.5, 1.15, 0.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  sunGlow.position.copy(sunBall.position);
+  envScene.add(sunGlow);
+  const fill = new THREE.Mesh(new THREE.SphereGeometry(26, 16, 12), new THREE.MeshBasicMaterial({ color: new THREE.Color(a).lerp(new THREE.Color(0.45, 0.75, 1), 0.65).multiplyScalar(0.4) }));
+  fill.position.copy(sunDir).multiplyScalar(-40);
+  envScene.add(fill);
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envRT = pmrem.fromScene(envScene, 0.02, 0.1, 200);
   envScene.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
