@@ -1,8 +1,4 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildShip, SHIPS, BAY, BAY_LIGHTS, setShipDetail } from './ships.js';
 import { createEnvironment, createAsteroids, rockDepth, rockRay } from './env.js';
 import { Fx, glowTexture, setParticleScale } from './fx.js';
@@ -10,6 +6,7 @@ import { drawHud } from './hud.js';
 import { CHARS } from './campaign.js';
 import { installCutscenes, passes } from './cutscene.js';
 import { Cockpit } from './cockpit.js';
+import { makeComposer, disposeComposer } from './post.js';
 
 const BOLT_SPEED = 950, BOLT_LIFE = 1.15;
 const tBay = new THREE.Vector3(), tLoc = new THREE.Vector3();
@@ -75,11 +72,6 @@ function missileRes() {
   MISSILE = { core, tail, mats };
   return MISSILE;
 }
-function disposeComposer(c) {
-  if (!c) return;
-  c.passes.forEach((p) => p.dispose?.());
-  c.dispose();
-}
 
 /**
  * Neutron cannon (internally "lance"): the Union fighters' secondary weapon. A capacitor bank dumps one charge into a
@@ -129,13 +121,8 @@ export class Game {
   get player() { return this.pilots[0]?.ship || null; }
 
   // ---------- setup ----------
-  makeComposer(camera) {
-    const c = new EffectComposer(this.renderer);
-    c.addPass(new RenderPass(this.scene, camera));
-    c.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.55, 0.9));
-    c.addPass(new OutputPass());
-    return c;
-  }
+  /** 'high' post chain (bloom + film grade), see post.js */
+  makeComposer(camera) { return makeComposer(this.renderer, this.scene, camera); }
 
   /** pixel ratio the 3D picture is actually drawn at (the bloom composer caps it at 1.5) */
   drawRatio() {
@@ -210,6 +197,9 @@ export class Game {
       if (q === 'high' && !P.composer) P.composer = this.makeComposer(P.camera);
       if (q !== 'high' && P.composer) { disposeComposer(P.composer); P.composer = null; }
     }
+    // the cutscene / menu composer too: 'low' keeps no bloom targets around
+    if (q === 'high' && !this.composer && this.scene) this.composer = this.makeComposer(this.camera);
+    if (q !== 'high' && this.composer) { disposeComposer(this.composer); this.composer = null; }
     this.resize();
   }
 
@@ -225,7 +215,7 @@ export class Game {
     this.env = createEnvironment(this.scene, this.renderer, sky);
     this.fx = new Fx(this.scene, this.quality);
     this.ships = []; this.bolts = []; this.missiles = []; this.beams = []; this.asteroids = []; this.dying = []; this.boltPool = []; this.mines = []; this.impHintShown = false;
-    this.composer = this.makeComposer(this.camera);
+    this.composer = this.quality === 'high' ? this.makeComposer(this.camera) : null;
     this.resize();
   }
 
@@ -1704,7 +1694,7 @@ export class Game {
       r.setScissorTest(false);
       r.setViewport(0, 0, this.w, this.h);
       this.hud.clearRect(0, 0, this.w, this.h);
-      if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
+      if (this.quality === 'high' && this.composer) this.composer.render(); else r.render(this.scene, this.camera);
       return;
     }
     if (this.mode === 'attract') {
@@ -1722,7 +1712,7 @@ export class Game {
       r.setScissorTest(false);
       r.setViewport(0, 0, this.w, this.h);
       setParticleScale(this.fx, this.h * this.drawRatio());
-      if (this.quality === 'high') this.composer.render(); else r.render(this.scene, this.camera);
+      if (this.quality === 'high' && this.composer) this.composer.render(); else r.render(this.scene, this.camera);
       return;
     }
     // while paused the picture is static: draw it once, then stop rendering
