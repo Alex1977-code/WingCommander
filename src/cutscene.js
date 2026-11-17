@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { createAsteroids } from './env.js';
 import { SHIPS } from './ships.js';
+import { thrust } from './trails.js';
 
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3(), v4 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, 1), ZERO = new THREE.Vector3();
@@ -50,6 +51,7 @@ export function installCutscenes(Game) {
         cast[c.id] = s;
       }
       this.cut = { def, cast, shot: -1, t: 0, T: 0, onDone, shake: 0, sh: null, queue: [] };
+      this.compileScene();
       this.camera.fov = 50; this.camera.updateProjectionMatrix();
       this.nextShot();
     },
@@ -188,7 +190,7 @@ export function installCutscenes(Game) {
           }
         }
         const kk = (0.55 + Math.min(1.4, s.speed / Math.max(1, s.def.speed)) * 0.6) * (0.92 + Math.random() * 0.16);
-        for (const e of s.mesh.userData.engines) e.scale.setScalar(e.userData.base * kk);
+        for (const e of s.mesh.userData.engines) thrust(e, kk);
         this.shipFx(s, dt);
       }
       this.updateBolts(dt);
@@ -196,6 +198,7 @@ export function installCutscenes(Game) {
       this.updateDying(dt);
       for (const a of this.asteroids) a.mesh.rotateOnAxis(a.axis, a.rate * dt);
       this.fx.update(dt);
+      this.trails.update(dt);
 
       // camera
       const cam = c.sh.cam;
