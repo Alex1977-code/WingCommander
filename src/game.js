@@ -196,10 +196,11 @@ export class Game {
     this.scene.add(tmp);
     // on 'high' the scene renders into the bloom composer's float target: compile those shader variants
     const P0 = this.pilots[0], prev = this.renderer.getRenderTarget();
+    this.fx.warm?.(true); // pooled effects are hidden: show one of each so their shaders compile too
     try {
       this.renderer.setRenderTarget(this.quality === 'high' && P0?.composer ? P0.composer.readBuffer : null);
       this.renderer.compile(this.scene, P0?.camera || this.camera);
-    } catch { /* compile is only an optimisation */ } finally { this.renderer.setRenderTarget(prev); }
+    } catch { /* compile is only an optimisation */ } finally { this.renderer.setRenderTarget(prev); this.fx.warm?.(false); }
     this.scene.remove(tmp);
   }
 
@@ -1967,7 +1968,7 @@ export class Game {
       }
       if (s.dieT <= 0) {
         this.fx.explode(s.pos, 9);
-        this.fx.flash(s.pos, 1400, new THREE.Color(4, 3, 2), 1.2);
+        this.fx.flash(s.pos, 1000, new THREE.Color(4, 3, 2), 0.7);
         this.scene.remove(s.mesh);
         disposeObj(s.mesh);
         this.dying.splice(i, 1);
