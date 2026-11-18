@@ -1,0 +1,25 @@
+[package]
+name = "sternenfront"
+version = "0.1.0"
+edition = "2024"
+description = "Sternenfront - Der Perseus-Krieg (native PC version with NVIDIA DLSS)"
+
+[dependencies]
+bevy = { version = "0.20.1", features = ["dlss"] }
+uuid = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# CI and machines without the DLSS SDK can build without it (no DLSS, everything else the same)
+default = []
+
+[profile.dev]
+opt-level = 1
+# keep the dev binary small (deps carry debug info otherwise ~2 GB)
+strip = "debuginfo"
+[profile.dev.package."*"]
+opt-level = 3
+[profile.release]
+lto = "thin"
+codegen-units = 4
