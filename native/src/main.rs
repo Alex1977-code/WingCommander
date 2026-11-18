@@ -53,6 +53,7 @@ fn main() {
         .insert_resource(data)
         .init_resource::<MissionStatus>()
         .init_resource::<DlssAvailable>()
+        .init_resource::<Paused>()
         .init_state::<AppState>()
         .add_message::<DamageMsg>()
         .add_message::<KilledMsg>()

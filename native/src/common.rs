@@ -533,3 +533,32 @@ pub struct MainCamera;
 pub fn fwd(t: &Transform) -> Vec3 {
     t.rotation * Vec3::Z
 }
+
+/// Game paused (Esc). Toggled by flight.rs input, shown by menu.rs (pause overlay); while true nothing moves.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct Paused(pub bool);
+
+/// What a ship wants to fire this frame. Player input (flight.rs) and AI (ai.rs) write it, weapons.rs reads it.
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct Trigger {
+    /// lasers / turrets
+    pub guns: bool,
+    /// neutron cannon (player) or plasma seeker (Aszendenz)
+    pub missile: bool,
+    /// where the guns should converge (lead point); None = straight ahead
+    pub aim: Option<Vec3>,
+}
+
+/// Steering request for computer-controlled ships (ai.rs writes, flight.rs turns the ship towards `dir`
+/// limited by the ship's turn rate and changes speed towards `speed`).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Steer {
+    pub dir: Vec3,
+    pub speed: f32,
+}
+
+impl Default for Steer {
+    fn default() -> Self {
+        Self { dir: Vec3::Z, speed: 0.0 }
+    }
+}
