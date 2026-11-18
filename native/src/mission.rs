@@ -5,6 +5,7 @@
 //! Test hooks (environment variables, harmless in normal play):
 //! - SF_MISSION_LOG=1  print phase / nav / wave changes and the result to stdout
 //! - SF_AUTOJUMP=1     use the autopilot whenever it is available (skips the long flights, for screenshots)
+//! - SF_WAVE_DIST=<m> enemy waves jump in this far ahead of the player (dogfight screenshots)
 //! - SF_TIMESCALE=<x>  run the game clock x times faster (timer / fail tests)
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
 //!                     the game quits after the debrief appears (end-to-end test of every mission)
@@ -34,6 +35,7 @@ impl Plugin for MissionPlugin {
             log: env_on("SF_MISSION_LOG") || env_on("SF_AUTOWIN"),
             autowin: env_on("SF_AUTOWIN"),
             autojump: env_on("SF_AUTOJUMP") || env_on("SF_AUTOWIN"),
+            wave_dist: std::env::var("SF_WAVE_DIST").ok().and_then(|v| v.parse().ok()),
         };
         app.add_message::<BannerMsg>()
             .add_message::<WarpFlashMsg>()
@@ -392,6 +394,7 @@ struct MissionAssets {
 #[derive(Resource, Clone, Copy, Default)]
 struct TestHooks {
     log: bool,
+    wave_dist: Option<f32>,
     autowin: bool,
     autojump: bool,
 }
@@ -557,6 +560,10 @@ fn spawn_wave(sp: &mut Spawner, radio: &mut Radio, nav: &NavPlan, idx: usize, ce
     let mut origin = center + base * if nav.anchor { 2600.0 } else { 1500.0 };
     if player.is_some_and(|p| p.distance(origin) < 1300.0) {
         origin += base * 1300.0;
+    }
+    // test hook SF_WAVE_DIST: waves jump in this far ahead of the player (screenshots of a dogfight)
+    if let (Some(d), Some(p)) = (radio.test.wave_dist, player) {
+        origin = p + (center - p).normalize_or(Vec3::Z) * d;
     }
     let Some(wave) = nav.waves.get(idx) else { return };
     let mut count = 0;
