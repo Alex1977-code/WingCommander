@@ -4,6 +4,7 @@
 mod ai;
 mod audio;
 mod common;
+mod devtools;
 mod flight;
 mod fx;
 mod hud;
@@ -42,7 +43,7 @@ fn main() {
                     ..default()
                 })
                 .set(RenderPlugin {
-                    render_creation: RenderCreation::Automatic(WgpuSettings { backends: Some(Backends::VULKAN), ..default() }),
+                    render_creation: RenderCreation::Automatic(Box::new(WgpuSettings { backends: Some(Backends::VULKAN), ..default() })),
                     ..default()
                 }),
         )
@@ -71,5 +72,6 @@ fn main() {
             fx::FxPlugin,
             audio::SfxPlugin,
         ))
+        .add_plugins(devtools::DevToolsPlugin)
         .run();
 }
