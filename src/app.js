@@ -24,7 +24,7 @@ let save = load(SAVE_KEY, NEW_SAVE());
 if (typeof save.mission === 'number') save.mission = ['m1', 'm2', 'm4', 'm5', 'm12', 'm15'][save.mission] || 'm1';
 if (!MISSION_BY_ID[save.mission]) save.mission = 'm1';
 save.flags ||= {}; save.aff ||= { rook: 0, kolibri: 0 }; save.scenes ||= {};
-const settings = load(SET_KEY, { sound: true, music: true, invert: false, sens: 1, view: 'cockpit', control: 'yoke', quality: 'high', coop: false, callsign2: 'Orion' });
+const settings = load(SET_KEY, { sound: true, music: true, invert: false, sens: 1, view: 'cockpit', control: 'yoke', quality: 'high', upscale: 'auto', coop: false, callsign2: 'Orion' });
 // v2: touch players expect 'up = nose up', so the default changed; older saved settings are moved over once
 if (settings.v !== 2) { settings.invert = false; settings.v = 2; try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch { /* ignore */ } }
 
@@ -286,6 +286,7 @@ game.invert = settings.invert;
 game.sens = settings.sens;
 game.view = settings.view;
 game.controlStyle = settings.control;
+game.setUpscale(settings.upscale || 'auto');
 game.setQuality(settings.quality);
 game.startAttract();
 
@@ -648,6 +649,8 @@ $('name-ok').onclick = () => {
   playCut('prolog', () => runDialog(INTRO, 'Prolog · 2643', 'An Bord der Aurora', startMissionFlow));
 };
 
+// render resolution + FSR-style upscaling and sharpening (DLSS itself only exists for native apps on NVIDIA RTX)
+const UPSCALE_LABEL = { auto: 'Auto', off: 'Aus (volle Auflösung)', quality: 'Qualität (77 %)', balanced: 'Ausgewogen (67 %)', performance: 'Leistung (50 %)' };
 function refreshSettings() {
   setLabel($('set-music'), `Musik: ${settings.music ? 'An' : 'Aus'}`);
   setLabel($('set-control'), `Steuer im Cockpit: ${settings.control === 'stick' ? 'Steuerknüppel' : 'Steuerjoch'}`);
@@ -655,6 +658,7 @@ function refreshSettings() {
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
   setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Invertiert (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
   setLabel($('set-quality'), `Grafik: ${settings.quality === 'high' ? 'Hoch (Bloom)' : 'Leistung'}`);
+  setLabel($('set-upscale'), `Hochskalierung: ${UPSCALE_LABEL[settings.upscale] || UPSCALE_LABEL.auto}`);
   store(SET_KEY, settings);
 }
 $('set-music').onclick = () => { settings.music = !settings.music; audio.setMusic(settings.music); refreshSettings(); };
@@ -662,6 +666,11 @@ $('set-control').onclick = () => { settings.control = settings.control === 'stic
 $('set-sens').onclick = () => { settings.sens = settings.sens < 1 ? 1 : settings.sens === 1 ? 1.25 : 0.8; game.sens = settings.sens; refreshSettings(); };
 $('set-sound').onclick = () => { settings.sound = !settings.sound; audio.setEnabled(settings.sound); refreshSettings(); };
 $('set-invert').onclick = () => { settings.invert = !settings.invert; game.invert = settings.invert; refreshSettings(); };
+$('set-upscale').onclick = () => {
+  const order = ['auto', 'off', 'quality', 'balanced', 'performance'];
+  settings.upscale = order[(order.indexOf(settings.upscale) + 1) % order.length];
+  game.setUpscale(settings.upscale); refreshSettings();
+};
 $('set-quality').onclick = () => { settings.quality = settings.quality === 'high' ? 'low' : 'high'; game.setQuality(settings.quality); refreshSettings(); };
 $('set-full').onclick = () => { if (document.fullscreenElement) document.exitFullscreen?.(); else tryFullscreen(true); };
 refreshSettings();

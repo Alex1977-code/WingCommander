@@ -251,7 +251,7 @@ export function createEnvironment(scene, renderer, opts) {
   sg.setAttribute('aSize', new THREE.BufferAttribute(ss, 1));
   const starMat = new THREE.ShaderMaterial({
     uniforms: {
-      uPR: { value: Math.min(2, renderer.getPixelRatio()) },
+      uPR: { value: Math.min(2, renderer.getPixelRatio()) }, uRS: { value: 1 },
       uPDir: { value: pDir ? pDir.clone() : new THREE.Vector3(0, 1, 0) }, uPCos: { value: pDir ? Math.cos(pAng * 1.02) : 2 },
     },
     // the point is padded and its glow has a fixed width in pixels, so faint stars don't drop out or
@@ -261,8 +261,11 @@ export function createEnvironment(scene, renderer, opts) {
       void main(){ vC = color; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0);
         float px = aSize*uPR; vR = px; gl_PointSize = px + 3.0; vS = gl_PointSize;
         if (dot(normalize(position), uPDir) > uPCos) gl_PointSize = 0.0; }`,
-    fragmentShader: `varying vec3 vC; varying float vS, vR;
-      void main(){ float dp = length(gl_PointCoord-.5)*vS; float k = exp(-dp*dp/(.09*vR*vR+.35)); if (k < .004) discard; gl_FragColor = vec4(vC*k*1.15,1.0); }`,
+    // uRS < 1 while the upscaler renders at reduced size: the fixed-width glow would cover more of the screen,
+    // so it is dimmed to keep each star's total light the same as at native resolution
+    fragmentShader: `uniform float uRS; varying vec3 vC; varying float vS, vR;
+      void main(){ float dp = length(gl_PointCoord-.5)*vS; float w = .09*vR*vR+.35; float k = exp(-dp*dp/w); if (k < .004) discard;
+        gl_FragColor = vec4(vC*k*1.15*(.09*vR*vR+.35*uRS*uRS)/w,1.0); }`,
     blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
   });
   const stars = new THREE.Points(sg, starMat);
@@ -405,7 +408,7 @@ export function createEnvironment(scene, renderer, opts) {
       if (streaks.visible) { streakMat.uniforms.uCam.value.copy(camera.position); streakMat.uniforms.uVel.value.copy(vel); }
     },
     /** pixel ratio the scene is drawn at (stars keep their size in screen pixels) */
-    setPixelRatio(pr) { starMat.uniforms.uPR.value = pr; },
+    setPixelRatio(pr, renderScale = 1) { starMat.uniforms.uPR.value = pr; starMat.uniforms.uRS.value = renderScale; },
     dispose() { envRT.dispose(); skyRT.dispose(); },
   };
 }
