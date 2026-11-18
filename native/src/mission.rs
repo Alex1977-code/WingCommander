@@ -17,7 +17,10 @@ use crate::ships::{spawn_ship, ShipLibrary};
 use crate::weapons::{JumpedOut, WeaponsSet};
 use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -30,7 +33,7 @@ impl Plugin for MissionPlugin {
         let test = TestHooks {
             log: env_on("SF_MISSION_LOG") || env_on("SF_AUTOWIN"),
             autowin: env_on("SF_AUTOWIN"),
-            autojump: env_on("SF_AUTOJUMP"),
+            autojump: env_on("SF_AUTOJUMP") || env_on("SF_AUTOWIN"),
         };
         app.add_message::<BannerMsg>()
             .add_message::<WarpFlashMsg>()
@@ -62,6 +65,7 @@ impl Plugin for MissionPlugin {
                     .in_set(MissionSet),
             )
             .add_systems(Update, (spin_pickups, blink_mines, warp_fx).run_if(in_state(AppState::Flight)).run_if(not_paused))
+            .add_systems(PostUpdate, face_camera.after(TransformSystems::Propagate).before(VisibilitySystems::VisibilityPropagate))
             .add_systems(Update, quit_after_debrief.run_if(in_state(AppState::Debrief)).run_if(|t: Res<TestHooks>| t.autowin));
     }
 }
@@ -376,7 +380,9 @@ struct MissionAssets {
     mine_mesh: Handle<Mesh>,
     spike_mesh: Handle<Mesh>,
     mine_mat: Handle<StandardMaterial>,
+    /// unit quad for camera-facing glows (`Billboard`)
     glow_mesh: Handle<Mesh>,
+    glow: Handle<Image>,
     mine_glow_mat: Handle<StandardMaterial>,
     pickup_mesh: Handle<Mesh>,
     pickup_mat: Handle<StandardMaterial>,
@@ -396,11 +402,46 @@ const COL_GREEN: [f32; 3] = [0.43, 1.0, 0.69];
 const COL_GOLD: [f32; 3] = [1.0, 0.78, 0.34];
 const COL_RED: [f32; 3] = [1.0, 0.3, 0.43];
 
-fn build_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
+/// Soft round glow (premultiplied: rgb = alpha), for the camera-facing glow quads.
+fn glow_image() -> Image {
+    const N: usize = 64;
+    let mut px = Vec::with_capacity(N * N * 4);
+    for y in 0..N {
+        for x in 0..N {
+            let d = Vec2::new(x as f32 + 0.5 - N as f32 * 0.5, y as f32 + 0.5 - N as f32 * 0.5).length() / (N as f32 * 0.5);
+            let a = ((1.0 - d).max(0.0).powi(2) * 0.75 + (-d * d * 28.0).exp() * 0.25).min(1.0);
+            let v = (a * 255.0).round() as u8;
+            px.extend_from_slice(&[v, v, v, v]);
+        }
+    }
+    Image::new(
+        Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        px,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+fn glow_material(glow: &Handle<Image>, c: LinearRgba) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::LinearRgba(c),
+        base_color_texture: Some(glow.clone()),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        fog_enabled: false,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
+fn build_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>) {
     let ico = |r: f32, sub: u32| Sphere::new(r).mesh().ico(sub).unwrap_or_else(|_| Sphere::new(r).mesh().build());
     let mine_mesh = meshes.add(ico(3.0, 0));
-    let spike_mesh = meshes.add(Cylinder::new(0.45, 4.0));
-    let glow_mesh = meshes.add(ico(1.0, 2));
+    let spike_mesh = meshes.add(Cone { radius: 0.8, height: 4.0 });
+    let glow_mesh = meshes.add(Rectangle::new(1.0, 1.0));
+    let glow = images.add(glow_image());
     let pickup_mesh = meshes.add(ico(3.2, 0));
     let mine_mat = mats.add(StandardMaterial {
         base_color: Color::srgb(0.16, 0.10, 0.13),
@@ -409,29 +450,15 @@ fn build_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ma
         emissive: LinearRgba::rgb(0.5, 0.05, 0.1),
         ..default()
     });
-    let mine_glow_mat = mats.add(StandardMaterial {
-        base_color: Color::srgba(1.0, 0.1, 0.08, 0.55),
-        emissive: LinearRgba::rgb(8.0, 0.8, 0.6),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        fog_enabled: false,
-        ..default()
-    });
+    let mine_glow_mat = mats.add(glow_material(&glow, LinearRgba::rgb(6.0, 0.6, 0.45)));
     let pickup_mat = mats.add(StandardMaterial {
         base_color: Color::srgb(0.3, 1.0, 0.6),
         emissive: LinearRgba::rgb(1.2, 6.0, 2.8),
         unlit: true,
         ..default()
     });
-    let pickup_glow_mat = mats.add(StandardMaterial {
-        base_color: Color::srgba(0.3, 1.0, 0.5, 0.18),
-        emissive: LinearRgba::rgb(0.5, 2.2, 1.0),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        fog_enabled: false,
-        ..default()
-    });
-    commands.insert_resource(MissionAssets { mine_mesh, spike_mesh, mine_mat, glow_mesh, mine_glow_mat, pickup_mesh, pickup_mat, pickup_glow_mat });
+    let pickup_glow_mat = mats.add(glow_material(&glow, LinearRgba::rgb(0.8, 3.6, 1.6)));
+    commands.insert_resource(MissionAssets { mine_mesh, spike_mesh, mine_mat, glow_mesh, glow, mine_glow_mat, pickup_mesh, pickup_mat, pickup_glow_mat });
 }
 
 // ---------- spawning ----------
@@ -572,19 +599,27 @@ fn spawn_wave(sp: &mut Spawner, radio: &mut Radio, nav: &NavPlan, idx: usize, ce
     }
 }
 
-fn spawn_pickups(commands: &mut Commands, assets: &MissionAssets, rng: &mut AiRng, nav: &NavPlan) -> usize {
+/// Web spawnPickups(): spread around the nav, clear of rocks and capital hulls.
+fn spawn_pickups(commands: &mut Commands, assets: &MissionAssets, rng: &mut AiRng, nav: &NavPlan, solid: &[(Vec3, f32)]) -> usize {
     for i in 0..nav.pickups {
         let a = (i as f32 / nav.pickups as f32) * std::f32::consts::TAU + rng.range(-0.3, 0.3);
-        let r = rng.range(250.0, 520.0);
-        let pos = nav.pos + Vec3::new(a.cos() * r, rng.range(-120.0, 120.0), a.sin() * r);
+        let mut pos = nav.pos;
+        for tries in 0..40 {
+            let r = rng.range(250.0, 520.0 + tries as f32 * 15.0);
+            pos = nav.pos + Vec3::new(a.cos() * r, rng.range(-120.0, 120.0), a.sin() * r);
+            if solid.iter().all(|&(c, rad)| c.distance(pos) > rad + 70.0) {
+                break;
+            }
+        }
         commands
             .spawn((Pickup, InMission, Transform::from_translation(pos), Visibility::default(), Name::new("Bergungsobjekt")))
             .with_children(|p| {
                 p.spawn((Mesh3d(assets.pickup_mesh.clone()), MeshMaterial3d(assets.pickup_mat.clone()), Transform::default(), NotShadowCaster));
                 p.spawn((
+                    Billboard,
                     Mesh3d(assets.glow_mesh.clone()),
                     MeshMaterial3d(assets.pickup_glow_mat.clone()),
-                    Transform::from_scale(Vec3::splat(11.0)),
+                    Transform::from_scale(Vec3::splat(36.0)),
                     NotShadowCaster,
                 ));
             });
@@ -619,9 +654,10 @@ fn lay_mines(commands: &mut Commands, assets: &MissionAssets, rng: &mut AiRng, c
                 }
                 p.spawn((
                     MineGlow,
+                    Billboard,
                     Mesh3d(assets.glow_mesh.clone()),
                     MeshMaterial3d(assets.mine_glow_mat.clone()),
-                    Transform::from_scale(Vec3::splat(3.0)),
+                    Transform::from_scale(Vec3::splat(6.0)),
                     NotShadowCaster,
                 ));
             });
@@ -699,8 +735,9 @@ fn start_mission(
     }
     // pooled jump flashes
     for _ in 0..WARP_POOL {
-        let material = mats.add(warp_material(0.0));
+        let material = mats.add(glow_material(&assets.glow, LinearRgba::BLACK));
         sp.commands.spawn((
+            Billboard,
             WarpFlash { t: 0.0, life: 0.6, size: 1.0, material: material.clone() },
             Mesh3d(assets.glow_mesh.clone()),
             MeshMaterial3d(material),
@@ -774,6 +811,7 @@ fn update_mission(
     ships: Query<ShipView>,
     mut ais: Query<&mut Ai>,
     pickups: Query<(Entity, &Transform), (With<Pickup>, Without<Ship>)>,
+    obstacles: Query<(&Transform, &Obstacle), Without<Ship>>,
 ) {
     // timers run on game time (Time<Virtual> already caps a hitch at 0.25 s)
     let dt = time.delta_secs();
@@ -894,7 +932,12 @@ fn update_mission(
             match nav.kind {
                 NavKind::Survive => st.surv = nav.survive,
                 NavKind::Pickup => {
-                    st.pickups_total = spawn_pickups(&mut sp.commands, &assets, &mut sp.rng, &nav);
+                    let solid: Vec<(Vec3, f32)> = obstacles
+                        .iter()
+                        .map(|(tf, o)| (tf.translation, o.radius))
+                        .chain(ships.iter().filter(|(_, _, s, d)| !d && s.capital()).map(|(_, tf, s, _)| (tf.translation, s.radius())))
+                        .collect();
+                    st.pickups_total = spawn_pickups(&mut sp.commands, &assets, &mut sp.rng, &nav, &solid);
                     st.pickups_got = 0;
                 }
                 NavKind::Convoy => {
@@ -1240,7 +1283,7 @@ fn blink_mines(time: Res<Time>, mines: Query<&Mine>, mut glows: Query<(&mut Tran
         let Ok(m) = mines.get(parent.parent()) else { continue };
         let rate = if m.active { 10.0 } else { 2.0 };
         let on = (t * rate + m.phase).sin() > 0.2;
-        tf.scale = Vec3::splat(if on { 4.2 } else { 1.8 });
+        tf.scale = Vec3::splat(if on { 14.0 } else { 6.0 });
     }
 }
 
@@ -1251,14 +1294,16 @@ fn spin_pickups(time: Res<Time>, mut q: Query<&mut Transform, (With<Pickup>, Wit
     }
 }
 
-fn warp_material(k: f32) -> StandardMaterial {
-    StandardMaterial {
-        base_color: Color::srgba(0.5, 0.8, 1.0, k),
-        emissive: LinearRgba::rgb(4.0 * k, 6.0 * k, 10.0 * k),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        fog_enabled: false,
-        ..default()
+/// Camera-facing quad (glows): its world rotation is replaced by the camera's after transform propagation.
+#[derive(Component)]
+struct Billboard;
+
+fn face_camera(cam: Query<&GlobalTransform, With<MainCamera>>, mut q: Query<&mut GlobalTransform, (With<Billboard>, Without<MainCamera>)>) {
+    let Ok(cam) = cam.single() else { return };
+    let rot = cam.rotation();
+    for mut gt in &mut q {
+        let (s, _, p) = gt.to_scale_rotation_translation();
+        *gt = GlobalTransform::from(Transform { translation: p, rotation: rot, scale: s });
     }
 }
 
@@ -1274,9 +1319,9 @@ fn warp_fx(
         let age = |f: &WarpFlash| if f.t <= 0.0 { f32::INFINITY } else { f.life - f.t };
         let Some((mut fl, mut tf, mut vis)) = pool.iter_mut().max_by(|a, b| age(&a.0).total_cmp(&age(&b.0))) else { continue };
         fl.t = fl.life;
-        fl.size = m.size * 0.5;
+        fl.size = m.size * 1.4;
         tf.translation = m.pos;
-        tf.scale = Vec3::splat(fl.size * 0.2);
+        tf.scale = Vec3::splat(fl.size * 0.3);
         *vis = Visibility::Visible;
     }
     let dt = time.delta_secs();
@@ -1286,11 +1331,10 @@ fn warp_fx(
         }
         fl.t -= dt;
         let k = (fl.t / fl.life).clamp(0.0, 1.0);
-        tf.scale = Vec3::splat(fl.size * (0.2 + (1.0 - k) * 0.8));
+        tf.scale = Vec3::splat(fl.size * (0.3 + (1.0 - k) * 0.7));
         if let Some(mut m) = mats.get_mut(&fl.material) {
-            let w = warp_material(k * k);
-            m.base_color = w.base_color;
-            m.emissive = w.emissive;
+            let b = k * k * 2.5;
+            m.base_color = Color::LinearRgba(LinearRgba::rgb(1.6 * b, 2.6 * b, 4.5 * b));
         }
         if fl.t <= 0.0 {
             *vis = Visibility::Hidden;
