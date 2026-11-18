@@ -1,0 +1,644 @@
+{
+ "sperber": {
+  "name": "Sperber",
+  "team": 0,
+  "hp": 90,
+  "shield": 90,
+  "speed": 210,
+  "boost": 430,
+  "turn": 1.55,
+  "dmg": 13,
+  "rof": 0.15,
+  "missiles": 4,
+  "radius": 8,
+  "guns": [
+   [
+    -4.2,
+    -0.3,
+    5
+   ],
+   [
+    4.2,
+    -0.3,
+    5
+   ]
+  ]
+ },
+ "falke": {
+  "name": "Falke",
+  "team": 0,
+  "hp": 130,
+  "shield": 120,
+  "speed": 225,
+  "boost": 450,
+  "turn": 1.5,
+  "dmg": 16,
+  "rof": 0.14,
+  "missiles": 6,
+  "radius": 9,
+  "guns": [
+   [
+    -5,
+    -0.3,
+    5
+   ],
+   [
+    5,
+    -0.3,
+    5
+   ],
+   [
+    0,
+    -1,
+    8
+   ]
+  ]
+ },
+ "greif": {
+  "name": "Greif",
+  "team": 0,
+  "hp": 190,
+  "shield": 170,
+  "speed": 215,
+  "boost": 440,
+  "turn": 1.4,
+  "dmg": 19,
+  "rof": 0.13,
+  "missiles": 10,
+  "radius": 10,
+  "guns": [
+   [
+    -6,
+    -0.3,
+    5
+   ],
+   [
+    6,
+    -0.3,
+    5
+   ],
+   [
+    -2,
+    -1,
+    8
+   ],
+   [
+    2,
+    -1,
+    8
+   ]
+  ]
+ },
+ "dorn": {
+  "name": "Dorn",
+  "team": 1,
+  "hp": 34,
+  "shield": 24,
+  "speed": 190,
+  "turn": 1.25,
+  "dmg": 6,
+  "rof": 0.4,
+  "radius": 8,
+  "skill": 0.35,
+  "score": 100,
+  "guns": [
+   [
+    0,
+    -0.5,
+    6
+   ]
+  ]
+ },
+ "klinge": {
+  "name": "Klinge",
+  "team": 1,
+  "hp": 62,
+  "shield": 52,
+  "speed": 215,
+  "turn": 1.5,
+  "dmg": 8,
+  "rof": 0.3,
+  "radius": 9,
+  "skill": 0.6,
+  "score": 220,
+  "missiles": 1,
+  "guns": [
+   [
+    -4,
+    0,
+    6
+   ],
+   [
+    4,
+    0,
+    6
+   ]
+  ]
+ },
+ "hammer": {
+  "name": "Hammer",
+  "team": 1,
+  "hp": 120,
+  "shield": 70,
+  "speed": 150,
+  "turn": 0.9,
+  "dmg": 9,
+  "rof": 0.5,
+  "radius": 11,
+  "skill": 0.4,
+  "score": 260,
+  "bomber": true,
+  "guns": [
+   [
+    -3,
+    0,
+    7
+   ],
+   [
+    3,
+    0,
+    7
+   ]
+  ]
+ },
+ "archon": {
+  "name": "Archon Veyl",
+  "team": 1,
+  "hp": 170,
+  "shield": 140,
+  "speed": 238,
+  "turn": 1.85,
+  "dmg": 10,
+  "rof": 0.22,
+  "radius": 9,
+  "skill": 0.9,
+  "score": 1500,
+  "missiles": 6,
+  "ace": true,
+  "guns": [
+   [
+    -4,
+    0,
+    6
+   ],
+   [
+    4,
+    0,
+    6
+   ]
+  ]
+ },
+ "schwinge": {
+  "name": "Schwinge",
+  "team": 1,
+  "hp": 84,
+  "shield": 64,
+  "speed": 205,
+  "turn": 1.35,
+  "dmg": 9,
+  "rof": 0.34,
+  "radius": 10,
+  "skill": 0.55,
+  "score": 320,
+  "missiles": 1,
+  "guns": [
+   [
+    6,
+    6,
+    6
+   ],
+   [
+    0,
+    -0.6,
+    6
+   ]
+  ]
+ },
+ "holt": {
+  "name": "Holt",
+  "team": 1,
+  "hp": 150,
+  "shield": 120,
+  "speed": 232,
+  "turn": 1.75,
+  "dmg": 9,
+  "rof": 0.24,
+  "radius": 9,
+  "skill": 0.85,
+  "score": 1200,
+  "missiles": 4,
+  "guns": [
+   [
+    -4,
+    0,
+    6
+   ],
+   [
+    4,
+    0,
+    6
+   ]
+  ]
+ },
+ "kurier": {
+  "name": "Kurierschiff",
+  "team": 1,
+  "hp": 260,
+  "shield": 140,
+  "speed": 150,
+  "turn": 0.8,
+  "dmg": 0,
+  "rof": 99,
+  "radius": 11,
+  "skill": 0.2,
+  "score": 800,
+  "guns": []
+ },
+ "station": {
+  "name": "Brutstätte",
+  "team": 1,
+  "capital": true,
+  "hp": 3000,
+  "speed": 0,
+  "radius": 200,
+  "box": [
+   46,
+   46,
+   46
+  ],
+  "torus": [
+   150,
+   17
+  ],
+  "dmg": 8,
+  "score": 3000,
+  "turrets": [
+   [
+    0,
+    50,
+    0
+   ],
+   [
+    0,
+    -50,
+    0
+   ],
+   [
+    50,
+    0,
+    0
+   ],
+   [
+    -50,
+    0,
+    0
+   ],
+   [
+    0,
+    0,
+    50
+   ],
+   [
+    0,
+    0,
+    -50
+   ],
+   [
+    150,
+    0,
+    0
+   ],
+   [
+    -150,
+    0,
+    0
+   ],
+   [
+    0,
+    150,
+    0
+   ],
+   [
+    0,
+    -150,
+    0
+   ]
+  ]
+ },
+ "gate": {
+  "name": "Sprungtor",
+  "team": 3,
+  "capital": true,
+  "ghost": true,
+  "invulnerable": true,
+  "hp": 1000000000,
+  "speed": 0,
+  "radius": 340,
+  "box": [
+   1,
+   1,
+   1
+  ],
+  "turrets": []
+ },
+ "prison": {
+  "name": "Ketten",
+  "team": 3,
+  "capital": true,
+  "invulnerable": true,
+  "hp": 1000000000,
+  "speed": 22,
+  "radius": 55,
+  "box": [
+   15,
+   13,
+   48
+  ],
+  "turrets": []
+ },
+ "valkyrie": {
+  "name": "TUS Valkyrie",
+  "team": 3,
+  "capital": true,
+  "invulnerable": true,
+  "wreck": true,
+  "hp": 1000000000,
+  "speed": 0,
+  "radius": 240,
+  "box": [
+   6,
+   4,
+   30
+  ],
+  "turrets": []
+ },
+ "tanker": {
+  "name": "Versorger",
+  "team": 0,
+  "capital": true,
+  "hp": 900,
+  "speed": 70,
+  "radius": 55,
+  "box": [
+   19,
+   9.5,
+   48
+  ],
+  "dmg": 5,
+  "turrets": [
+   [
+    0,
+    13.7,
+    0
+   ]
+  ]
+ },
+ "habitat": {
+  "name": "Habitat Keth IV",
+  "team": 0,
+  "capital": true,
+  "hp": 3600,
+  "speed": 0,
+  "radius": 200,
+  "box": [
+   46,
+   46,
+   46
+  ],
+  "torus": [
+   150,
+   17
+  ],
+  "dmg": 6,
+  "turrets": [
+   [
+    0,
+    50,
+    0
+   ],
+   [
+    0,
+    -50,
+    0
+   ],
+   [
+    150,
+    0,
+    0
+   ],
+   [
+    -150,
+    0,
+    0
+   ]
+  ]
+ },
+ "relay": {
+  "name": "Relaisstation",
+  "team": 1,
+  "capital": true,
+  "hp": 900,
+  "speed": 0,
+  "radius": 75,
+  "box": [
+   14,
+   52,
+   14
+  ],
+  "dmg": 7,
+  "score": 900,
+  "turrets": [
+   [
+    0,
+    44,
+    12
+   ],
+   [
+    0,
+    -30,
+    12
+   ],
+   [
+    12,
+    0,
+    0
+   ]
+  ]
+ },
+ "aurora": {
+  "name": "TUS Aurora",
+  "team": 0,
+  "capital": true,
+  "hp": 4200,
+  "speed": 12,
+  "radius": 240,
+  "box": [
+   6,
+   4,
+   30
+  ],
+  "dmg": 7,
+  "turrets": [
+   [
+    18,
+    21.5,
+    132
+   ],
+   [
+    -18,
+    21.5,
+    132
+   ],
+   [
+    18,
+    21.5,
+    70
+   ],
+   [
+    -18,
+    21.5,
+    70
+   ],
+   [
+    0,
+    20.8,
+    150
+   ],
+   [
+    0,
+    -42.6,
+    -40
+   ],
+   [
+    24.4,
+    -22,
+    -90
+   ],
+   [
+    -24.4,
+    -22,
+    -90
+   ]
+  ]
+ },
+ "transport": {
+  "name": "Samariter",
+  "team": 0,
+  "capital": true,
+  "hp": 1000,
+  "speed": 38,
+  "radius": 55,
+  "box": [
+   17,
+   7.5,
+   50
+  ],
+  "dmg": 6,
+  "turrets": [
+   [
+    0,
+    13.3,
+    0
+   ]
+  ]
+ },
+ "zerstoerer": {
+  "name": "Zerstörer",
+  "team": 1,
+  "capital": true,
+  "hp": 2100,
+  "speed": 18,
+  "radius": 135,
+  "box": [
+   24,
+   20,
+   125
+  ],
+  "dmg": 8,
+  "score": 2000,
+  "turrets": [
+   [
+    20,
+    14,
+    70
+   ],
+   [
+    -20,
+    14,
+    70
+   ],
+   [
+    0,
+    22,
+    -20
+   ],
+   [
+    0,
+    -18,
+    20
+   ],
+   [
+    0,
+    18,
+    -90
+   ]
+  ]
+ },
+ "dreadnought": {
+  "name": "Apotheose",
+  "team": 1,
+  "capital": true,
+  "hp": 5200,
+  "speed": 9,
+  "radius": 260,
+  "box": [
+   50,
+   40,
+   245
+  ],
+  "dmg": 9,
+  "score": 5000,
+  "turrets": [
+   [
+    44,
+    20,
+    150
+   ],
+   [
+    -44,
+    20,
+    150
+   ],
+   [
+    44,
+    20,
+    0
+   ],
+   [
+    -44,
+    20,
+    0
+   ],
+   [
+    0,
+    44,
+    60
+   ],
+   [
+    0,
+    -40,
+    60
+   ],
+   [
+    0,
+    44,
+    -120
+   ],
+   [
+    0,
+    -40,
+    -120
+   ]
+  ]
+ }
+}

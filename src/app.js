@@ -658,7 +658,8 @@ function refreshSettings() {
   setLabel($('set-sound'), `Ton: ${settings.sound ? 'An' : 'Aus'}`);
   setLabel($('set-invert'), `Steuerung: ${settings.invert ? 'Invertiert (runter = hoch)' : 'Direkt (hoch = hoch)'}`);
   setLabel($('set-quality'), `Grafik: ${settings.quality === 'high' ? 'Hoch (Bloom)' : 'Leistung'}`);
-  setLabel($('set-upscale'), `Hochskalierung: ${UPSCALE_LABEL[settings.upscale] || UPSCALE_LABEL.auto}`);
+  const upAuto = (settings.upscale || 'auto') === 'auto';
+  setLabel($('set-upscale'), `Hochskalierung: ${upAuto && settings.quality !== 'high' ? 'Auto (nur bei Grafik Hoch)' : UPSCALE_LABEL[settings.upscale] || UPSCALE_LABEL.auto}`);
   store(SET_KEY, settings);
 }
 $('set-music').onclick = () => { settings.music = !settings.music; audio.setMusic(settings.music); refreshSettings(); };

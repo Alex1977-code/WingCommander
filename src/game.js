@@ -120,7 +120,7 @@ export class Game {
     this.hudCanvas = hudCanvas;
     this.hud = hudCanvas.getContext('2d');
     this.quality = 'high';
-    this.upscale = 'auto'; this.resScale = 1; this.resAuto = { ema: 1 / 60, t: 0, lastUp: -1e9, blockUntil: 0, clock: 0 };
+    this.upscale = 'auto'; this.resScale = 1; this.resAuto = { ema: 1 / 60, t: 0, lastUp: -1e9, blockUntil: 0, clock: 0, before: null, capped: false, backoff: 15 };
     this.invert = false;
     this.mode = 'idle';
     this.paused = false;
@@ -150,7 +150,10 @@ export class Game {
   /** fraction of the output resolution the 3D scene renders at right now */
   renderScale() {
     if (this.upscale === 'off') return 1;
-    return this.upscale === 'auto' ? this.resScale : UPSCALE[this.upscale] || 1;
+    // 'auto' only scales the 'high' chain: it always renders off-screen, so a step changes nothing but the size.
+    // 'low' draws straight to the canvas unless a fixed upscale level was chosen.
+    if (this.upscale === 'auto') return this.quality === 'high' ? this.resScale : 1;
+    return UPSCALE[this.upscale] || 1;
   }
 
   /** 'off' | 'auto' | 'quality' | 'balanced' | 'performance' */
@@ -169,7 +172,7 @@ export class Game {
     const views = this.scene ? [this, ...this.pilots] : this.pilots;
     for (const V of views) {
       const cam = V === this ? this.camera : V.camera;
-      const wantComp = this.quality === 'high', wantUp = !wantComp && this.upscale !== 'off';
+      const wantComp = this.quality === 'high', wantUp = !wantComp && this.upscale !== 'off' && this.upscale !== 'auto';
       if (wantComp && !V.composer) V.composer = this.makeComposer(cam);
       if (!wantComp && V.composer) { disposeComposer(V.composer); V.composer = null; }
       if (wantUp && !V.upscaler) V.upscaler = new Upscaler(this.renderer);
@@ -188,23 +191,42 @@ export class Game {
   sceneTarget(V) { return V?.composer && this.quality === 'high' ? V.composer.readBuffer : V?.upscaler ? V.upscaler.rt : null; }
 
   /**
-   * Automatic resolution: step down when frames take longer than ~1/48 s, step back up when they are
-   * comfortably under 1/57 s. A step up that has to be undone right away blocks further step-ups for a while,
-   * so the picture does not pump between two sizes.
+   * Automatic resolution ('high' only): step down when frames take longer than ~1/48 s, step back up when
+   * they are comfortably under 1/57 s.
+   * - each sample is capped at 2/60 s, so a single hitch (GC, first use of a shader, a wave spawning) is no load
+   * - a step down that does not make frames faster means the rate is capped (power saving, 30 Hz) or CPU-bound:
+   *   it is undone and the resolution stays until the next scene
+   * - a step up that has to be undone soon blocks further step-ups, twice as long each time (no pumping)
    */
   autoRes(rawDt) {
     const A = this.resAuto;
-    if (this.upscale !== 'auto' || this.paused || this.frozen || !(rawDt > 0) || rawDt > 0.25) return;
+    if (this.upscale !== 'auto' || this.quality !== 'high' || this.paused || this.frozen || !(rawDt > 0) || rawDt > 0.25) return;
     A.clock += rawDt; A.t += rawDt;
-    A.ema += (rawDt - A.ema) * 0.05;
-    if (A.t < 1.5) return;
-    const i = RES_STEPS.indexOf(this.resScale);
-    if (A.ema > 1 / 48 && i < RES_STEPS.length - 1) {
-      if (A.clock - A.lastUp < 6) A.blockUntil = A.clock + 30;
-      this.resScale = RES_STEPS[i + 1]; A.t = 0; this.resize();
-    } else if (A.ema < 1 / 57 && i > 0 && A.t > 4 && A.clock > A.blockUntil) {
-      this.resScale = RES_STEPS[i - 1]; A.t = 0; A.lastUp = A.clock; this.resize();
+    A.ema += (Math.min(rawDt, 2 / 60) - A.ema) * 0.05;
+    if (A.t < 2) return;
+    let i = RES_STEPS.indexOf(this.resScale);
+    if (i < 0) i = 0;
+    if (A.ema > 1 / 48 && i < RES_STEPS.length - 1 && !A.capped) {
+      if (A.before != null && A.ema > A.before * 0.97) {
+        A.capped = true; A.before = null; A.t = 0;
+        this.resScale = RES_STEPS[Math.max(0, i - 1)]; this.resize();
+        return;
+      }
+      if (A.clock - A.lastUp < 8) { A.backoff = Math.min(480, A.backoff * 2); A.blockUntil = A.clock + A.backoff; }
+      A.before = A.ema; A.t = 0;
+      this.resScale = RES_STEPS[i + 1]; this.resize();
+    } else if (A.ema < 1 / 57 && i > 0 && A.t > 6 && A.clock > A.blockUntil) {
+      A.before = null; A.t = 0; A.lastUp = A.clock;
+      this.resScale = RES_STEPS[i - 1]; this.resize();
     }
+  }
+
+  /** new scene: forget load spikes, retry one level higher, and re-test a frame-rate cap */
+  resetAutoRes() {
+    const A = this.resAuto;
+    A.ema = 1 / 60; A.t = 0; A.before = null; A.capped = false; A.blockUntil = Math.min(A.blockUntil, A.clock);
+    const i = RES_STEPS.indexOf(this.resScale);
+    if (i > 0) this.resScale = RES_STEPS[i - 1];
   }
 
   resize() {
@@ -220,7 +242,8 @@ export class Game {
     this.hud.setTransform(pr, 0, 0, pr, 0, 0);
     this.w = w; this.h = h;
     const cpr = Math.min(pr, 1.5), sc = this.renderScale();
-    setComposerScale(this.composer, cpr, sc, w, h);
+    const msaa = this.upscale !== 'off';
+    setComposerScale(this.composer, cpr, sc, w, h, msaa);
     this.upscaler?.setSize(w, h, pr, sc);
     const n = this.pilots.length;
     this.pilots.forEach((P, i) => {
@@ -231,7 +254,7 @@ export class Game {
       P.camera.aspect = P.vw / P.vh;
       P.baseFov = n > 1 && stack ? 50 : 60;
       P.camera.updateProjectionMatrix();
-      setComposerScale(P.composer, cpr, sc, P.vw, P.vh);
+      setComposerScale(P.composer, cpr, sc, P.vw, P.vh, msaa);
       P.upscaler?.setSize(P.vw, P.vh, pr, sc);
     });
     const cs = getComputedStyle(document.documentElement);
@@ -286,6 +309,7 @@ export class Game {
     }
     disposeComposer(this.composer); this.composer = null;
     this.upscaler?.dispose(); this.upscaler = null;
+    this.resetAutoRes();
     this.pilots.forEach((P) => { disposeComposer(P.composer); P.upscaler?.dispose(); P.cockpit?.dispose(); });
     this.pilots = [];
     this.scene = new THREE.Scene();

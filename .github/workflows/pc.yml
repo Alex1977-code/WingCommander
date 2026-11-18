@@ -1,0 +1,73 @@
+name: PC-Version (Windows, DLSS)
+on:
+  push:
+    branches: [main]
+    paths: ['native/**', '.github/workflows/pc.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: pc-build
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      DLSS_VERSION: v310.9.1
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: pc-${{ runner.os }}-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: pc-${{ runner.os }}-
+      # the DLSS SDK may not be redistributed by crates: fetch NVIDIA's public SDK (headers + Windows libs only)
+      - name: NVIDIA DLSS SDK
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$DLSS_VERSION" --filter=blob:none --sparse https://github.com/NVIDIA/DLSS.git "$RUNNER_TEMP/dlss"
+          cd "$RUNNER_TEMP/dlss" && git sparse-checkout set include lib/Windows_x86_64 doc
+          echo "DLSS_SDK=$RUNNER_TEMP/dlss" >> "$GITHUB_ENV"
+      # only the Vulkan headers are needed at build time (DLSS runs on Bevy's Vulkan backend)
+      - name: Vulkan headers
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vkh"
+          mkdir -p "$RUNNER_TEMP/vulkan" && cp -r "$RUNNER_TEMP/vkh/include" "$RUNNER_TEMP/vulkan/Include"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vulkan" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: native
+        run: cargo build --release
+      - name: Package
+        shell: bash
+        run: |
+          OUT=Sternenfront-PC
+          mkdir -p "$OUT"
+          cp native/target/release/sternenfront.exe "$OUT/"
+          cp -r native/assets "$OUT/"
+          cp "$DLSS_SDK/lib/Windows_x86_64/rel/nvngx_dlss.dll" "$OUT/"
+          cp "$DLSS_SDK/LICENSE.txt" "$OUT/DLSS-LICENSE.txt"
+          cp native/LIESMICH.txt "$OUT/" 2>/dev/null || true
+          cp native/THIRD_PARTY_NOTICES.txt "$OUT/" 2>/dev/null || true
+          7z a -tzip Sternenfront-PC.zip "$OUT" > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sternenfront-PC
+          path: Sternenfront-PC.zip
+      - name: Release "pc-latest"
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete pc-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create pc-latest Sternenfront-PC.zip --prerelease --target "$GITHUB_SHA" \
+            --title "Sternenfront PC (Windows, DLSS) – neuester Stand" \
+            --notes "Automatisch gebaut aus ${GITHUB_SHA::7}. ZIP entpacken und sternenfront.exe starten. DLSS braucht eine NVIDIA-RTX-Grafikkarte; auf anderen Karten läuft das Spiel mit TAA."

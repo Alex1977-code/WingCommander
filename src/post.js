@@ -225,18 +225,20 @@ export function warmComposer(c) {
 }
 
 /** Render the 'high' chain at a fraction of the output resolution; the film pass upscales and sharpens. */
-export function setComposerScale(c, outPR, scale, w, h) {
+export function setComposerScale(c, outPR, scale, w, h, msaa) {
   if (!c) return;
-  // like FSR, the upscaler needs anti-aliased input: the reduced image gets 4x MSAA (native size keeps
-  // today's cost). Changing samples re-creates the targets on their next use.
-  const samples = scale < 0.999 && c.renderer.capabilities.isWebGL2 ? 4 : 0;
+  // like FSR, the upscaler needs anti-aliased input: with upscaling enabled the scene gets 4x MSAA. The
+  // sample count follows the setting, not the current scale, so the automatic steps only change the size.
+  // Changing samples re-creates the targets on their next use.
+  const samples = msaa && c.renderer.capabilities.isWebGL2 ? 4 : 0;
   if (c.renderTarget1.samples !== samples) {
     for (const rt of [c.renderTarget1, c.renderTarget2]) { rt.samples = samples; rt.dispose(); }
   }
   c.setPixelRatio(outPR * scale);
   c.setSize(w, h);
   const film = c.passes[c.passes.length - 1];
-  if (film) film.upscaling = scale < 0.999;
+  // the real source/output ratio: the composer is capped at 1.5x while the canvas may use up to 2x
+  if (film) film.upscaling = (outPR * scale) / c.renderer.getPixelRatio() < 0.999;
 }
 
 const UP_FRAG = /* glsl */`
@@ -276,6 +278,7 @@ export class Upscaler {
     this.renderer = renderer;
     const float = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float');
     this.rt = new THREE.WebGLRenderTarget(1, 1, { type: float ? THREE.HalfFloatType : THREE.UnsignedByteType, samples: renderer.capabilities.isWebGL2 ? 4 : 0, depthBuffer: true });
+    this.rt.resolveDepthBuffer = false; // only colour is read after the MSAA resolve
     this.uniforms = { tDiffuse: { value: this.rt.texture }, toneMappingExposure: { value: 1 }, uSrcTexel: { value: new THREE.Vector2(1, 1) }, uUp: { value: 0 }, uSharp: { value: 0.35 } };
     this.material = new THREE.RawShaderMaterial({ name: 'Upscale', uniforms: this.uniforms, vertexShader: FILM_VERT, fragmentShader: UP_FRAG, depthTest: false, depthWrite: false });
     this.fsQuad = new FullScreenQuad(this.material);
@@ -283,7 +286,8 @@ export class Upscaler {
   }
   /** w, h: output size in CSS px; pr: output pixel ratio; scale: render fraction */
   setSize(w, h, pr, scale) {
-    const rw = Math.max(1, Math.round(w * pr * scale)), rh = Math.max(1, Math.round(h * pr * scale));
+    // floor like the canvas and its viewport, so 100 % maps texel to pixel
+    const rw = Math.max(1, Math.floor(w * pr * scale)), rh = Math.max(1, Math.floor(h * pr * scale));
     if (rw !== this.rt.width || rh !== this.rt.height) this.rt.setSize(rw, rh);
     this.uniforms.uSrcTexel.value.set(1 / rw, 1 / rh);
     this.uniforms.uUp.value = scale < 0.999 ? 1 : 0;
