@@ -3,6 +3,7 @@
 
 mod ai;
 mod audio;
+mod cockpit;
 mod common;
 mod devtools;
 mod flight;
@@ -71,6 +72,7 @@ fn main() {
             menu::MenuPlugin,
             fx::FxPlugin,
             audio::SfxPlugin,
+            cockpit::CockpitPlugin,
         ))
         .add_plugins(devtools::DevToolsPlugin)
         .run();

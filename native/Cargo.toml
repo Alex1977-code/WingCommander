@@ -16,6 +16,8 @@ default = []
 
 [profile.dev]
 opt-level = 1
+# keep the dev binary small (deps carry debug info otherwise ~2 GB)
+strip = "debuginfo"
 [profile.dev.package."*"]
 opt-level = 3
 [profile.release]
