@@ -9,9 +9,12 @@
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
 //!                     the game quits after the debrief appears (end-to-end test of every mission)
 
-use crate::ai::{facing, not_paused, AiContext, AiRng, Cruise};
+use crate::ai::{AiContext, AiRng, Cruise};
 use crate::common::*;
+use crate::flight::{rotation_facing as facing, AutopilotRequest, Obstacle};
+use crate::render::CameraCutMsg;
 use crate::ships::{spawn_ship, ShipLibrary};
+use crate::weapons::{JumpedOut, WeaponsSet};
 use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -29,15 +32,14 @@ impl Plugin for MissionPlugin {
             autowin: env_on("SF_AUTOWIN"),
             autojump: env_on("SF_AUTOJUMP"),
         };
-        app.add_message::<AutopilotRequest>()
-            .add_message::<BannerMsg>()
+        app.add_message::<BannerMsg>()
             .add_message::<WarpFlashMsg>()
             .init_resource::<MissionState>()
             .init_resource::<StoryFlags>()
             .init_resource::<MissionResult>()
             .init_resource::<ShotMines>()
             .insert_resource(test)
-            .configure_sets(Update, MissionSet.run_if(in_state(AppState::Flight)).run_if(not_paused))
+            .configure_sets(Update, MissionSet.after(WeaponsSet::Dying).run_if(in_state(AppState::Flight)).run_if(not_paused))
             .add_systems(Startup, build_assets)
             .add_systems(Startup, time_scale.run_if(|| std::env::var("SF_TIMESCALE").is_ok()))
             .add_systems(OnEnter(AppState::Flight), start_mission)
@@ -70,6 +72,10 @@ fn time_scale(mut time: ResMut<Time<Virtual>>) {
     }
 }
 
+fn not_paused(p: Res<Paused>) -> bool {
+    !p.0
+}
+
 fn env_on(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
@@ -79,10 +85,6 @@ fn env_on(name: &str) -> bool {
 /// Mission systems (Update, only in flight and not paused).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MissionSet;
-
-/// Sent by flight.rs when the pilot presses the autopilot key. Honoured only while `MissionStatus::auto_available`.
-#[derive(Message, Clone, Copy, Debug, Default)]
-pub struct AutopilotRequest;
 
 /// Big centre-screen announcement ("SEKTOR GESICHERT", "NEUE FEINDWELLE", ...) for hud.rs.
 #[allow(dead_code)]
@@ -598,7 +600,9 @@ fn lay_mines(commands: &mut Commands, assets: &MissionAssets, rng: &mut AiRng, c
         commands
             .spawn((
                 Mine { phase: rng.range(0.0, 6.0), active: false },
-                Hittable { radius: 5.0, half_extents: None },
+                // an obstacle stops bolts (weapons.rs reports the impact, see `mine_hits`), blocks the impulse drive
+                // and makes the AI steer around it
+                Obstacle { radius: 5.0 },
                 InMission,
                 Transform::from_translation(pos).with_rotation(rot),
                 Visibility::default(),
@@ -671,7 +675,11 @@ fn start_mission(
 
     // wingman: same ship type, on the left
     if let Some(who) = m.wingman.clone().filter(|w| !w.is_empty()) {
-        let call = call_sign(&who);
+        // web: CHARS[who].call ("Rook"); the typed Character has no call sign, so read it from the raw JSON
+        let call = raw
+            .as_ref()
+            .and_then(|r| r.get("chars")?.get(who.as_str())?.get("call")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| call_sign(&who));
         let ai = Ai { wingman: true, who: Some(who), skill: 0.75, ..default() };
         st.wingman = Some(spawn_ai_ship(&mut sp, &m.ship, Vec3::new(40.0, -8.0, 270.0), Vec3::Z, ai, Some(call), Some(160.0)));
     }
@@ -711,7 +719,7 @@ fn start_mission(
     radio.say("flug", "Startfreigabe erteilt. Klare Bahn, {cs}!");
 }
 
-/// Wingman's radio call sign: "rook" -> "Rook".
+/// Fallback call sign from the character key: "rook" -> "Rook".
 fn call_sign(who: &str) -> String {
     let mut c = who.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_else(|| "Flügelmann".into())
@@ -1102,8 +1110,18 @@ fn complete_nav(
 }
 
 /// Aces (Archon Veyl) escape when badly hit, except in the final battle (web damage()).
-/// The shot-down wingman's jump-out is weapons.rs' business.
-fn jump_outs(mut commands: Commands, st: Res<MissionState>, ships: Query<(Entity, &Transform, &Ship), Without<Dying>>, mut radio: Radio) {
+/// The shot-down wingman's jump-out is weapons.rs' business: here he only leaves the formation (no failure).
+fn jump_outs(
+    mut commands: Commands,
+    mut st: ResMut<MissionState>,
+    ships: Query<(Entity, &Transform, &Ship), Without<Dying>>,
+    left: Query<Entity, Added<JumpedOut>>,
+    mut radio: Radio,
+) {
+    if let Some(w) = st.wingman.filter(|w| left.contains(*w)) {
+        st.wingman = None;
+        radio.log(|| format!("wingman {w} jumped out"));
+    }
     let final_nav = st.navs.get(st.nav_idx).is_some_and(|n| n.is_final);
     for (e, tf, s) in &ships {
         if s.def.ace && s.hp < s.max_hp * 0.4 && !final_nav && s.team == Team::Aszendenz {
@@ -1126,14 +1144,19 @@ fn keep_alive_after_win(st: Res<MissionState>, mut q: Query<&mut Ship, (With<Pla
     }
 }
 
-/// Mines hit by weapons fire this frame (reading and writing DamageMsg in one system is not allowed).
+/// Mines hit by weapons fire this frame.
 #[derive(Resource, Default)]
 struct ShotMines(Vec<Entity>);
 
-fn mine_hits(mut hits: MessageReader<DamageMsg>, mines: Query<(), With<Mine>>, mut shot: ResMut<ShotMines>) {
+/// weapons.rs stops bolts at obstacles and reports the impact as a hit effect without a ship
+/// (`Entity::PLACEHOLDER`): an impact on a mine sets it off.
+fn mine_hits(mut hits: MessageReader<HitFxMsg>, mines: Query<(Entity, &Transform), With<Mine>>, mut shot: ResMut<ShotMines>) {
     for h in hits.read() {
-        if mines.contains(h.target) {
-            shot.0.push(h.target);
+        if h.ship != Entity::PLACEHOLDER {
+            continue;
+        }
+        if let Some((e, _)) = mines.iter().find(|(_, tf)| tf.translation.distance_squared(h.pos) < 8.0 * 8.0) {
+            shot.0.push(e);
         }
     }
 }
@@ -1283,6 +1306,7 @@ fn autopilot(
     mut player: Query<(&mut Transform, &mut Ship, &mut Player), Without<Dying>>,
     mut others: Query<(&mut Transform, &mut Ship), (Without<Player>, Without<Dying>)>,
     mut radio: Radio,
+    mut cut: MessageWriter<CameraCutMsg>,
 ) {
     let asked = req.read().count() > 0;
     if !asked && !(radio.test.autojump && status.auto_available) {
@@ -1297,6 +1321,7 @@ fn autopilot(
     let lp = ptf.translation;
     let back = (lp - np).normalize_or(Vec3::NEG_Z);
     radio.sfx.write(SfxMsg::Warp);
+    cut.write(CameraCutMsg);
     pl.impulse = false;
     pl.impulse_prog = 0.0;
     pl.boosting = false;

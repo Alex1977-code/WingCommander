@@ -2,10 +2,10 @@
 //! Writes `Steer` (where to fly) and `Trigger` (what to fire) for every ship with `Ai` and no `Player`;
 //! flight.rs turns and moves the ships, weapons.rs fires. Also the wingman's formation flying and radio chatter.
 //!
-//! Test hooks: SF_AI_LOG=1 prints every fighter's state every 3 s; SF_AI_SELFMOVE=1 moves the ships here
-//! (only for testing without flight.rs).
+//! Test hook: SF_AI_LOG=1 prints every fighter's state every 3 s.
 
 use crate::common::*;
+use crate::flight::{hull_distance, FlightSet, Obstacle};
 use bevy::prelude::*;
 
 pub struct AiPlugin;
@@ -15,25 +15,13 @@ impl Plugin for AiPlugin {
         app.init_resource::<AiContext>()
             .init_resource::<WingChatter>()
             .insert_resource(AiRng::seeded())
-            .configure_sets(Update, AiSet.run_if(in_state(AppState::Flight)).run_if(not_paused))
             .add_systems(OnEnter(AppState::Flight), reset_chatter)
-            .add_systems(Update, (init_ai, react_to_hits, kill_chatter, think).chain().in_set(AiSet));
+            // FlightSet::Ai only runs in flight and not while paused
+            .add_systems(Update, (init_ai, react_to_hits, kill_chatter, think).chain().in_set(FlightSet::Ai));
         if std::env::var("SF_AI_LOG").is_ok_and(|v| v != "0") {
-            app.add_systems(Update, log_ai.after(think).in_set(AiSet));
-        }
-        if std::env::var("SF_AI_SELFMOVE").is_ok_and(|v| v != "0") {
-            // test hook: integrate movement here while flight.rs is not available (never set in normal play)
-            app.add_systems(Update, self_move.after(think).in_set(AiSet));
+            app.add_systems(Update, log_ai.after(think).in_set(FlightSet::Ai));
         }
     }
-}
-
-/// All AI systems (Update, only in flight and not paused). flight.rs / weapons.rs may order against it.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AiSet;
-
-pub fn not_paused(p: Option<Res<Paused>>) -> bool {
-    !p.is_some_and(|p| p.0)
 }
 
 /// What the AI needs to know about the mission (written by mission.rs every frame).
@@ -131,7 +119,8 @@ struct Snap {
     capital: bool,
     ghost: bool,
     radius: f32,
-    half: Option<Vec3>,
+    hit: Hittable,
+    torus: Option<[f32; 2]>,
     player: bool,
     /// this ship's AI target (or the player's selected target)
     target: Option<Entity>,
@@ -214,6 +203,8 @@ fn think(
     mut chatter: ResMut<WingChatter>,
     mut comm: MessageWriter<CommMsg>,
     mut snaps: Local<Vec<Snap>>,
+    mut rocks: Local<Vec<(Vec3, f32)>>,
+    obstacles: Query<(&Transform, &Obstacle), Without<Ship>>,
     mut set: ParamSet<(
         Query<(Entity, &Transform, &Ship, Option<&Ai>, Option<&Player>, &Hittable), Without<Dying>>,
         AiQuery,
@@ -222,6 +213,8 @@ fn think(
     let dt = time.delta_secs().min(0.1);
     chatter.clock += dt;
     snaps.clear();
+    rocks.clear();
+    rocks.extend(obstacles.iter().map(|(tf, o)| (tf.translation, o.radius)));
     for (e, tf, ship, ai, player, hit) in set.p0().iter() {
         snaps.push(Snap {
             e,
@@ -232,7 +225,8 @@ fn think(
             capital: ship.capital(),
             ghost: ship.def.ghost,
             radius: hit.radius,
-            half: hit.half_extents,
+            hit: *hit,
+            torus: ship.def.torus,
             player: player.is_some(),
             target: player.map_or_else(|| ai.and_then(|a| a.target), |p| p.target),
             hunts_player: false,
@@ -254,7 +248,7 @@ fn think(
         let f = tf.rotation * Vec3::Z;
         let def = &ship.def;
 
-        // ---- capital ships: cruise / follow a destination, turrets fire at whatever is near ----
+        // ---- capital ships: cruise or follow a destination (weapons.rs aims their turrets) ----
         if def.capital {
             let mut dir = f;
             // without a destination: hold course and the speed the ship was spawned with (carrier cruise)
@@ -280,28 +274,6 @@ fn think(
                 }
             }
             *steer = Steer { dir, speed: want };
-            if !def.turrets.is_empty() {
-                let mut best = None;
-                let mut bd = 1500.0f32;
-                for o in snaps.iter() {
-                    if !ship.team.hostile_to(o.team) || o.ghost {
-                        continue;
-                    }
-                    let d = o.pos.distance(pos) - ship.radius() * 0.5;
-                    if d < bd {
-                        bd = d;
-                        best = Some(o);
-                    }
-                }
-                if let Some(o) = best {
-                    let dist = o.pos.distance(pos);
-                    trig.guns = true;
-                    trig.aim = Some(o.pos + (o.rot * Vec3::Z) * o.speed * dist / BOLT_SPEED);
-                    ai.target = Some(o.e);
-                } else {
-                    ai.target = None;
-                }
-            }
             continue;
         }
 
@@ -309,6 +281,7 @@ fn think(
         if let Some(dest) = ai.dest {
             let to = dest - pos;
             let mut dir = to.normalize_or(f);
+            avoid_rocks(&rocks, pos, 90.0, &mut dir);
             avoid_hulls(&snaps, None, pos, &mut dir);
             *steer = Steer { dir, speed: cruise.map_or(ship.def.speed, |c| c.0) };
             continue;
@@ -417,6 +390,7 @@ fn think(
                 }
             }
         }
+        avoid_rocks(&rocks, pos, 70.0, &mut dir);
         avoid_hulls(&snaps, ai.target, pos, &mut dir);
         *steer = Steer { dir, speed: want };
     }
@@ -483,51 +457,23 @@ fn avoid_hulls(snaps: &[Snap], target: Option<Entity>, pos: Vec3, dir: &mut Vec3
         if pos.distance_squared(c.pos) > (c.radius + 120.0).powi(2) {
             continue;
         }
-        let (d, push) = hull_dist(c, pos);
+        let tf = Transform::from_translation(c.pos).with_rotation(c.rot);
+        let (d, push) = hull_distance(&tf, &c.hit, c.torus, pos);
         if d < 60.0 {
             *dir = (*dir + push * 3.0).normalize_or(*dir);
         }
     }
 }
 
-/// Signed distance to a capital ship's hull box (sphere without one) and the outward direction.
-fn hull_dist(c: &Snap, p: Vec3) -> (f32, Vec3) {
-    let rel = p - c.pos;
-    match c.half {
-        Some(h) => {
-            let inv = c.rot.inverse();
-            let l = inv * rel;
-            let q = l.abs() - h;
-            let outside = q.max(Vec3::ZERO);
-            let d = outside.length() + q.max_element().min(0.0);
-            let n_local = if outside.length_squared() > 1e-6 {
-                (outside * l.signum()).normalize()
-            } else {
-                // inside: push out along the axis of least penetration
-                let ax = if q.x > q.y && q.x > q.z {
-                    Vec3::X * l.x.signum()
-                } else if q.y > q.z {
-                    Vec3::Y * l.y.signum()
-                } else {
-                    Vec3::Z * l.z.signum()
-                };
-                ax
-            };
-            (d, c.rot * n_local)
-        }
-        None => {
-            let d = rel.length();
-            (d - c.radius, if d > 1e-3 { rel / d } else { Vec3::Y })
+/// Steer around asteroids (and mines) closer than `margin` to their surface.
+fn avoid_rocks(rocks: &[(Vec3, f32)], pos: Vec3, margin: f32, dir: &mut Vec3) {
+    for &(c, r) in rocks {
+        let away = pos - c;
+        let d = away.length();
+        if d < r + margin && d > 1e-3 {
+            *dir = (*dir + away / d * 2.5 * (1.0 - (d - r) / margin).min(1.5)).normalize_or(*dir);
         }
     }
-}
-
-/// Rotation whose +Z (ship forward) points along `dir`, keeping `up` as close as possible.
-pub fn facing(dir: Vec3, up: Vec3) -> Quat {
-    let d = dir.normalize_or(Vec3::Z);
-    let up = if d.cross(up).length_squared() < 1e-6 { d.any_orthonormal_vector() } else { up };
-    // looking_to points -Z at the target; ships fly along +Z
-    Transform::IDENTITY.looking_to(-d, up).rotation
 }
 
 /// SF_AI_LOG: every 3 s one line per AI fighter (mode, target, distance, speed, firing).
@@ -561,22 +507,5 @@ fn log_ai(
             ship.missiles,
             if ai.wingman { "  [wingman]" } else { "" }
         );
-    }
-}
-
-/// Test hook (SF_AI_SELFMOVE=1): minimal movement integration so the AI can be watched before flight.rs exists.
-fn self_move(time: Res<Time>, mut q: Query<(&mut Transform, &mut Ship, Option<&Steer>, Has<Player>), Without<Dying>>) {
-    let dt = time.delta_secs().min(0.1);
-    for (mut tf, mut ship, steer, player) in &mut q {
-        if let (Some(s), false) = (steer, player) {
-            let rate = if ship.def.turn > 0.0 { ship.def.turn } else { 0.35 };
-            if s.dir.length_squared() > 1e-6 {
-                let want = facing(s.dir, tf.rotation * Vec3::Y);
-                tf.rotation = tf.rotation.rotate_towards(want, rate * dt);
-            }
-            ship.speed += (s.speed - ship.speed) * (dt * 1.4).min(1.0);
-        }
-        let f = tf.rotation * Vec3::Z;
-        tf.translation += f * ship.speed * dt;
     }
 }
