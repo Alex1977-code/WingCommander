@@ -1174,10 +1174,11 @@ fn jump_outs(
     mut commands: Commands,
     mut st: ResMut<MissionState>,
     ships: Query<(Entity, &Transform, &Ship), Without<Dying>>,
-    left: Query<Entity, Added<JumpedOut>>,
+    left: Query<Has<JumpedOut>>,
     mut radio: Radio,
 ) {
-    if let Some(w) = st.wingman.filter(|w| left.contains(*w)) {
+    // gone (despawned after the jump) or marked: the wingman has left the fight
+    if let Some(w) = st.wingman.filter(|w| left.get(*w).unwrap_or(true)) {
         st.wingman = None;
         radio.log(|| format!("wingman {w} jumped out"));
     }
