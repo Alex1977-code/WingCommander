@@ -1575,6 +1575,10 @@ struct FxTest {
     big: bool,
     hits: bool,
     booms: bool,
+    ships: bool,
+    spawned: bool,
+    /// capital death sequence: position, time, next pop
+    capital: Option<(Vec3, f32, f32)>,
     period: f32,
     size: Option<f32>,
     dist: f32,
@@ -1594,7 +1598,10 @@ impl FxTest {
         Some(Self {
             big: v == "big",
             hits: v != "boom" && v != "big",
-            booms: v != "hits",
+            booms: v != "hits" && v != "ships",
+            ships: v == "ships",
+            spawned: false,
+            capital: None,
             period: num("SF_FX_PERIOD").unwrap_or(3.0),
             size: num("SF_FX_SIZE"),
             dist: num("SF_FX_DIST").unwrap_or(140.0),
@@ -1606,11 +1613,16 @@ impl FxTest {
     }
 }
 
-/// SF_FX=1|boom|hits|big: explosions (SF_FX_AT first, every SF_FX_PERIOD s, SF_FX_SIZE, SF_FX_DIST m ahead)
-/// and shield / hull hits on the nearest ship. SF_FX_SLOW=<factor> runs the effects in slow motion.
+/// SF_FX=1|boom|hits|big|ships: explosions (SF_FX_AT first, every SF_FX_PERIOD s, SF_FX_SIZE, SF_FX_DIST m
+/// ahead), shield / hull hits on the nearest ship, a capital's death sequence (big), fighters crossing the
+/// view (ships). SF_FX_SLOW=<factor> runs the effects in slow motion.
+#[allow(clippy::too_many_arguments)]
 fn fx_test(
+    mut commands: Commands,
     time: Res<Time>,
     mut test: ResMut<FxTest>,
+    lib: Res<crate::ships::ShipLibrary>,
+    data: Res<GameData>,
     players: Query<&Transform, With<Player>>,
     others: Query<(Entity, &Transform, &Ship), Without<Player>>,
     fx: Res<Fx>,
@@ -1618,13 +1630,46 @@ fn fx_test(
     mut hits: MessageWriter<HitFxMsg>,
 ) {
     let Ok(pt) = players.single() else { return };
-    test.t += time.delta_secs();
-    if (test.t * 2.0) as u32 != ((test.t - time.delta_secs()) * 2.0) as u32 {
+    let dt = time.delta_secs();
+    test.t += dt;
+    if (test.t * 2.0) as u32 != ((test.t - dt) * 2.0) as u32 {
         info!("fx test: t {:.2}, effect time {:.2}", test.t, fx.time);
+        for (_, tf, ship) in &others {
+            let d = tf.translation - pt.translation;
+            info!("fx test:   {} ahead {:.0} side {:.0} speed {:.0}", ship.kind, d.dot(pt.rotation * Vec3::Z), d.dot(pt.rotation * Vec3::X), ship.speed);
+        }
     }
     let fwd = pt.rotation * Vec3::Z;
     let right = pt.rotation * Vec3::X;
     let up = pt.rotation * Vec3::Y;
+    if test.ships && !test.spawned {
+        test.spawned = true;
+        // fighters flying ahead of the player and slowly across the view, the last one on boost
+        for (i, kind) in ["falke", "klinge", "archon"].into_iter().enumerate() {
+            let side = [1.0, -1.0, 0.4][i];
+            let at = pt.translation + fwd * (10.0 + 30.0 * i as f32) + right * side * 30.0 + up * (8.0 * i as f32 - 6.0);
+            let e = crate::ships::spawn_ship(&mut commands, &lib, &data, kind, Transform::from_translation(at).with_rotation(crate::flight::rotation_facing(fwd - right * side * 0.1, up)));
+            let def = data.ship(kind);
+            let mut ship = Ship::new(kind, def);
+            ship.speed = def.speed * if i == 2 { 1.6 } else { 1.0 };
+            commands.entity(e).insert(ship);
+        }
+    }
+    if let Some((at, t, pop)) = test.capital.as_mut() {
+        // a capital ship's death as weapons.rs sends it: pops every 0.13 s, then the final blast
+        *t += dt;
+        *pop -= dt;
+        if *pop <= 0.0 && *t < 2.6 {
+            *pop = 0.13;
+            let k = (*t * 37.0).sin();
+            let off = Vec3::new(k * 60.0, (k * 3.1).cos() * 20.0, (k * 7.3).sin() * 110.0);
+            explode.write(ExplodeMsg { pos: *at + off, size: 1.5 + (k * 0.5 + 0.5) * 2.0 });
+        }
+        if *t >= 2.6 {
+            explode.write(ExplodeMsg { pos: *at, size: 6.0 });
+            test.capital = None;
+        }
+    }
     if test.hits {
         let near = others.iter().min_by(|a, b| a.1.translation.distance_squared(pt.translation).total_cmp(&b.1.translation.distance_squared(pt.translation)));
         if let Some((e, tf, ship)) = near {
@@ -1644,13 +1689,17 @@ fn fx_test(
         test.next += test.period;
         let n = test.count;
         test.count += 1;
-        let side = if n % 2 == 0 { -1.0 } else { 1.0 };
-        let at = pt.translation + fwd * test.dist + right * side * test.dist * 0.15 + up * 8.0;
-        let size = test.size.unwrap_or(if n % 3 == 2 { 1.6 } else { 1.0 });
-        info!("fx test: explosion {n} size {size} at t {:.2}", test.t);
-        explode.write(ExplodeMsg { pos: at, size });
-        if test.big && n % 2 == 1 {
-            explode.write(ExplodeMsg { pos: pt.translation + fwd * 900.0 + up * 60.0, size: 6.0 });
+        if test.big {
+            let at = pt.translation + fwd * test.dist.max(600.0) + up * 40.0;
+            info!("fx test: capital death sequence at t {:.2}", test.t);
+            explode.write(ExplodeMsg { pos: at, size: 3.0 });
+            test.capital = Some((at, 0.0, 0.13));
+        } else {
+            let side = if n % 2 == 0 { -1.0 } else { 1.0 };
+            let at = pt.translation + fwd * test.dist + right * side * test.dist * 0.15 + up * 8.0;
+            let size = test.size.unwrap_or(if n % 3 == 2 { 1.6 } else { 1.0 });
+            info!("fx test: explosion {n} size {size} at t {:.2}", test.t);
+            explode.write(ExplodeMsg { pos: at, size });
         }
     }
 }
