@@ -6,7 +6,10 @@
 //! `FlightSet::Input` -> `FlightSet::Ai` (ai.rs) -> `FlightSet::Steer` -> `FlightSet::Move` -> `FlightSet::Collide`
 //! -> `WeaponsSet::*` (weapons.rs). Everything except `Input` stops while `Paused`.
 //!
-//! Test hook: `SF_PILOT=attack` flies the player automatically at the current target and fires (screenshots).
+//! Test hooks: `SF_PILOT=attack` flies the player automatically at the current target and fires (screenshots);
+//! `SF_PILOT=bay` flies out of the hangar, turns round 400 m ahead of the bow and flies back into the TUS Aurora's
+//! hangar tube by hand, slowly (tube collisions; with mission.rs' `SF_TEST_RETURN=1` the tractor beam catches it:
+//! the hand-landing test).
 
 use crate::common::*;
 use crate::render::{Asteroid, CameraShake};
@@ -202,11 +205,14 @@ pub fn seg_point(a: Vec3, b: Vec3, c: Vec3) -> (f32, Vec3) {
 pub struct FlightPlugin;
 
 /// `SF_PILOT=attack`: the player flies itself at its target (automated screenshot runs);
-/// `SF_PILOT=bay`: it flies into the TUS Aurora's hangar tunnel (collision test).
+/// `SF_PILOT=bay`: it flies out of the hangar, turns round and back into the TUS Aurora's hangar tube (hand landing);
+/// `SF_PILOT=bayfast`: the same at full throttle.
 #[derive(Resource, Default)]
 struct TestPilot {
     attack: bool,
     bay: bool,
+    /// `SF_PILOT=bayfast`: the same at full throttle (the tractor beam's too-fast catch)
+    bay_fast: bool,
 }
 
 /// One-shot radio hints per mission.
@@ -220,7 +226,11 @@ impl Plugin for FlightPlugin {
         let flying = in_state(AppState::Flight);
         let running = |p: Res<Paused>| !p.0;
         app.add_message::<AutopilotRequest>()
-            .insert_resource(TestPilot { attack: std::env::var("SF_PILOT").is_ok_and(|v| v == "attack"), bay: std::env::var("SF_PILOT").is_ok_and(|v| v == "bay") })
+            .insert_resource(TestPilot {
+                attack: std::env::var("SF_PILOT").is_ok_and(|v| v == "attack"),
+                bay: std::env::var("SF_PILOT").is_ok_and(|v| v == "bay" || v == "bayfast"),
+                bay_fast: std::env::var("SF_PILOT").is_ok_and(|v| v == "bayfast"),
+            })
             .init_resource::<FlightHints>()
             .configure_sets(
                 Update,
@@ -383,7 +393,7 @@ fn player_input(
                 let local = tf.rotation.inverse() * (aim - tf.translation).normalize_or(Vec3::Z);
                 let behind = if local.z < 0.0 { 1.0 } else { 0.0 };
                 pilot.stick = Vec2::new((-local.x * 4.0 + behind).clamp(-1.0, 1.0), (-local.y * 4.0).clamp(-1.0, 1.0));
-                player.throttle = if pilot.bay_lined { 0.05 } else { 0.4 };
+                player.throttle = if pilot.bay_lined && !test.bay_fast { 0.05 } else if pilot.bay_lined { 1.0 } else { 0.4 };
                 fire = false;
                 neutron = false;
                 pilot.bay_log -= dt;
