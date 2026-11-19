@@ -920,7 +920,7 @@ fn controls_screen(p: &mut ChildSpawnerCommands, b: &mut Build) {
         ("SHIFT", "Boost · gehalten ohne Feinde: Impulsantrieb"),
         ("Q / E · MAUSRAD", "Schub"),
         ("T", "Ziel wechseln"),
-        ("J", "Autopilot zum nächsten Navpunkt"),
+        ("J", "Autopilot (Navpunkt · Landung)"),
         ("V / C", "Cockpit / Außenansicht"),
         ("ESC / P", "Pause"),
         ("", ""),
@@ -1366,6 +1366,7 @@ fn menu_actions(
     mut shown: ResMut<Shown>,
     mut progress: ResMut<Progress>,
     mut settings: ResMut<Settings>,
+    bay: Res<crate::mission::BayStatus>,
     dlss: Res<DlssAvailable>,
     debrief: Res<Debriefing>,
     mut restart: ResMut<RestartPending>,
@@ -1454,7 +1455,12 @@ fn menu_actions(
             }
         }
         if changed {
-            save_json("settings.json", &*settings);
+            // a launch forces the cockpit view for a moment: the file keeps the player's own choice
+            let mut saved = settings.clone();
+            if let Some(v) = bay.view_saved {
+                saved.view = v;
+            }
+            save_json("settings.json", &saved);
             shown.dirty = true;
         }
         sfx.write(SfxMsg::UiOk);

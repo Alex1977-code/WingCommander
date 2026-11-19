@@ -5,7 +5,7 @@
 //! Test hook: SF_AI_LOG=1 prints every fighter's state every 3 s.
 
 use crate::common::*;
-use crate::flight::{hull_distance_shape, FlightSet, Obstacle, MAX_DT};
+use crate::flight::{hull_distance_shape, FlightSet, Obstacle, SeqHold, MAX_DT};
 use crate::ships::{HullBoxes, HullShape};
 use std::sync::Arc;
 use bevy::prelude::*;
@@ -200,7 +200,17 @@ fn kill_chatter(
 type AiQuery<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static Transform, &'static Ship, &'static mut Ai, &'static mut AiState, &'static mut Steer, &'static mut Trigger, Option<&'static Cruise>),
+    (
+        Entity,
+        &'static Transform,
+        &'static Ship,
+        &'static mut Ai,
+        &'static mut AiState,
+        &'static mut Steer,
+        &'static mut Trigger,
+        Option<&'static Cruise>,
+        Has<SeqHold>,
+    ),
     (Without<Player>, Without<Dying>),
 >;
 
@@ -259,10 +269,16 @@ fn think(
     let lead = snaps.iter().find(|s| s.player).copied();
     let player_targets = |e: Entity, snaps: &[Snap]| snaps.iter().any(|s| s.player && s.target == Some(e));
 
-    for (e, tf, ship, mut ai, mut st, mut steer, mut trig, cruise) in set.p1().iter_mut() {
+    for (e, tf, ship, mut ai, mut st, mut steer, mut trig, cruise, held) in set.p1().iter_mut() {
         *trig = Trigger::default();
         let pos = tf.translation;
         let f = tf.rotation * Vec3::Z;
+        if held {
+            // launch / landing on rails (mission.rs flies the ship): hold course, no fighting
+            *steer = Steer { dir: f, speed: ship.speed };
+            ai.target = None;
+            continue;
+        }
         let def = &ship.def;
 
         // ---- capital ships: cruise or follow a destination (weapons.rs aims their turrets) ----

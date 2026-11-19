@@ -34,6 +34,11 @@ use screens::{Elem, Screens};
 
 /// The cockpit is modelled in web metres and shown this much bigger (see module docs).
 const SCALE: f32 = 4.0;
+/// Displays stand this far proud of their bezel face, their cover glass this far over the display (web metres).
+/// Camera-attached parts are positioned in f32 world space, so far from the origin their vertices are rounded
+/// to about a millimetre; closer parallel surfaces would fight over depth and shimmer.
+const SCREEN_GAP: f32 = 0.0025;
+const GLASS_GAP: f32 = 0.002;
 /// Web emissive / light values -> Bevy (three.js' ACES pre-scale, see render.rs)
 const WEB: f32 = 1.0 / 0.6;
 /// Lumen per web candela at Bevy's default exposure
@@ -73,6 +78,17 @@ fn not_paused(p: Res<Paused>) -> bool {
 
 // ---------- layout ----------
 
+/// The side MFDs: angle around the console arc, screen width and height above the console's mid line. They sit
+/// a little higher than the web's (0) so that their lower edge, which the wide-angle projection pushes down at
+/// the sides, stays on screen.
+const SIDE_MFD: (f32, f32, f32) = (40.0, 0.155, 0.03);
+/// Console radius the screen-relative parts (canopy frame, hands, side consoles) were laid out against: the
+/// 16:9 radius of the web formula. They move away with the console, so they keep their size next to it.
+const R_REF: f32 = 0.662;
+/// The side MFDs' screens must end this far inside the screen edges (screen fractions).
+const FIT_X: f32 = 0.975;
+const FIT_Y: f32 = 0.965;
+
 /// Screen-relative layout: everything is placed in camera space from the view's aspect and base FOV.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
@@ -85,24 +101,124 @@ pub struct Layout {
     lean: f32,
     panel_y: f32,
     span: f32,
+    /// angle scale of the instrument positions around the arc (< 1 on narrow screens)
+    ka: f32,
+    /// distance scale of the screen-relative parts (r / R_REF)
+    k: f32,
 }
 
 impl Layout {
+    /// Fits the console to the screen: its top edge sits a third below the centre, and the radius grows until
+    /// the side MFDs are fully on screen. On wide screens the vertical field of view is smaller, so the console
+    /// moves away (web formula, then a little more for the side MFDs); on narrow ones the instruments also move
+    /// closer together around the arc (with the radius growing to match, so nothing overlaps).
     fn new(aspect: f32, fov_deg: f32) -> Self {
         let half_v = fov_deg.to_radians() * 0.5;
-        let th = half_v.tan();
-        // on wide screens the vertical field of view is smaller: the console moves a little further away until
-        // everything from its top edge (33 % below centre) down to the button rows fits
-        let avail = half_v - (0.33 * th).atan();
-        let r = 0.62 * (0.4 / avail).max(1.0);
+        let avail = half_v - (0.33 * half_v.tan()).atan();
+        let base = 0.62 * (0.4 / avail).max(1.0);
+        let (mut zoom, mut ka) = (1.0f32, 1.0f32);
+        let mut l = Self::with(aspect, fov_deg, base, ka);
+        for _ in 0..400 {
+            let (x, y) = l.side_mfd_extent();
+            if x > FIT_X && ka > 0.5 {
+                ka *= 0.996;
+            } else if y < -FIT_Y && zoom < 2.0 {
+                zoom *= 1.004;
+            } else {
+                break;
+            }
+            l = Self::with(aspect, fov_deg, base * zoom / ka, ka);
+        }
+        l
+    }
+    fn with(aspect: f32, fov_deg: f32, r: f32, ka: f32) -> Self {
+        let th = (fov_deg.to_radians() * 0.5).tan();
         let (h, lean) = (0.32, -0.21);
         let top = Quat::from_rotation_x(lean) * Vec3::new(0.0, h * 0.5, -r);
         let want_y = -0.33 * th * -top.z;
         let span = (120.0 + aspect * 18.0).min(170.0);
-        Self { aspect, fov: fov_deg, th, r, h, lean, panel_y: want_y - top.y, span }
+        Self { aspect, fov: fov_deg, th, r, h, lean, panel_y: want_y - top.y, span, ka, k: r / R_REF }
     }
-    /// point at screen fraction (fx, fy) and distance d
+    /// how far the MFDs reach: right edge of the right-hand MFD's bezel, lowest edge of the MFD screens
+    fn side_mfd_extent(&self) -> (f32, f32) {
+        let (deg, mw, my) = SIDE_MFD;
+        let mh = mw * 0.75;
+        let xf = self.mfd_bezel(deg, mw, my);
+        let mut x = f32::MIN;
+        let mut y = f32::MAX;
+        for sy in [-1.0, 1.0] {
+            x = x.max(self.screen(xf.transform_point3(Vec3::new(mw * 0.61, sy * mh * 0.65, 0.004))).x);
+        }
+        let centre = self.mfd_bezel(0.0, 0.2, -0.012);
+        for sx in [-1.0, 1.0] {
+            y = y.min(self.screen(xf.transform_point3(Vec3::new(sx * mw * 0.5, -mh * 0.5, 0.004 + SCREEN_GAP))).y);
+            y = y.min(self.screen(centre.transform_point3(Vec3::new(sx * 0.1, -0.075, 0.004 + SCREEN_GAP))).y);
+        }
+        (x, y)
+    }
+    /// screen fraction (-1..1 across the view) of a point in cockpit space
+    fn screen(&self, p: Vec3) -> Vec2 {
+        Vec2::new(p.x / (-p.z * self.th * self.aspect), p.y / (-p.z * self.th))
+    }
+    /// bezel of an MFD (screen width `mw`) at layout angle `deg`, height `my`
+    fn mfd_bezel(&self, deg: f32, mw: f32, my: f32) -> Mat4 {
+        self.place(self.deg(deg), my, 0.002 + self.flat(mw * 1.22))
+    }
+    /// bezel of a narrow log screen at layout angle `deg`
+    fn log_bezel(&self, deg: f32) -> Mat4 {
+        self.place(self.deg(deg), 0.012, 0.003 + self.flat(0.074))
+    }
+    /// bezel of the annunciator strip
+    fn annun_bezel(&self) -> Mat4 {
+        self.place(0.0, 0.128, 0.004 + self.flat(0.29))
+    }
+    /// face of an instrument pod (0.17 x 0.074) standing on the glare shield at layout angle `deg`
+    fn pod(&self, deg: f32) -> Mat4 {
+        let (a, rr) = (self.deg(deg).to_radians(), self.r - 0.004);
+        self.panel() * tr(rr * a.sin(), self.h * 0.5 + 0.074 * 0.5 + 0.012, -rr * a.cos()) * ry(-a) * rx(-0.32)
+    }
+    /// Every display: its surface (local +Z towards the pilot) and size.
+    #[cfg(test)]
+    fn displays(&self) -> Vec<(Elem, Mat4, Vec2)> {
+        let (sd, sw, sy) = SIDE_MFD;
+        let on = |m: Mat4, z: f32| m * tr(0.0, 0.0, z);
+        vec![
+            (Elem::Mfd0, on(self.mfd_bezel(-sd, sw, sy), 0.004 + SCREEN_GAP), Vec2::new(sw, sw * 0.75)),
+            (Elem::Mfd1, on(self.mfd_bezel(0.0, 0.2, -0.012), 0.004 + SCREEN_GAP), Vec2::new(0.2, 0.15)),
+            (Elem::Mfd2, on(self.mfd_bezel(sd, sw, sy), 0.004 + SCREEN_GAP), Vec2::new(sw, sw * 0.75)),
+            (Elem::Log0, on(self.log_bezel(-23.0), 0.004 + SCREEN_GAP), Vec2::new(0.064, 0.08)),
+            (Elem::Log1, on(self.log_bezel(23.0), 0.004 + SCREEN_GAP), Vec2::new(0.064, 0.08)),
+            (Elem::Annun, on(self.annun_bezel(), 0.003 + SCREEN_GAP), Vec2::new(0.27, 0.054)),
+            (Elem::Seg, on(self.pod(-34.0), 0.005 + SCREEN_GAP), Vec2::new(0.15, 0.0656)),
+            (Elem::Bar, on(self.pod(34.0) * tr(-0.042, 0.0, 0.0), 0.005 + SCREEN_GAP), Vec2::new(0.07, 0.06)),
+        ]
+    }
+    /// Screen height of a hand on a control at distance `d` whose top is `top` above the pivot: low enough
+    /// that the hand stays below the log screen above it (`deg` -23 / 23), at most `fy`.
+    fn hand_fy(&self, deg: f32, fy: f32, d: f32, top: f32) -> f32 {
+        let log = self.log_bezel(deg);
+        let bottom = [-1.0, 1.0].map(|sx| self.screen(log.transform_point3(Vec3::new(sx * 0.032, -0.04, 0.004 + SCREEN_GAP))).y);
+        fy.min(bottom[0].min(bottom[1]) - 0.04 - top / (d * self.k * self.th))
+    }
+    /// flight stick pivot (right hand; the top of the hand is about 0.18 above it)
+    fn stick(&self) -> Vec3 {
+        self.s(0.37, self.hand_fy(23.0, -1.64, 0.3, 0.18), 0.3)
+    }
+    /// throttle quadrant (left hand; the top of the hand is about 0.13 above it)
+    fn throttle(&self) -> Vec3 {
+        self.s(-0.44, self.hand_fy(-23.0, -1.56, 0.32, 0.13), 0.32)
+    }
+    /// low side console beside the seat (`sx` -1 left, 1 right); local +Z is its face, the face is 0.26 x 0.42
+    fn side_console(&self, sx: f32) -> Mat4 {
+        trv(self.s(0.86 * sx, -1.15, 0.5)) * ry(-sx * 0.95) * rx(-1.05)
+    }
+    /// an instrument's angle around the arc (web layout angle, squeezed on narrow screens)
+    fn deg(&self, d: f32) -> f32 {
+        d * self.ka
+    }
+    /// point at screen fraction (fx, fy) and distance d (web units; scaled with the console radius)
     fn s(&self, fx: f32, fy: f32, d: f32) -> Vec3 {
+        let d = d * self.k;
         Vec3::new(fx * self.th * self.aspect * d, fy * self.th * d, -d)
     }
     fn panel(&self) -> Mat4 {
@@ -320,7 +436,10 @@ struct KeyCap {
 struct CautionCap;
 
 #[derive(Component)]
-struct AlarmLight;
+struct AlarmLight {
+    /// intensity factor for the layout's distance scale (squared)
+    k2: f32,
+}
 
 #[derive(Component)]
 struct ScreenLight;
@@ -602,6 +721,7 @@ fn ensure_built(
         commands.entity(e).despawn();
     }
     let layout = Layout::new(aspect, fov);
+    info!("cockpit layout for aspect {aspect:.3}: fov {fov}, console radius {:.3}, arc scale {:.3}", layout.r, layout.ka);
     let root = commands
         .spawn((Name::new("Cockpit"), CockpitRoot { layout }, Transform::from_scale(Vec3::splat(SCALE)), Visibility::Hidden, ChildOf(cam)))
         .id();
@@ -626,24 +746,29 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
     b.add(M::Dark, &knee, panel);
     // padded glare shield lip, orange trim, rubber edge
     b.add(M::Metal, &geom::tube(&arc(r + 0.03, h * 0.5 + 0.02, -half_span + 6.0, half_span - 6.0, 48), 0.03, 0.015, 96, 12, Vec3::Y), panel);
-    b.add(M::Trim, &geom::tube(&arc(r - 0.008, h * 0.5 - 0.004, -48.0, 48.0, 24), 0.004, 0.004, 64, 6, Vec3::Y), panel);
+    b.add(M::Trim, &geom::tube(&arc(r - 0.008, h * 0.5 - 0.004, -l.deg(48.0), l.deg(48.0), 24), 0.004, 0.004, 64, 6, Vec3::Y), panel);
     b.add(M::Rubber, &geom::tube(&arc(r * 1.02, -h * 0.5, -half_span + 4.0, half_span - 4.0, 48), 0.02, 0.02, 96, 8, Vec3::Y), panel);
     // glare shield top (closes the gap between lip and canopy sill)
     b.add(M::Dark, &glare_top(r + 0.03, h * 0.5 + 0.02, half_span - 6.0), panel);
 
     // --- three MFDs with worn bezels, recessed screens, visors and soft keys ---
-    let mfd_place = [(-40.0, Elem::Mfd0, 0.155, 0.0), (0.0, Elem::Mfd1, 0.2, -0.012), (40.0, Elem::Mfd2, 0.155, 0.0)];
+    let (side_deg, side_w, side_y) = SIDE_MFD;
+    let mfd_place = [(-side_deg, Elem::Mfd0, side_w, side_y), (0.0, Elem::Mfd1, 0.2, -0.012), (side_deg, Elem::Mfd2, side_w, side_y)];
     for (deg, elem, mw, my) in mfd_place {
         let mh = mw * 0.75;
         // flat parts stand proud of the curved console so their edges do not sink into it
         let fl = l.flat(mw * 1.22);
-        b.add(M::Bezel, &geom::rounded_slab(mw * 1.22, mh * 1.3, 0.014, 0.01 + fl, 0.004), l.place(deg, my, 0.004 + fl));
-        screen_frame(b, mw, mh, l.place(deg, my, 0.0085 + fl));
-        let xf = l.place(deg, my, 0.0085 + fl);
+        // the screen stands SCREEN_GAP proud of the bezel face: far enough that the two never fight over depth,
+        // even with the f32 rounding of camera-attached parts far from the world origin
+        let bz = l.mfd_bezel(deg, mw, my);
+        b.add(M::Bezel, &geom::rounded_slab(mw * 1.22, mh * 1.3, 0.014, 0.01 + fl, 0.004), bz);
+        let xf = bz * tr(0.0, 0.0, 0.004 + SCREEN_GAP);
+        screen_frame(b, mw, mh, xf);
         b.part(root, &geom::plane(mw, mh), screens.mat(elem), xf);
-        b.add(M::ScreenGlass, &geom::plane(mw, mh), xf * tr(0.0, 0.0, 0.0012));
+        b.add(M::ScreenGlass, &geom::plane(mw, mh), xf * tr(0.0, 0.0, GLASS_GAP));
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
         // sun visor over the display, with side cheeks
+        let deg = l.deg(deg);
         let vz = l.place(deg, my + mh * 0.65 + 0.004, 0.006 + fl);
         b.add(M::SteelDark, &geom::rounded_slab(mw * 1.3, 0.042, 0.006, 0.004, 0.002), vz * tr(0.0, 0.0, 0.019) * rx(-1.25));
         for sx in [-1.0, 1.0] {
@@ -657,34 +782,36 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
         }
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             let (w, hh) = (mw * 1.22, mh * 1.3);
-            b.bolt(l.place(deg, my, 0.004 + fl), sx * (w / 2.0 - 0.008), sy * (hh / 2.0 - 0.008), 0.006);
+            b.bolt(bz, sx * (w / 2.0 - 0.008), sy * (hh / 2.0 - 0.008), 0.006);
         }
     }
     // narrow text screens with scrolling system messages
     for (deg, elem) in [(-23.0, Elem::Log0), (23.0, Elem::Log1)] {
         let fl = l.flat(0.074);
-        b.add(M::Bezel, &geom::rounded_slab(0.074, 0.112, 0.01, 0.008 + fl, 0.004), l.place(deg, 0.012, 0.005 + fl));
-        screen_frame(b, 0.064, 0.08, l.place(deg, 0.012, 0.0095 + fl));
-        let xf = l.place(deg, 0.012, 0.0095 + fl);
+        let bz = l.log_bezel(deg);
+        b.add(M::Bezel, &geom::rounded_slab(0.074, 0.112, 0.01, 0.008 + fl, 0.004), bz);
+        let xf = bz * tr(0.0, 0.0, 0.004 + SCREEN_GAP);
+        screen_frame(b, 0.064, 0.08, xf);
         b.part(root, &geom::plane(0.064, 0.08), screens.mat(elem), xf);
-        b.add(M::ScreenGlass, &geom::plane(0.064, 0.08), xf * tr(0.0, 0.0, 0.0012));
+        b.add(M::ScreenGlass, &geom::plane(0.064, 0.08), xf * tr(0.0, 0.0, GLASS_GAP));
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
     }
     // banks of illuminated push-buttons under the displays
     use ButtonKind as K;
     let banks: [(f32, f32, usize, &[ButtonKind], Elem); 5] = [
-        (-40.0, -0.1, 7, &[K::ShieldGen, K::Idle, K::Guns, K::Idle, K::Nav, K::Idle, K::Ecm], Elem::Bank0),
+        (-side_deg, side_y - 0.1, 7, &[K::ShieldGen, K::Idle, K::Guns, K::Idle, K::Nav, K::Idle, K::Ecm], Elem::Bank0),
         (0.0, -0.128, 10, &[K::Missile], Elem::Bank1),
-        (40.0, -0.1, 7, &[K::Boost, K::Idle, K::Comm, K::Idle, K::Auto, K::Idle, K::Hull], Elem::Bank2),
+        (side_deg, side_y - 0.1, 7, &[K::Boost, K::Idle, K::Comm, K::Idle, K::Auto, K::Idle, K::Hull], Elem::Bank2),
         (-23.0, -0.075, 4, &[K::Idle, K::Nav, K::Idle, K::Guns], Elem::Bank3),
         (23.0, -0.075, 4, &[K::Comm, K::Idle, K::Ecm, K::Idle], Elem::Bank4),
     ];
     let cap = geom::rounded_slab(0.013, 0.009, 0.0015, 0.006, 0.0012);
-    let tray = geom::cuboid(0.0172, 0.017, 0.004);
+    // a little narrower than the button pitch: neighbouring trays turn by the curve and must not overlap
+    let tray = geom::cuboid(0.0168, 0.017, 0.004);
     let off = b.assets.lamp(b.mats, CapBase::Button, [0.0; 3]);
     for (deg, y, n, kinds, bank) in banks {
         for k in 0..n {
-            let d = deg + ((k as f32 - (n as f32 - 1.0) / 2.0) * 0.017 / r).to_degrees();
+            let d = l.deg(deg) + ((k as f32 - (n as f32 - 1.0) / 2.0) * 0.017 / r).to_degrees();
             let xf = l.place(d, y, 0.012);
             if k == n / 2 {
                 state.elem_pos[bank as usize] = xf.transform_point3(Vec3::ZERO);
@@ -698,42 +825,45 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
     }
     // annunciator strip above the radar
     let fl = l.flat(0.29);
-    b.add(M::Bezel, &geom::rounded_slab(0.29, 0.068, 0.008, 0.006 + fl, 0.003), l.place(0.0, 0.128, 0.006 + fl));
-    let xf = l.place(0.0, 0.128, 0.0095 + fl);
+    let bz = l.annun_bezel();
+    b.add(M::Bezel, &geom::rounded_slab(0.29, 0.068, 0.008, 0.006 + fl, 0.003), bz);
+    let xf = bz * tr(0.0, 0.0, 0.003 + SCREEN_GAP);
     b.part(root, &geom::plane(0.27, 0.054), screens.mat(Elem::Annun), xf);
     state.elem_pos[Elem::Annun as usize] = xf.transform_point3(Vec3::ZERO);
     // stickers and maintenance plaques
     for (deg, y, i, rot) in [(-15.5, -0.135, 0u8, 0.03), (16.0, -0.14, 1, -0.04), (-58.0, 0.08, 2, 0.05)] {
-        b.add(M::Decal(i), &geom::plane(0.075, 0.028), l.place(deg, y, 0.002 + l.flat(0.075)) * rz(rot));
+        b.add(M::Decal(i), &geom::plane(0.075, 0.028), l.place(l.deg(deg), y, 0.002 + l.flat(0.075)) * rz(rot));
     }
     // master caution push-button
-    let mc = l.place(-19.0, 0.11, 0.014);
+    let mc = l.place(l.deg(-19.0), 0.11, 0.014);
     let cap_e = b.part(root, &geom::cylinder(0.016, 0.017, 0.012, 24, true), off.clone(), mc * rx(FRAC_PI_2));
     b.commands.entity(cap_e).insert(CautionCap);
     b.add(M::Chrome, &geom::torus(0.019, 0.003, 24, 8), mc * rx(FRAC_PI_2));
     // red alarm light near the caution button, cool glow of the displays, soft cabin fill
-    let ap = mc.transform_point3(Vec3::ZERO) + Vec3::new(0.0, 0.06, 0.12);
+    // the lights move away with the console (k) and get brighter to match, so it is lit the same on every screen
+    let k = l.k;
+    let ap = mc.transform_point3(Vec3::ZERO) + Vec3::new(0.0, 0.06, 0.12) * k;
     b.commands.spawn((
-        AlarmLight,
-        PointLight { color: Color::srgb(1.0, 0.13, 0.19), intensity: 0.0, range: 1.4 * SCALE, radius: 0.02 * SCALE, ..default() },
+        AlarmLight { k2: k * k },
+        PointLight { color: Color::srgb(1.0, 0.13, 0.19), intensity: 0.0, range: 1.4 * SCALE * k, radius: 0.02 * SCALE * k, ..default() },
         Transform::from_translation(ap),
         ChildOf(root),
     ));
     b.commands.spawn((
         ScreenLight,
-        PointLight { color: Color::srgb(0.5, 0.88, 1.0), intensity: 0.5 * CANDELA * SCALE * SCALE, range: 1.0 * SCALE, radius: 0.1 * SCALE, ..default() },
-        Transform::from_translation(Vec3::new(0.0, l.panel_y + 0.05, -0.35)),
+        PointLight { color: Color::srgb(0.5, 0.88, 1.0), intensity: 0.5 * CANDELA * SCALE * SCALE * k * k, range: 1.0 * SCALE * k, radius: 0.1 * SCALE * k, ..default() },
+        Transform::from_translation(Vec3::new(0.0, l.panel_y + 0.05 * k, -0.35 * k)),
         ChildOf(root),
     ));
     // the web cockpit's hemisphere light: cool from above, a warm bounce from below
     b.commands.spawn((
-        PointLight { color: Color::srgb(0.48, 0.59, 0.72), intensity: 0.32 * CANDELA * SCALE * SCALE, range: 2.2 * SCALE, radius: 0.3 * SCALE, ..default() },
-        Transform::from_translation(Vec3::new(0.0, 0.55, 0.15)),
+        PointLight { color: Color::srgb(0.48, 0.59, 0.72), intensity: 0.32 * CANDELA * SCALE * SCALE * k * k, range: 2.2 * SCALE * k, radius: 0.3 * SCALE * k, ..default() },
+        Transform::from_translation(Vec3::new(0.0, 0.55, 0.15) * k),
         ChildOf(root),
     ));
     b.commands.spawn((
-        PointLight { color: Color::srgb(0.6, 0.45, 0.32), intensity: 0.06 * CANDELA * SCALE * SCALE, range: 1.6 * SCALE, radius: 0.3 * SCALE, ..default() },
-        Transform::from_translation(Vec3::new(0.0, l.panel_y - 0.35, -0.2)),
+        PointLight { color: Color::srgb(0.6, 0.45, 0.32), intensity: 0.06 * CANDELA * SCALE * SCALE * k * k, range: 1.6 * SCALE * k, radius: 0.3 * SCALE * k, ..default() },
+        Transform::from_translation(Vec3::new(0.0, l.panel_y - 0.35 * k, -0.2 * k)),
         ChildOf(root),
     ));
 
@@ -772,16 +902,17 @@ fn glare_top(rad: f32, y: f32, half: f32) -> Geo {
 fn screen_frame(b: &mut Builder, w: f32, h: f32, xf: Mat4) {
     let t = 0.004;
     for (x, y, bw, bh) in [(0.0, h * 0.5 + t * 0.5, w + t * 2.0, t), (0.0, -h * 0.5 - t * 0.5, w + t * 2.0, t), (w * 0.5 + t * 0.5, 0.0, t, h), (-w * 0.5 - t * 0.5, 0.0, t, h)] {
-        b.add(M::Inset, &geom::cuboid(bw, bh, 0.006), xf * tr(x, y, 0.0015));
+        // deep enough to reach back into the bezel behind the screen
+        b.add(M::Inset, &geom::cuboid(bw, bh, 0.009), xf * tr(x, y, 0.0));
     }
 }
 
 /// louvred ribs, instrument pods with seven-segment readouts, LED bars, keypad and guarded toggles
 fn build_retrofit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut CockpitState) {
     let root = b.root;
-    let (r, h) = (l.r, l.h);
+    let h = l.h;
     for deg in [-29.0, 29.0] {
-        let rib = l.place(deg, 0.0, 0.016);
+        let rib = l.place(l.deg(deg), 0.0, 0.016);
         b.add(M::SteelDark, &geom::rounded_slab(0.034, h * 0.92, 0.006, 0.03, 0.003), rib);
         for k in 0..9 {
             b.add(M::Steel, &geom::cuboid(0.03, 0.0035, 0.016), rib * tr(0.0, -h * 0.36 + k as f32 * h * 0.09, 0.006) * rx(0.7));
@@ -792,8 +923,7 @@ fn build_retrofit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Co
     }
     // pods standing on the glare shield, faces tilted up towards the pilot
     let pod = |b: &mut Builder, deg: f32, w: f32, ph: f32, d: f32| -> Mat4 {
-        let (a, rr) = (deg.to_radians(), r - 0.004);
-        let xf = l.panel() * tr(rr * a.sin(), h * 0.5 + ph * 0.5 + 0.012, -rr * a.cos()) * ry(-a) * rx(-0.32);
+        let xf = l.pod(deg);
         b.add(M::Steel, &geom::rounded_slab(w, ph, 0.01, d, 0.005), xf);
         for sx in [-1.0, 1.0] {
             b.add(M::SteelDark, &geom::rounded_slab(0.012, ph * 1.15, 0.004, d * 1.1, 0.003), xf * tr(sx * (w / 2.0 + 0.004), -ph * 0.05, 0.004));
@@ -807,12 +937,12 @@ fn build_retrofit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Co
     };
     // left pod: three rows of seven-segment readouts
     let pl = pod(b, -34.0, 0.17, 0.074, 0.05);
-    let xf = pl * tr(0.0, 0.0, 0.0065);
+    let xf = pl * tr(0.0, 0.0, 0.005 + SCREEN_GAP);
     b.part(root, &geom::plane(0.15, 0.0656), screens.mat(Elem::Seg), xf);
     state.elem_pos[Elem::Seg as usize] = xf.transform_point3(Vec3::ZERO);
     // right pod: LED bar graphs, keypad, rotary knob and guarded toggle switches on top
     let pr = pod(b, 34.0, 0.17, 0.074, 0.05);
-    let xf = pr * tr(-0.042, 0.0, 0.0065);
+    let xf = pr * tr(-0.042, 0.0, 0.005 + SCREEN_GAP);
     b.part(root, &geom::plane(0.07, 0.06), screens.mat(Elem::Bar), xf);
     state.elem_pos[Elem::Bar as usize] = xf.transform_point3(Vec3::ZERO);
     let key = geom::rounded_slab(0.016, 0.011, 0.002, 0.004, 0.0015);
@@ -844,10 +974,8 @@ fn build_retrofit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Co
 
 /// cable bundles and a corrugated conduit from the pods along the sill and up the canopy pillars
 fn build_cables(b: &mut Builder, l: &Layout) {
-    let (r, h) = (l.r, l.h);
     for sx in [-1.0f32, 1.0] {
-        let (a, rr) = ((34.0 * sx).to_radians(), r - 0.004);
-        let pod = l.panel() * tr(rr * a.sin(), h * 0.5 + 0.074 * 0.5 + 0.012, -rr * a.cos()) * ry(-a) * rx(-0.32);
+        let pod = l.pod(34.0 * sx);
         let start = pod.transform_point3(Vec3::new(sx * 0.09, -0.01, -0.03));
         let (base, up1, up2) = (l.s(0.97 * sx, -0.47, 0.64), l.s(0.93 * sx, 0.05, 0.57), l.s(0.76 * sx, 0.62, 0.47));
         for k in 0..4 {
@@ -882,12 +1010,12 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
     let bow = [l.s(-0.62, 1.04, 0.42), l.s(-0.3, 1.14, 0.4), l.s(0.0, 1.17, 0.4), l.s(0.3, 1.14, 0.4), l.s(0.62, 1.04, 0.42)];
     b.add(M::Metal, &geom::tube(&bow, 0.014, 0.014, 48, 12, Vec3::Y), Mat4::IDENTITY);
     let glass = geom::sphere_patch(0.9, PI * 0.7, PI * 0.6, PI * 0.18, PI * 0.45, 32, 16, true);
-    let ge = b.part_m(root, &glass, M::Glass, tr(0.0, -0.05, 0.0));
+    let ge = b.part_m(root, &glass, M::Glass, tr(0.0, -0.05 * l.k, 0.0) * Mat4::from_scale(Vec3::splat(l.k)));
     b.commands.entity(ge).insert(CanopyGlass);
     // cracks in the canopy glass (the texture grows with heavy hits)
     let d = 0.5;
     let (a, c) = (l.s(-1.0, 1.0, d), l.s(1.0, -0.28, d));
-    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, a.z));
     b.commands.entity(cl).insert((CrackLayer, Visibility::Hidden));
     // HUD combiner frame
     let hc = l.s(0.0, -0.3, 0.58);
@@ -901,7 +1029,7 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
 /// flight stick (right) and throttle quadrant (left)
 fn build_controls(b: &mut Builder, l: &Layout) {
     let root = b.root;
-    let stick = b.pivot(root, trv(l.s(0.37, -1.64, 0.3)));
+    let stick = b.pivot(root, trv(l.stick()));
     b.commands.entity(stick).insert(StickPivot);
     b.part_m(stick, &geom::cylinder(0.012, 0.03, 0.05, 14, true), M::Rubber, Mat4::IDENTITY);
     b.part_m(stick, &geom::cylinder(0.006, 0.007, 0.09, 10, true), M::Chrome, tr(0.0, 0.06, 0.0));
@@ -914,7 +1042,7 @@ fn build_controls(b: &mut Builder, l: &Layout) {
     // boot at the base of the stick
     b.part_m(stick, &geom::cylinder(0.034, 0.05, 0.03, 16, true), M::Rubber, tr(0.0, -0.03, 0.0));
 
-    let thr = b.pivot(root, trv(l.s(-0.44, -1.56, 0.32)) * ry(0.25));
+    let thr = b.pivot(root, trv(l.throttle()) * ry(0.25));
     b.part_m(thr, &geom::rounded_slab(0.05, 0.16, 0.012, 0.018, 0.004), M::Metal, rx(-FRAC_PI_2));
     // slot in the rail
     b.part_m(thr, &geom::cuboid(0.014, 0.004, 0.13), M::Inset, tr(0.0, 0.0035, 0.0));
@@ -930,17 +1058,18 @@ fn build_controls(b: &mut Builder, l: &Layout) {
 /// low side consoles along the sills with switch rows and a circuit-breaker panel
 fn build_side_consoles(b: &mut Builder, l: &Layout) {
     for sx in [-1.0f32, 1.0] {
-        let c = l.s(0.86 * sx, -1.15, 0.5);
-        let xf = trv(c) * ry(-sx * 0.95) * rx(-1.05);
+        let xf = l.side_console(sx);
         b.add(M::Dark, &geom::rounded_slab(0.26, 0.42, 0.02, 0.05, 0.006), xf);
         b.add(M::Metal, &geom::cuboid(0.012, 0.42, 0.03), xf * tr(sx * 0.13, 0.0, 0.0));
         for row in 0..3 {
             let y = 0.12 - row as f32 * 0.09;
-            b.add(M::Bezel, &geom::rounded_slab(0.2, 0.05, 0.006, 0.006, 0.002), xf * tr(0.0, y, 0.004));
+            // the console's face is at z = 0.006: the switch plates stand 2.5 mm proud of it (flush they
+            // fought over depth and flickered)
+            b.add(M::Bezel, &geom::rounded_slab(0.2, 0.05, 0.006, 0.006, 0.002), xf * tr(0.0, y, 0.0065));
             for k in 0..5 {
                 let x = -0.08 + k as f32 * 0.04;
-                b.add(M::Steel, &geom::cylinder(0.005, 0.005, 0.004, 6, true), xf * tr(x, y, 0.012) * rx(FRAC_PI_2));
-                b.add(M::Chrome, &geom::cylinder(0.0014, 0.002, 0.016, 6, true), xf * tr(x, y + 0.004, 0.018) * rx(FRAC_PI_2 - 0.5));
+                b.add(M::Steel, &geom::cylinder(0.005, 0.005, 0.007, 6, true), xf * tr(x, y, 0.011) * rx(FRAC_PI_2));
+                b.add(M::Chrome, &geom::cylinder(0.0014, 0.002, 0.016, 6, true), xf * tr(x, y + 0.004, 0.0195) * rx(FRAC_PI_2 - 0.5));
             }
         }
         // breaker panel: rows of small black pull-buttons
@@ -1173,7 +1302,7 @@ fn update_lamps(
         Query<(&Toggle, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<&mut MeshMaterial3d<StandardMaterial>, With<CautionCap>>,
     )>,
-    mut alarm: Query<&mut PointLight, (With<AlarmLight>, Without<ScreenLight>)>,
+    mut alarm: Query<(&AlarmLight, &mut PointLight), Without<ScreenLight>>,
     mut screen_light: Query<&mut PointLight, (With<ScreenLight>, Without<AlarmLight>)>,
     mut glass: Query<&MeshMaterial3d<StandardMaterial>, (With<CanopyGlass>, Without<Button>, Without<KeyCap>, Without<Toggle>, Without<CautionCap>)>,
     sky: Option<Res<crate::render::SkyInfo>>,
@@ -1319,8 +1448,8 @@ fn update_lamps(
             mat.0 = h.clone();
         }
     }
-    for mut l in &mut alarm {
-        l.intensity = if red && flash { 0.9 * CANDELA * SCALE * SCALE } else { 0.0 };
+    for (a, mut l) in &mut alarm {
+        l.intensity = if red && flash { 0.9 * CANDELA * SCALE * SCALE * a.k2 } else { 0.0 };
     }
     for mut l in &mut screen_light {
         l.color = if red { Color::srgb(1.0, 0.6, 0.63) } else { Color::srgb(0.5, 0.88, 1.0) };
@@ -1379,6 +1508,96 @@ mod tests {
             let top = l.panel().transform_point3(Vec3::new(0.0, l.h * 0.5, -l.r));
             let fy = top.y / (-top.z * l.th);
             assert!((fy + 0.33).abs() < 1e-3, "aspect {aspect}: top edge at {fy}");
+        }
+    }
+
+    const ASPECTS: [f32; 8] = [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 2000.0 / 837.0, 2560.0 / 1080.0, 3440.0 / 1440.0, 3840.0 / 1080.0, 5120.0 / 1080.0];
+
+    /// sample points on a display (5 x 5 grid including the corners)
+    fn samples(xf: Mat4, size: Vec2) -> Vec<Vec3> {
+        let mut v = Vec::new();
+        for i in 0..5 {
+            for j in 0..5 {
+                let (u, w) = (i as f32 / 4.0 - 0.5, j as f32 / 4.0 - 0.5);
+                v.push(xf.transform_point3(Vec3::new(u * size.x, w * size.y, 0.0)));
+            }
+        }
+        v
+    }
+
+    /// does the ray from the eye to `p` pass through the box `lo..hi` (in the frame `xf`) before reaching `p`?
+    fn hides(xf: Mat4, lo: Vec3, hi: Vec3, p: Vec3) -> bool {
+        let inv = xf.inverse();
+        let (o, d) = (inv.transform_point3(Vec3::ZERO), inv.transform_vector3(p));
+        let (mut t0, mut t1) = (0.0f32, 0.999f32);
+        for a in 0..3 {
+            if d[a].abs() < 1e-9 {
+                if o[a] < lo[a] || o[a] > hi[a] {
+                    return false;
+                }
+                continue;
+            }
+            let (ta, tb) = ((lo[a] - o[a]) / d[a], (hi[a] - o[a]) / d[a]);
+            t0 = t0.max(ta.min(tb));
+            t1 = t1.min(ta.max(tb));
+        }
+        t0 <= t1
+    }
+
+    #[test]
+    fn all_displays_are_on_screen() {
+        for aspect in ASPECTS {
+            let l = Layout::new(aspect, layout_fov(aspect));
+            println!(
+                "aspect {aspect:.3}: fov {} r {:.3} ka {:.3} k {:.3} side MFD extent {:?}, stick {:.2} throttle {:.2}",
+                l.fov,
+                l.r,
+                l.ka,
+                l.k,
+                l.side_mfd_extent(),
+                l.screen(l.stick()).y,
+                l.screen(l.throttle()).y
+            );
+            for (e, xf, size) in l.displays() {
+                for p in samples(xf, size) {
+                    let s = l.screen(p);
+                    assert!(s.x.abs() <= 0.99 && s.y.abs() <= 0.99, "aspect {aspect}: {e:?} leaves the screen at {s}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn side_consoles_do_not_cover_displays() {
+        for aspect in ASPECTS {
+            let l = Layout::new(aspect, layout_fov(aspect));
+            for sx in [-1.0, 1.0] {
+                // the console with its edge strip and switches
+                let (xf, lo, hi) = (l.side_console(sx), Vec3::new(-0.14, -0.21, -0.05), Vec3::new(0.14, 0.21, 0.03));
+                for (e, dxf, size) in l.displays() {
+                    for p in samples(dxf, size) {
+                        assert!(!hides(xf, lo, hi, p), "aspect {aspect}: side console {sx} covers {e:?} at {:?}", l.screen(p));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wide_layouts_keep_the_16_9_proportions() {
+        // the console's on-screen size changes only a little from 16:9 to 32:9, and the screen-relative parts
+        // (hands, side consoles, canopy frame) move away with it
+        let l16 = Layout::new(16.0 / 9.0, layout_fov(16.0 / 9.0));
+        let size = |l: &Layout| {
+            let (_, xf, s) = l.displays()[1];
+            let (a, b) = (l.screen(xf.transform_point3(Vec3::new(0.0, -s.y * 0.5, 0.0))), l.screen(xf.transform_point3(Vec3::new(0.0, s.y * 0.5, 0.0))));
+            b.y - a.y
+        };
+        for aspect in ASPECTS {
+            let l = Layout::new(aspect, layout_fov(aspect));
+            let k = size(&l) / size(&l16);
+            assert!((0.75..1.3).contains(&k), "aspect {aspect}: centre MFD {k}x its 16:9 height");
+            assert!((l.k - l.r / R_REF).abs() < 1e-5);
         }
     }
 

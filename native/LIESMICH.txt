@@ -20,6 +20,13 @@ Steuerung
 ---------
 Maus/Tastatur oder Gamepad; die vollständige Belegung steht im Spiel unter „Steuerung“.
 
+Start und Landung
+-----------------
+Jeder Einsatz beginnt in der Hangarbucht der TUS Aurora: Rot – Triebwerke vorheizen,
+Gelb – Halteklammern lösen sich, Grün – Schub geben und durch die Röhre hinaus.
+Nach dem Einsatz gibt es nahe der Aurora die Landefreigabe. Mit J landet der Autopilot,
+oder man fliegt selbst langsam in die Bucht – der Traktorstrahl fängt das Schiff ein.
+
 Spielstand und Fehler
 ---------------------
 Einstellungen und Spielstand liegen in %APPDATA%\Sternenfront.

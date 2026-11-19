@@ -9,7 +9,7 @@
 //! their ellipsoid (`render::Asteroid`), mines (`flight::Obstacle`) spheres.
 
 use crate::common::*;
-use crate::flight::{seg_point, segment_hull_shape, FlightSet, Obstacle, MAX_DT};
+use crate::flight::{seg_point, segment_hull_shape, FlightSet, Obstacle, SeqHold, MAX_DT};
 use crate::render::{Asteroid, CameraShake};
 use crate::ships::{HullBoxes, HullShape, ShipLibrary, TurretHead};
 use bevy::light::NotShadowCaster;
@@ -608,12 +608,19 @@ fn shields(time: Res<Time>, mut clock: ResMut<WeaponClock>, mut q: Query<&mut Sh
 fn player_aim(
     time: Res<Time>,
     cache: Res<TargetCache>,
-    mut q: Query<(&Transform, &Ship, &mut Player, &mut PlayerAim, &mut Neutron), Without<Dying>>,
+    mut q: Query<(&Transform, &Ship, &mut Player, &mut PlayerAim, &mut Neutron, Has<SeqHold>), Without<Dying>>,
     mut sfx: MessageWriter<SfxMsg>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     let lock_cos = LOCK_CONE_DEG.to_radians().cos();
-    for (tf, ship, mut player, mut aim, mut neutron) in &mut q {
+    for (tf, ship, mut player, mut aim, mut neutron, held) in &mut q {
+        if held {
+            // launch / landing on rails: no lead, no seeker lock (web: aimLocked = false, mslLock = 0)
+            aim.lead = None;
+            aim.locked = false;
+            player.lock = 0.0;
+            continue;
+        }
         let f = fwd(tf);
         let tgt = player.target.and_then(|t| cache.get(t));
         aim.lead = None;

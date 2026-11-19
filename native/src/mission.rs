@@ -13,12 +13,30 @@
 //! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman, or run out the timer (`timer`),
 //!   after s seconds of mission time (failure paths); the game quits after the debrief
 //! - SF_FLAGS=a,b,...  extra story flags for this run (on top of story.json)
+//! - SF_TEST_RETURN=1  skip every nav point once the launch is over: straight to the return and landing
+//! - SF_NO_BAY=1       start in front of the carrier and "land" by proximity (the web's non-bay fallback)
+//! - SF_BAY_FREEZE=<s> the launch countdown stops at s seconds (screenshots of the red / amber phase)
+//! - SF_LAND_FREEZE=<z> the player stops once it is at carrier-local z <= this on the final approach, or flying
+//!   by hand towards the bay with clearance (screenshots)
+//! - SF_BAY_STAY=1     the mission does not end once everybody is parked (screenshots)
+//! - SF_BAY_CHASE=1    keep the chase view during the launch (screenshots; the game forces the cockpit)
+//! - SF_OUT_FREEZE=<z> the launched player stops once it is at carrier-local z >= this (screenshots)
+//!
+//! Launch and landing (web startLaunch / startLanding / captureInBay / updateSeq): every mission starts
+//! clamped in the TUS Aurora's hangar bay (red: engines pre-heat, amber: clamps release and the bay field
+//! drops, green: the pilot flies out through the tube by hand). Back home, landing clearance comes within
+//! 1.8 km of the carrier when no enemy fighter is near it; then the pilot either flies into the bay by hand
+//! (the tractor beam catches the ship inside the mouth) or presses AUTO for the landing autopilot (waypoints
+//! in front of the bow, final approach nose first down the bay's centre line to a stop mark). The mission
+//! ends once every living pilot (player and wingman) is parked. The wingman launches behind the player and
+//! starts his own landing approach as soon as the clearance comes.
 
 use crate::ai::{AiContext, AiRng, Cruise};
+use crate::audio::BeepMsg;
 use crate::common::*;
-use crate::flight::{rotation_facing as facing, AutopilotRequest, ImpulseBlock, Obstacle, MAX_DT};
-use crate::render::CameraCutMsg;
-use crate::ships::{spawn_ship, ShipLibrary};
+use crate::flight::{in_bay_corridor, rotation_facing as facing, AutopilotRequest, ImpulseBlock, Obstacle, SeqHold, MAX_DT};
+use crate::render::{CameraCutMsg, CameraShake};
+use crate::ships::{spawn_ship, ShipLibrary, AURORA_BAY as BAY};
 use crate::weapons::{CancelSeekersMsg, JumpedOut, Neutron, WeaponsSet};
 use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
@@ -46,12 +64,19 @@ impl Plugin for MissionPlugin {
                 let (who, t) = v.split_once('@')?;
                 Some((who.to_string(), t.parse().ok()?))
             }),
+            test_return: env_on("SF_TEST_RETURN"),
+            no_bay: env_on("SF_NO_BAY"),
+            bay_freeze: std::env::var("SF_BAY_FREEZE").ok().and_then(|v| v.parse().ok()),
+            land_freeze: std::env::var("SF_LAND_FREEZE").ok().and_then(|v| v.parse().ok()),
+            out_freeze: std::env::var("SF_OUT_FREEZE").ok().and_then(|v| v.parse().ok()),
+            bay_stay: env_on("SF_BAY_STAY"),
         };
         app            .add_message::<WarpFlashMsg>()
             .init_resource::<MissionState>()
             .init_resource::<StoryFlags>()
             .init_resource::<MissionResult>()
             .init_resource::<ShotMines>()
+            .init_resource::<BayStatus>()
             .insert_resource(test)
             .configure_sets(Update, MissionSet.after(WeaponsSet::Dying).run_if(in_state(AppState::Flight)).run_if(not_paused))
             .add_systems(Startup, build_assets)
@@ -68,6 +93,7 @@ impl Plugin for MissionPlugin {
                     mine_hits,
                     update_mines,
                     update_mission,
+                    bay_seq,
                     jump_outs,
                     keep_alive_after_win,
                     publish_status,
@@ -102,6 +128,45 @@ fn env_on(name: &str) -> bool {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MissionSet;
 
+
+/// Stage of a landing on rails (web `P.landStage`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LandStage {
+    /// landing autopilot: waypoints round the hull to the approach point in front of the bow
+    Approach,
+    /// final approach nose first down the bay's centre line to the stop mark
+    Final,
+    /// set down on the stop mark, clamps on
+    Parked,
+}
+
+/// Launch / landing state for the HUD, the camera and the sound (owner: mission.rs, written every frame).
+/// Hangar coordinates are carrier-local (`ships::AURORA_BAY`).
+#[derive(Resource, Default, Clone, Debug)]
+pub struct BayStatus {
+    /// the carrier, while it is alive
+    pub carrier: Option<Transform>,
+    /// launch countdown (seconds since the start) while the player is still clamped:
+    /// red until 1.2 s, amber until `LAUNCH_GO`, then green
+    pub launch_t: Option<f32>,
+    /// released by the launch, still inside the tube ("START FREI")
+    pub in_bay: bool,
+    /// the player is on the landing rails: stage and stop mark (carrier-local z)
+    pub landing: Option<(LandStage, f32)>,
+    /// cleared to land and flying by hand: approach guidance (beam rings, bay marker, ILS needles)
+    pub land_clear: bool,
+    /// everybody parked: the drive is shut down
+    pub engine_off: bool,
+    /// the player is inside the hangar tube (no sun flare in there)
+    pub inside: bool,
+    /// the player's position in carrier coordinates (for the guidance displays)
+    pub local: Vec3,
+    /// the view the player had chosen before the launch forced the cockpit view: settings.json keeps this one
+    pub view_saved: Option<View>,
+}
+
+/// Launch: the lamps turn green (own thrust) this many seconds after the start (red -> amber at 1.2 s).
+pub const LAUNCH_GO: f32 = 2.6;
 
 /// Story flags from earlier missions and dialogue choices. They switch conditional wave entries
 /// (`["klinge", 1, "holtEscaped"]`) and radio lines (`if` / `ifNot`). mission.rs fills this from
@@ -222,6 +287,64 @@ pub struct MissionState {
     no_return: bool,
     protect_carrier: bool,
     mission_idx: usize,
+    /// launch from / landing in the hangar (web `useBay`)
+    use_bay: bool,
+    /// running launch or landing sequence (web `game.seq`)
+    seq: Option<Seq>,
+    /// player (first) and wingman in the hangar sequences
+    bay: Vec<BayPilot>,
+    /// the view before the launch forced the cockpit (restored once the player is out of the tube)
+    view_saved: Option<View>,
+    /// the player asked for the landing autopilot (handled by `bay_seq`)
+    want_landing: bool,
+    engine_off: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SeqKind {
+    Launch,
+    Land,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Seq {
+    kind: SeqKind,
+    t: f32,
+    /// launch lamps: 0 red, 1 amber, 2 green
+    light: u8,
+    /// landing: everybody parked at this sequence time
+    done_t: Option<f32>,
+}
+
+/// A pilot in the hangar sequences (web `P.seqHold`, `P.seqZ`, `P.inBay`, `P.landStage`, `P.landStop`, `P.landWps`).
+#[derive(Clone, Debug)]
+struct BayPilot {
+    e: Entity,
+    player: bool,
+    /// on rails (mirrored as the `SeqHold` component)
+    held: bool,
+    /// launch: stop mark the ship is clamped on (carrier-local z)
+    launch_z: f32,
+    /// launch: released, still in the tube
+    in_bay: bool,
+    /// launch: out of the tube
+    out: bool,
+    /// wingman launch: scripted speed along the tube
+    v: f32,
+    stage: Option<LandStage>,
+    stop: Option<f32>,
+    /// landing autopilot waypoints (carrier-local)
+    wps: Vec<Vec3>,
+    /// parked: attitude relative to the carrier
+    park_rot: Quat,
+    /// SF_LAND_FREEZE: carrier-local position and attitude the landing stopped at
+    frozen: Option<(Vec3, Quat)>,
+}
+
+impl BayPilot {
+    fn new(e: Entity, player: bool, launch_z: f32) -> Self {
+        Self { e, player, held: false, launch_z, in_bay: false, out: false, v: 0.0, stage: None, stop: None, wps: Vec::new(), park_rot: Quat::IDENTITY, frozen: None }
+    }
 }
 
 // ---------- parsed mission data ----------
@@ -452,6 +575,18 @@ struct TestHooks {
     jump_dist: Option<f32>,
     autowin: bool,
     autojump: bool,
+    /// SF_TEST_RETURN: straight to the landing once launched
+    test_return: bool,
+    /// SF_NO_BAY: no hangar launch / landing
+    no_bay: bool,
+    /// SF_BAY_FREEZE: launch countdown stops at this sequence time
+    bay_freeze: Option<f32>,
+    /// SF_LAND_FREEZE: the player's landing stops at this carrier-local z
+    land_freeze: Option<f32>,
+    /// SF_OUT_FREEZE: the launched player stops at this carrier-local z
+    out_freeze: Option<f32>,
+    /// SF_BAY_STAY: stay parked, no mission end
+    bay_stay: bool,
 }
 
 const WARP_POOL: usize = 8;
@@ -740,6 +875,8 @@ fn start_mission(
     mut st: ResMut<MissionState>,
     mut status: ResMut<MissionStatus>,
     mut ctx: ResMut<AiContext>,
+    mut settings: ResMut<Settings>,
+    mut bay_status: ResMut<BayStatus>,
 ) {
     let idx = radio.progress.current.min(sp.data.campaign.missions.len().saturating_sub(1));
     let m = sp.data.mission(idx).clone();
@@ -760,36 +897,68 @@ fn start_mission(
         mission_idx: idx,
         no_return: m.extra.get("noReturn").and_then(Value::as_bool).unwrap_or(false),
         protect_carrier: protect_kind.as_deref() == Some("carrier"),
+        // web: opts.launch is always set by app.js, so every mission starts in the hangar
+        use_bay: !radio.test.no_bay,
         ..default()
     };
+    // the bay lamps are shared materials: never carry a launch / landing state into the next mission
+    sp.lib.bay.reset(&mut mats);
+    *bay_status = BayStatus::default();
 
     // carrier at the origin, cruising slowly along +Z
     let carrier = spawn_ai_ship(&mut sp, "aurora", Vec3::ZERO, Vec3::Z, Ai::default(), None, None);
+    let ctf = Transform::from_translation(Vec3::ZERO).with_rotation(facing(Vec3::Z, Vec3::Y));
     st.carrier = Some(carrier);
     if st.protect_carrier {
         st.protect = Some(carrier);
     }
 
-    // the player, launched in front of the carrier
-    let ptf = Transform::from_xyz(70.0, -4.0, 300.0);
+    let wing_who = wing_for(&m, |k| sp.flags.0.contains(k));
+    // web startLaunch: the pilots are clamped on the stop marks one behind the other, the first one in front
+    let n_pilots = 1 + wing_who.is_some() as usize;
+    let launch_z = |i: usize| BAY.back + 16.0 + (n_pilots - 1 - i) as f32 * 36.0;
+    let in_bay = |z: f32| ctf.translation + ctf.rotation * Vec3::new(0.0, BAY.y - 0.5, z);
+
+    // the player: clamped in the hangar, or (SF_NO_BAY) launched in front of the carrier
+    let ptf = if st.use_bay { Transform::from_translation(in_bay(launch_z(0))).with_rotation(ctf.rotation) } else { Transform::from_xyz(70.0, -4.0, 300.0) };
+    let start_speed = if st.use_bay { 0.0 } else { 160.0 };
     let player = spawn_ship(&mut sp.commands, &sp.lib, &sp.data, &m.ship, ptf);
     let mut pship = Ship::new(&m.ship, sp.data.ship(&m.ship));
-    pship.speed = 160.0;
+    pship.speed = start_speed;
     pship.name = radio.progress.callsign.clone();
     sp.commands
         .entity(player)
-        .insert((pship, Player { throttle: 0.75, energy: 1.0, want_speed: 160.0, ..default() }, Trigger::default(), Name::new("Spieler")));
+        .insert((pship, Player { throttle: 0.75, energy: 1.0, want_speed: start_speed, ..default() }, Trigger::default(), Name::new("Spieler")));
     st.player = Some(player);
 
     // wingman (web wingFor: replaced by Juno when the story lost him or her): same ship type, on the left
-    if let Some(who) = wing_for(&m, |k| sp.flags.0.contains(k)) {
+    if let Some(who) = wing_who {
         // web: CHARS[who].call ("Rook"); the typed Character has no call sign, so read it from the raw JSON
         let call = raw
             .as_ref()
             .and_then(|r| r.get("chars")?.get(who.as_str())?.get("call")?.as_str().map(str::to_string))
             .unwrap_or_else(|| call_sign(&who));
         let ai = Ai { wingman: true, skill: story.wing_skill(&who), who: Some(who), ..default() };
-        st.wingman = Some(spawn_ai_ship(&mut sp, &m.ship, Vec3::new(40.0, -8.0, 270.0), Vec3::Z, ai, Some(call), Some(160.0)));
+        let (pos, speed) = if st.use_bay { (in_bay(launch_z(1)), 0.0) } else { (Vec3::new(40.0, -8.0, 270.0), 160.0) };
+        st.wingman = Some(spawn_ai_ship(&mut sp, &m.ship, pos, ctf.rotation * Vec3::Z, ai, Some(call), Some(speed)));
+    }
+
+    // web startLaunch: everybody clamped, red lamps, field closed; the launch is seen from the cockpit
+    if st.use_bay {
+        st.bay.push(BayPilot::new(player, true, launch_z(0)));
+        if let Some(w) = st.wingman {
+            st.bay.push(BayPilot::new(w, false, launch_z(1)));
+        }
+        for p in &mut st.bay {
+            p.held = true;
+            sp.commands.entity(p.e).insert(SeqHold { launch: true });
+        }
+        st.seq = Some(Seq { kind: SeqKind::Launch, t: 0.0, light: 0, done_t: None });
+        sp.lib.bay.set_lamps(&mut mats, true, false, false);
+        if settings.view != View::Cockpit && !env_on("SF_BAY_CHASE") {
+            st.view_saved = Some(settings.view);
+            settings.view = View::Cockpit;
+        }
     }
 
     // static nav content: protected ships, wreck, mine fields (asteroids are render.rs)
@@ -825,7 +994,13 @@ fn start_mission(
     *status = MissionStatus { mission: idx, ..default() };
     radio.log(|| format!("start mission {} '{}' ({} navs, ship {}, wingman {:?}, flags {:?})", idx, m.title, st.navs.len(), m.ship, wing_for(&m, |k| sp.flags.0.contains(k)), sp.flags.0));
     activate_nav(&mut st, &mut sp, &mut radio, Some(ptf.translation), Vec3::Z);
-    radio.say("flug", "Startfreigabe erteilt. Klare Bahn, {cs}!");
+    if !st.use_bay {
+        radio.say("flug", "Startfreigabe erteilt. Klare Bahn, {cs}!");
+    } else if st.wingman.is_some() {
+        radio.say("flug", "Stellplatz eins und zwei, {cs}: Triebwerke vorglühen, Haltemagnete lösen auf mein Zeichen.");
+    } else {
+        radio.say("flug", "Stellplatz eins, {cs}: Triebwerke vorglühen, Haltemagnete lösen auf mein Zeichen.");
+    }
 }
 
 /// Fallback call sign from the character key: "rook" -> "Rook".
@@ -834,11 +1009,26 @@ fn call_sign(who: &str) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_else(|| "Flügelmann".into())
 }
 
-fn cleanup(mut commands: Commands, q: Query<Entity, With<InMission>>, mut ctx: ResMut<AiContext>) {
+fn cleanup(
+    mut commands: Commands,
+    q: Query<Entity, With<InMission>>,
+    mut ctx: ResMut<AiContext>,
+    mut st: ResMut<MissionState>,
+    mut settings: ResMut<Settings>,
+    lib: Res<ShipLibrary>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut bay_status: ResMut<BayStatus>,
+) {
     for e in &q {
         commands.entity(e).try_despawn();
     }
     *ctx = AiContext::default();
+    // a mission left during the launch: give the view back, lamps to idle (the menu backdrop shows the Aurora)
+    if let Some(v) = st.view_saved.take() {
+        settings.view = v;
+    }
+    lib.bay.reset(&mut mats);
+    *bay_status = BayStatus::default();
 }
 
 /// Web activateNav(): escape runs start their timer and the chasers jump in behind the player.
@@ -942,19 +1132,9 @@ fn update_mission(
             fail(st, &mut radio, "Die TUS Aurora wurde zerstört.".into());
             return;
         };
-        if !st.land_clear && near(cpos, 1800.0) {
-            let threat = ships.iter().any(|(_, tf, s, d)| !d && s.team == Team::Aszendenz && !s.capital() && tf.translation.distance(cpos) < 3500.0);
-            if !threat {
-                st.land_clear = true;
-                radio.say("flug", "Landefreigabe Bucht eins, {cs}. Anflug frei – oder AUTO für den Landeautopiloten.");
-                radio.banner("LANDEFREIGABE · BUCHT 1");
-                radio.sfx.write(SfxMsg::Beep);
-            } else if !st.land_warned {
-                st.land_warned = true;
-                radio.say("flug", "Negativ, {cs} – Feindkontakt am Träger. Erst den Sektor säubern, dann Landefreigabe.");
-            }
-        }
-        if st.land_clear && near(cpos, 800.0) {
+        // with the hangar, clearance, capture and landing are `bay_seq`'s; without it (web: !useBay) a pass
+        // close to the carrier ends the mission
+        if !st.use_bay && near(cpos, 750.0) {
             land(st, &mut radio);
         }
         return;
@@ -1422,6 +1602,479 @@ fn warp_fx(
     }
 }
 
+// ---------- launch from and landing in the carrier's hangar ----------
+
+/// Everything the hangar sequences change besides the ships.
+#[derive(SystemParam)]
+struct BayIo<'w> {
+    lib: Res<'w, ShipLibrary>,
+    mats: ResMut<'w, Assets<StandardMaterial>>,
+    settings: ResMut<'w, Settings>,
+    shake: ResMut<'w, CameraShake>,
+    beep: MessageWriter<'w, BeepMsg>,
+    damage: MessageWriter<'w, DamageMsg>,
+    status: ResMut<'w, BayStatus>,
+}
+
+impl BayIo<'_> {
+    /// web setBayLights + setBayField + setClamps
+    fn lights(&mut self, lamps: (bool, bool, bool), field: f32, clamps: bool) {
+        let bay = &self.lib.bay;
+        bay.set_lamps(&mut self.mats, lamps.0, lamps.1, lamps.2);
+        bay.set_field(&mut self.mats, field);
+        bay.set_clamps(&mut self.mats, clamps);
+    }
+    fn beep(&mut self, freq: f32, vol: f32) {
+        self.beep.write(BeepMsg { freq, vol });
+    }
+}
+
+type BayShips<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Transform, &'static mut Ship, Option<&'static mut Player>, Option<&'static mut Neutron>, Has<Dying>, Option<&'static Ai>),
+>;
+
+/// carrier-local point -> world (the carrier keeps moving during both sequences)
+fn bay_to_world(c: &Transform, l: Vec3) -> Vec3 {
+    c.translation + c.rotation * l
+}
+
+fn bay_local(c: &Transform, p: Vec3) -> Vec3 {
+    c.rotation.inverse() * (p - c.translation)
+}
+
+/// Parking spots are handed out by arrival: the first ship in takes the deepest, so nobody flies through a
+/// parked ship (web nextBayStop).
+fn next_bay_stop(pilots: &[BayPilot], me: usize) -> f32 {
+    let taken: Vec<f32> = pilots.iter().enumerate().filter(|(i, p)| *i != me && p.held && p.stop.is_some()).filter_map(|(_, p)| p.stop).collect();
+    let mut k = 0;
+    loop {
+        let z = BAY.back + 18.0 + k as f32 * 36.0;
+        if !taken.iter().any(|t| (t - z).abs() < 0.5) || z > BAY.mouth - 40.0 {
+            return z.min(BAY.mouth - 40.0);
+        }
+        k += 1;
+    }
+}
+
+/// Put a pilot on the landing autopilot (web startLanding, per pilot): waypoints in carrier space swing wide
+/// round the hull if needed, then line up ahead of the bow. `i` staggers the approach points.
+fn start_landing_pilot(pilots: &mut [BayPilot], idx: usize, i: usize, c: &Transform, tf: &Transform, commands: &mut Commands) {
+    let l = bay_local(c, tf.translation);
+    let f = c.rotation.inverse() * fwd(tf);
+    let p = &mut pilots[idx];
+    p.held = true;
+    p.stop = None;
+    commands.entity(p.e).try_insert(SeqHold { launch: false });
+    // already lined up in front of the opening and pointing in: straight to the final approach
+    if in_bay_corridor(l, 250.0) && f.z < 0.0 {
+        p.wps.clear();
+        p.stage = Some(LandStage::Final);
+        let stop = next_bay_stop(pilots, idx);
+        pilots[idx].stop = Some(stop);
+        return;
+    }
+    let a = Vec3::new(0.0, BAY.y - 0.5, BAY.mouth + 480.0 + i as f32 * 60.0);
+    let sx = if l.x < 0.0 { -1.0 } else { 1.0 };
+    p.wps = if l.z > BAY.mouth + 250.0 && l.x.abs() < 400.0 { vec![a] } else { vec![Vec3::new(sx * (320.0 + i as f32 * 40.0), -90.0, 200.0), a] };
+    p.stage = Some(LandStage::Approach);
+}
+
+/// web cancelLances(): a charge cut off by the autopilot or the tractor beam goes back into the capacitors
+fn cancel_lance(ship: &mut Ship, neutron: Option<Mut<Neutron>>) {
+    if let Some(mut n) = neutron
+        && n.charge.take().is_some()
+    {
+        n.target = None;
+        ship.missiles += 1;
+    }
+}
+
+/// Launch and landing sequences (web updateSeq, startLanding, captureInBay and the return-phase part of
+/// updateMission): runs after the ships moved and moves the ships on rails relative to the moving carrier.
+#[allow(clippy::too_many_arguments)]
+fn bay_seq(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut st: ResMut<MissionState>,
+    mut radio: Radio,
+    mut io: BayIo,
+    mut ships: BayShips,
+) {
+    let dt = time.delta_secs().min(MAX_DT);
+    let ctf = st.carrier.and_then(|c| ships.get(c).ok()).filter(|c| !c.5).map(|c| *c.1);
+    // the carrier's cruise speed: launched ships keep its motion
+    let c_spd = st.carrier.and_then(|c| ships.get(c).ok()).map_or(0.0, |s| s.2.speed);
+    io.status.carrier = ctf;
+    if !st.use_bay || st.ended {
+        return;
+    }
+    let st = &mut *st;
+    let mut pilots = std::mem::take(&mut st.bay);
+    // the wingman counts while he flies (gone: jumped out or destroyed)
+    let alive = |p: &BayPilot, ships: &BayShips, wingman: Option<Entity>| (p.player || wingman == Some(p.e)) && ships.get(p.e).is_ok_and(|s| !s.5);
+
+    if let Some(c) = ctf {
+        // ---- launch (web updateSeq, kind 'launch') ----
+        if let Some(seq) = st.seq.as_mut().filter(|q| q.kind == SeqKind::Launch) {
+            seq.t = (seq.t + dt).min(radio.test.bay_freeze.unwrap_or(f32::INFINITY));
+            let t = seq.t;
+            // red: engines pre-heat · amber: clamps release, the ship floats free, the bay field drops · green: own thrust
+            if seq.light == 0 && t > 1.2 {
+                seq.light = 1;
+                io.lights((false, true, false), 1.0, false);
+                radio.sfx.write(SfxMsg::ShieldHit);
+                io.beep(700.0, 0.16);
+            }
+            if seq.light == 1 && t > LAUNCH_GO {
+                seq.light = 2;
+                io.lights((false, false, true), 0.0, false);
+                io.beep(1300.0, 0.2);
+                // green: the pilot flies out alone - low thrust, steering inside the tube is up to them
+                for p in pilots.iter_mut().filter(|p| p.player) {
+                    if let Ok((e, _, mut ship, Some(mut pl), _, false, _)) = ships.get_mut(p.e) {
+                        p.held = false;
+                        p.in_bay = true;
+                        commands.entity(e).try_remove::<SeqHold>();
+                        ship.speed = c_spd + 25.0;
+                        pl.throttle = 0.25;
+                    }
+                }
+                radio.say("flug", "Startfreigabe! Schub geben und raus aus der Bucht, {cs}.");
+            }
+            if seq.light >= 1 {
+                io.lights((false, seq.light == 1, seq.light == 2), (1.0 - (t - 1.2) / 1.0).max(0.0), false);
+            }
+            let light = seq.light;
+            // where the player is in the tube (the wingman stays behind him)
+            let player_z = pilots.iter().find(|p| p.player && !p.out).and_then(|p| ships.get(p.e).ok().filter(|s| !s.5)).map(|s| bay_local(&c, s.1.translation).z);
+            let mut out = 0;
+            for p in pilots.iter_mut() {
+                let Ok((e, mut tf, mut ship, _, _, dying, _)) = ships.get_mut(p.e) else {
+                    p.out = true;
+                    out += 1;
+                    continue;
+                };
+                let l = bay_local(&c, tf.translation);
+                if !p.held {
+                    if p.player && !p.out && (p.frozen.is_some() || radio.test.out_freeze.is_some_and(|z| l.z >= z)) {
+                        // SF_OUT_FREEZE: hold the launched ship where it is (screenshots)
+                        let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                        tf.translation = bay_to_world(&c, fl);
+                        tf.rotation = c.rotation * fr;
+                        continue;
+                    }
+                    if p.out || dying || l.z > BAY.mouth + 30.0 || t > 30.0 || !in_bay_corridor(l, 40.0) {
+                        if p.in_bay {
+                            p.in_bay = false;
+                            if let Some(v) = st.view_saved.take()
+                                && v != io.settings.view
+                            {
+                                io.settings.view = v;
+                            }
+                        }
+                        p.out = true;
+                        out += 1;
+                    }
+                    continue;
+                }
+                // after the clamps let go the ship lifts a little and hovers on its thrusters
+                let lift = if t > 1.2 { ((t - 1.2) / 0.8).min(1.0) * 1.4 + (t * 3.0).sin() * 0.12 } else { 0.0 };
+                if p.player {
+                    io.shake.bump(0.04 + t * 0.02); // engines spooling up
+                }
+                if !p.player && light == 2 {
+                    // the wingman follows the player out of the tube, never closer than 40 m behind him
+                    let z0 = p.launch_z;
+                    p.v = (p.v + 45.0 * dt).min(130.0);
+                    let mut z = z0 + p.v * dt;
+                    if let Some(pz) = player_z {
+                        z = z.min(pz - 40.0).max(z0);
+                    }
+                    p.launch_z = z;
+                    let y = BAY.y - 0.5 + if z < BAY.mouth { 1.4 } else { 1.4 * (1.0 - (z - BAY.mouth) / 60.0).max(0.0) };
+                    tf.translation = bay_to_world(&c, Vec3::new(0.0, y, z));
+                    tf.rotation = c.rotation;
+                    ship.speed = 0.0;
+                    ship.bank *= 1.0 - (dt * 6.0).min(1.0);
+                    if z > BAY.mouth + 120.0 {
+                        // clear of the bow: the wingman flies on his own again
+                        p.held = false;
+                        p.out = true;
+                        out += 1;
+                        // no faster than the player left the tube (carrier + 25), so he does not overtake him closely
+                        ship.speed = c_spd + p.v.min(25.0);
+                        commands.entity(e).try_remove::<SeqHold>();
+                    }
+                    continue;
+                }
+                tf.translation = bay_to_world(&c, Vec3::new(0.0, BAY.y - 0.5 + lift, p.launch_z));
+                tf.rotation = c.rotation;
+                ship.speed = 0.0;
+            }
+            if out == pilots.len() {
+                st.seq = None;
+                io.lights((false, false, false), 1.0, true);
+                if pilots.len() > 1 {
+                    radio.say("flug", "Beide Jäger frei. Schleusenfeld wieder aktiv. Gute Jagd, {cs}!");
+                } else {
+                    radio.say("flug", "Jäger frei, Schleusenfeld wieder aktiv. Gute Jagd, {cs}!");
+                }
+                radio.log(|| "launch complete".into());
+                if radio.test.test_return && st.phase == Phase::Travel {
+                    // SF_TEST_RETURN: every nav point done, straight home
+                    st.nav_idx = st.navs.len();
+                    st.phase = Phase::Return;
+                    st.timer = None;
+                    radio.log(|| "TEST: skipping to the return flight".into());
+                }
+            }
+        }
+
+        // ---- return: landing clearance, tractor beam, landing autopilot (web updateMission / startLanding) ----
+        let landing_open = st.phase == Phase::Return && st.fail.is_none() && st.outcome.is_none();
+        let player_pilot = pilots.iter().position(|p| p.player);
+        if landing_open && !st.land_clear {
+            let ppos = player_pilot.and_then(|i| ships.get(pilots[i].e).ok().filter(|s| !s.5)).map(|s| s.1.translation);
+            if ppos.is_some_and(|p| p.distance(c.translation) < 1800.0) {
+                let threat = ships.iter().any(|(_, tf, s, _, _, d, _)| !d && s.team == Team::Aszendenz && !s.capital() && tf.translation.distance(c.translation) < 3500.0);
+                if !threat {
+                    st.land_clear = true;
+                    io.lights((false, false, true), 0.0, false);
+                    radio.say("flug", "Landefreigabe Bucht eins, {cs}. Folgen Sie dem Leitstrahl unter den Bug und fliegen Sie selbst ein – unter 120 Metern pro Sekunde. Oder AUTO für den Landeautopiloten.");
+                    radio.banner("LANDEFREIGABE · BUCHT 1");
+                    io.beep(900.0, 0.18);
+                    radio.log(|| "landing clearance".into());
+                    // the wingman goes in first (he takes the deepest stop mark, out of the player's way)
+                    if let Some(wi) = pilots.iter().position(|p| !p.player && !p.held && alive(p, &ships, st.wingman))
+                        && let Ok((_, wtf, ..)) = ships.get(pilots[wi].e)
+                    {
+                        let wtf = *wtf;
+                        start_landing_pilot(&mut pilots, wi, 1, &c, &wtf, &mut commands);
+                        st.seq.get_or_insert(Seq { kind: SeqKind::Land, t: 0.0, light: 0, done_t: None });
+                        if let Some(who) = ships.get(pilots[wi].e).ok().and_then(|s| s.6?.who.clone()) {
+                            radio.say(&who, "Verstanden. Ich gehe zuerst rein, {cs} – wir sehen uns an Bord.");
+                        }
+                    }
+                } else if !st.land_warned {
+                    st.land_warned = true;
+                    radio.say("flug", "Negativ, {cs} – Feindkontakt am Träger. Erst den Sektor säubern, dann Landefreigabe.");
+                }
+            }
+        }
+        if landing_open && st.land_clear {
+            if let Some(pi) = player_pilot.filter(|&i| !pilots[i].held && alive(&pilots[i], &ships, st.wingman)) {
+                let pe = pilots[pi].e;
+                if std::mem::take(&mut st.want_landing) {
+                    // landing autopilot (web startLanding)
+                    if let Ok((_, tf, mut ship, pl, neutron, _, _)) = ships.get_mut(pe) {
+                        let tf = *tf;
+                        cancel_lance(&mut ship, neutron);
+                        if let Some(mut pl) = pl {
+                            pl.boosting = false;
+                        }
+                        start_landing_pilot(&mut pilots, pi, 0, &c, &tf, &mut commands);
+                    }
+                    st.seq.get_or_insert(Seq { kind: SeqKind::Land, t: 0.0, light: 0, done_t: None });
+                    io.lights((false, false, true), 0.0, false);
+                    radio.say("flug", "Verstanden, {cs}. Landeautopilot übernimmt.");
+                    radio.banner("LANDEAUTOPILOT");
+                    io.beep(900.0, 0.18);
+                    radio.log(|| "landing autopilot".into());
+                } else if let Ok((_, mut tf, mut ship, pl, neutron, _, _)) = ships.get_mut(pe) {
+                    // flown into the open bay by hand: the tractor beam catches the ship (web captureInBay),
+                    // incl. a ship resting on the back wall
+                    let l = bay_local(&c, tf.translation);
+                    let p = &mut pilots[pi];
+                    let inward = (c.rotation.inverse() * fwd(&tf)).z < 0.0;
+                    if p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| inward && l.z <= z) {
+                        // SF_LAND_FREEZE: hold the hand-flown ship where it is (screenshots of the approach aids)
+                        let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                        tf.translation = bay_to_world(&c, fl);
+                        tf.rotation = c.rotation * fr;
+                    } else if in_bay_corridor(l, 0.0) && l.z < BAY.mouth - 8.0 && l.z > BAY.back + 5.0 {
+                        cancel_lance(&mut ship, neutron);
+                        if let Some(mut pl) = pl {
+                            pl.boosting = false;
+                        }
+                        let fast = ship.speed > 150.0;
+                        let p = &mut pilots[pi];
+                        p.held = true;
+                        p.stage = Some(LandStage::Final);
+                        p.wps.clear();
+                        p.stop = None;
+                        commands.entity(pe).try_insert(SeqHold { launch: false });
+                        let stop = next_bay_stop(&pilots, pi);
+                        pilots[pi].stop = Some(stop);
+                        st.seq.get_or_insert(Seq { kind: SeqKind::Land, t: 0.0, light: 0, done_t: None });
+                        if fast {
+                            io.damage.write(DamageMsg { target: pe, amount: 18.0, source: None, point: tf.translation });
+                            io.shake.bump(0.9);
+                            radio.say("flug", "Viel zu schnell, {cs}! Der Traktorstrahl fängt Sie gerade noch ab.");
+                        } else {
+                            radio.say("flug", "Traktorstrahl erfasst. Sauberer Anflug, {cs}.");
+                        }
+                        io.beep(1100.0, 0.15);
+                        radio.log(|| format!("tractor beam capture at {:.0} m/s", ship.speed));
+                    }
+                }
+            }
+        }
+        st.want_landing = false;
+
+        // ---- landing on rails (web updateSeq, landing part) ----
+        // stop marks on the final approach follow the order in the tube: whoever is deeper in takes the deeper
+        // free mark, so nobody flies through a ship parked in front of him (web nextBayStop hands them out by
+        // the start of the final approach; with an AI wingman a later starter can be the first one in)
+        let mut finals: Vec<(f32, usize)> = (0..pilots.len())
+            .filter(|&i| pilots[i].held && pilots[i].stage == Some(LandStage::Final) && pilots[i].frozen.is_none() && alive(&pilots[i], &ships, st.wingman))
+            .filter_map(|i| ships.get(pilots[i].e).ok().map(|s| (bay_local(&c, s.1.translation).z, i)))
+            .collect();
+        if finals.len() > 1 {
+            finals.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for &(_, i) in &finals {
+                pilots[i].stop = None;
+            }
+            for &(_, i) in &finals {
+                let stop = next_bay_stop(&pilots, i);
+                pilots[i].stop = Some(stop);
+            }
+        }
+        for idx in 0..pilots.len() {
+            if !pilots[idx].held || pilots[idx].stage.is_none() || !alive(&pilots[idx], &ships, st.wingman) {
+                continue;
+            }
+            if pilots[idx].stage == Some(LandStage::Final) && pilots[idx].stop.is_none() {
+                let stop = next_bay_stop(&pilots, idx);
+                pilots[idx].stop = Some(stop);
+            }
+            let Ok((_, mut tf, mut ship, ..)) = ships.get_mut(pilots[idx].e) else { continue };
+            let p = &mut pilots[idx];
+            let l = bay_local(&c, tf.translation);
+            let up = c.rotation * Vec3::Y;
+            if p.player && p.stage == Some(LandStage::Final) && (p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| l.z <= z)) {
+                // SF_LAND_FREEZE: hold the ship where it is relative to the carrier (screenshots)
+                let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                tf.translation = bay_to_world(&c, fl);
+                tf.rotation = c.rotation * fr;
+                continue;
+            }
+            ship.bank *= 1.0 - (dt * 6.0).min(1.0);
+            match p.stage {
+                Some(LandStage::Approach) => {
+                    // next waypoint (the last one is the approach point ahead of the bow, on the bay's centre line)
+                    let Some(&a) = p.wps.first() else {
+                        p.stage = Some(LandStage::Final);
+                        continue;
+                    };
+                    let d = l.distance(a);
+                    let dir = c.rotation * (a - l).normalize_or(Vec3::NEG_Z);
+                    tf.rotation = tf.rotation.rotate_towards(facing(dir, up), 1.6 * dt).normalize();
+                    ship.speed = (d * 0.4).clamp(90.0, 260.0);
+                    let f = fwd(&tf);
+                    tf.translation += f * ship.speed * dt;
+                    // reached, or flown past (never circle a waypoint)
+                    if d < 45.0 || (d < 220.0 && f.dot(dir) < 0.0) {
+                        p.wps.remove(0);
+                        if p.wps.is_empty() {
+                            p.stage = Some(LandStage::Final);
+                        }
+                    }
+                }
+                Some(LandStage::Final) => {
+                    let stop = p.stop.unwrap_or(BAY.back + 18.0);
+                    // final approach, nose first: chase a point on the bay's centre line a little ahead, slowing towards the stop mark
+                    let target = Vec3::new(0.0, BAY.y - 0.5, stop.max(l.z - 70.0));
+                    let to = target - l;
+                    let dz = l.z - stop;
+                    let mut dir = to;
+                    if to.length_squared() > 1.0 {
+                        dir = c.rotation * to.normalize();
+                        tf.rotation = tf.rotation.rotate_towards(facing(dir, up), 2.4 * dt).normalize();
+                    }
+                    let f = fwd(&tf);
+                    let align = f.dot(dir);
+                    let v = (18.0 + dz * 0.45).clamp(18.0, 150.0) * (0.35 + 0.65 * align.max(0.0));
+                    ship.speed = v;
+                    tf.translation += f * v * dt;
+                    // inside the tube the guidance beam holds the ship on the centre line
+                    if dz < BAY.mouth - stop + 40.0 {
+                        let mut lc = bay_local(&c, tf.translation);
+                        let k = (dt * 4.0).min(1.0);
+                        lc.x -= lc.x * k;
+                        lc.y += (BAY.y - 0.5 - lc.y) * k;
+                        tf.translation = bay_to_world(&c, lc);
+                        let nose_in = c.rotation * Quat::from_rotation_y(std::f32::consts::PI);
+                        tf.rotation = tf.rotation.rotate_towards(nose_in, 3.0 * dt).normalize();
+                    }
+                    if bay_local(&c, tf.translation).z <= stop {
+                        // set down: clamps on
+                        p.stage = Some(LandStage::Parked);
+                        p.park_rot = c.rotation.inverse() * tf.rotation;
+                        radio.sfx.write(SfxMsg::ShieldHit);
+                        if p.player {
+                            io.shake.bump(0.3);
+                        }
+                        io.lib.bay.set_clamps(&mut io.mats, true);
+                        radio.log(|| format!("{} parked on stop mark {stop:.0}", if p.player { "player" } else { "wingman" }));
+                    }
+                }
+                Some(LandStage::Parked) => {
+                    ship.speed = 0.0;
+                    let stop = p.stop.unwrap_or(BAY.back + 18.0);
+                    tf.translation = bay_to_world(&c, Vec3::new(0.0, BAY.y - 0.5, stop));
+                    tf.rotation = c.rotation * p.park_rot;
+                }
+                None => {}
+            }
+        }
+        // the mission ends once every pilot who is still alive is parked in the bay
+        if let Some(seq) = st.seq.as_mut().filter(|q| q.kind == SeqKind::Land) {
+            seq.t += dt;
+            let living: Vec<&BayPilot> = pilots.iter().filter(|p| alive(p, &ships, st.wingman)).collect();
+            let all = !living.is_empty() && living.iter().all(|p| p.held && p.stage == Some(LandStage::Parked)) && st.fail.is_none() && st.outcome.is_none();
+            if all {
+                match seq.done_t {
+                    None => {
+                        seq.done_t = Some(seq.t);
+                        radio.banner("LANDUNG BESTÄTIGT");
+                        radio.say("flug", "Aufgesetzt. Willkommen zurück an Bord, {cs}.");
+                        st.engine_off = true;
+                        radio.log(|| "landed".into());
+                    }
+                    Some(d) if seq.t - d > 2.2 && !radio.test.bay_stay => {
+                        st.seq = None;
+                        io.lights((false, false, false), 1.0, true);
+                        st.phase = Phase::Done;
+                        st.end_t = 0.0;
+                    }
+                    _ => {}
+                }
+            } else if seq.done_t.is_some() {
+                seq.done_t = None;
+                st.engine_off = false;
+            }
+        }
+    }
+
+    // ---- what the HUD, the camera rig and the sound need ----
+    let me = pilots.iter().find(|p| p.player);
+    io.status.launch_t = st.seq.filter(|q| q.kind == SeqKind::Launch && me.is_some_and(|p| p.held)).map(|q| q.t);
+    io.status.in_bay = me.is_some_and(|p| p.in_bay);
+    io.status.landing = me.filter(|p| p.held).and_then(|p| p.stage.map(|s| (s, p.stop.unwrap_or(BAY.back + 18.0))));
+    io.status.land_clear = st.phase == Phase::Return && st.land_clear && ctf.is_some() && !me.is_some_and(|p| p.held);
+    io.status.engine_off = st.engine_off;
+    io.status.view_saved = st.view_saved;
+    let local = match (ctf, me.and_then(|p| ships.get(p.e).ok())) {
+        (Some(c), Some(s)) => Some(bay_local(&c, s.1.translation)),
+        _ => None,
+    };
+    io.status.local = local.unwrap_or(Vec3::ZERO);
+    io.status.inside = local.is_some_and(|l| in_bay_corridor(l, 0.0) && l.z < BAY.mouth);
+    st.bay = pilots;
+}
+
 /// Autopilot (web autopilot()): jump to 2.3 km before the nav point, or land when cleared to.
 fn autopilot(
     mut req: MessageReader<AutopilotRequest>,
@@ -1449,6 +2102,11 @@ fn autopilot(
             pship.missiles += 1;
         }
     }
+    if st.phase == Phase::Return && st.land_clear {
+        // landing autopilot (web startLanding): `bay_seq` takes over
+        st.want_landing = true;
+        return;
+    }
     let lp = ptf.translation;
     let back = (lp - np).normalize_or(Vec3::NEG_Z);
     radio.sfx.write(SfxMsg::Warp);
@@ -1456,15 +2114,6 @@ fn autopilot(
     pl.impulse = false;
     pl.impulse_prog = 0.0;
     pl.boosting = false;
-    if st.phase == Phase::Return && st.land_clear {
-        // landing autopilot: in, slow and steady
-        ptf.translation = np + back * 600.0;
-        ptf.rotation = facing(-back, Vec3::Y);
-        pship.speed = pship.speed.min(120.0);
-        radio.log(|| "landing autopilot".into());
-        land(&mut st, &mut radio);
-        return;
-    }
     let rot = facing(-back, Vec3::Y);
     let base = np + back * radio.test.jump_dist.unwrap_or(2300.0);
     ptf.translation = base;
@@ -1595,9 +2244,13 @@ fn publish_status(
     status.markers.truncate(n_markers);
 
     // autopilot (web autoAvailable())
+    let player_held = st.bay.first().is_some_and(|p| p.player && p.held);
     status.auto_available = match (st.phase, player_pos, target) {
         _ if st.fail.is_some() || st.outcome.is_some() => false,
-        (Phase::Return, Some(_), _) if st.land_clear => true,
+        // web autoAvailable(): the landing autopilot while the player still flies by hand
+        (Phase::Return, Some(_), _) if st.land_clear => !player_held,
+        // no jump during a launch or landing sequence
+        _ if st.seq.is_some() || player_held => false,
         (Phase::Travel | Phase::Return, Some(p), Some(np)) => {
             hostiles == 0 && !(st.phase == Phase::Travel && (st.escape || st.timer.is_some())) && p.distance(np) > 2600.0
         }
@@ -1732,8 +2385,10 @@ fn autowin(
             st.score += if s.def.score == 0 { 100 } else { s.def.score };
         }
     }
-    // where to put the player, and how close
+    // where to put the player, and how close (not during the launch or a landing: those fly for real)
+    let on_rails = st.seq.is_some() || st.bay.iter().any(|p| p.player && p.held);
     let goal: Option<(Vec3, f32)> = match (st.phase, &nav) {
+        _ if on_rails => None,
         (Phase::Travel, Some(n)) if n.kind == NavKind::Escape => Some((n.pos, 0.0)),
         // the autopilot (next system) takes player and wingman there when it may
         (Phase::Travel, Some(_)) if status.auto_available => None,
@@ -1806,5 +2461,40 @@ fn test_kill(mut st: ResMut<MissionState>, test: Res<TestHooks>, ships: Query<(E
         if let Ok((e, tf, s)) = ships.get(e) {
             dmg.write(DamageMsg { target: e, amount: (s.max_hp + s.max_shield) * 2.0 + 1.0, source: None, point: tf.translation });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pilot(stop: Option<f32>, held: bool) -> BayPilot {
+        let mut p = BayPilot::new(Entity::PLACEHOLDER, false, 0.0);
+        p.held = held;
+        p.stop = stop;
+        p
+    }
+
+    #[test]
+    fn stop_marks_fill_from_the_back() {
+        let deep = BAY.back + 18.0;
+        // nobody parked: the deepest mark
+        assert_eq!(next_bay_stop(&[pilot(None, true)], 0), deep);
+        // the deepest one is taken: the next one, 36 m further out
+        let ps = [pilot(Some(deep), true), pilot(None, true)];
+        assert_eq!(next_bay_stop(&ps, 1), deep + 36.0);
+        // a mark of a ship no longer on rails is free again
+        let ps = [pilot(Some(deep), false), pilot(None, true)];
+        assert_eq!(next_bay_stop(&ps, 1), deep);
+        // never closer to the mouth than 40 m
+        let ps: Vec<BayPilot> = (0..6).map(|k| pilot(Some(deep + k as f32 * 36.0), true)).chain([pilot(None, true)]).collect();
+        assert!(next_bay_stop(&ps, 6) <= BAY.mouth - 40.0);
+    }
+
+    #[test]
+    fn bay_coordinates_round_trip() {
+        let c = Transform::from_xyz(10.0, -5.0, 300.0).with_rotation(Quat::from_rotation_y(0.7));
+        let l = Vec3::new(1.0, BAY.y, 90.0);
+        assert!(bay_local(&c, bay_to_world(&c, l)).distance(l) < 1e-3);
     }
 }

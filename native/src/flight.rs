@@ -6,7 +6,10 @@
 //! `FlightSet::Input` -> `FlightSet::Ai` (ai.rs) -> `FlightSet::Steer` -> `FlightSet::Move` -> `FlightSet::Collide`
 //! -> `WeaponsSet::*` (weapons.rs). Everything except `Input` stops while `Paused`.
 //!
-//! Test hook: `SF_PILOT=attack` flies the player automatically at the current target and fires (screenshots).
+//! Test hooks: `SF_PILOT=attack` flies the player automatically at the current target and fires (screenshots);
+//! `SF_PILOT=bay` flies out of the hangar, turns round 400 m ahead of the bow and flies back into the TUS Aurora's
+//! hangar tube by hand, slowly (tube collisions; with mission.rs' `SF_TEST_RETURN=1` the tractor beam catches it:
+//! the hand-landing test).
 
 use crate::common::*;
 use crate::render::{Asteroid, CameraShake};
@@ -58,6 +61,16 @@ pub struct AutopilotRequest;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Obstacle {
     pub radius: f32,
+}
+
+/// A ship on rails (web `seqHold`): clamped in the hangar for the launch, flown by the landing autopilot or
+/// caught by the tractor beam. mission.rs inserts / removes it and moves the ship itself; flight.rs then
+/// ignores the controls (only pause, and the view switch except during the launch), does not move or steer
+/// the ship and skips its collisions; ai.rs and weapons.rs leave it alone.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct SeqHold {
+    /// launch countdown: the view stays in the cockpit (the chase camera would sit inside the back wall)
+    pub launch: bool,
 }
 
 /// Blocks the impulse drive while the player is within `.0` metres (web IMPULSE.mine: live mines, 2200 m).
@@ -192,11 +205,14 @@ pub fn seg_point(a: Vec3, b: Vec3, c: Vec3) -> (f32, Vec3) {
 pub struct FlightPlugin;
 
 /// `SF_PILOT=attack`: the player flies itself at its target (automated screenshot runs);
-/// `SF_PILOT=bay`: it flies into the TUS Aurora's hangar tunnel (collision test).
+/// `SF_PILOT=bay`: it flies out of the hangar, turns round and back into the TUS Aurora's hangar tube (hand landing);
+/// `SF_PILOT=bayfast`: the same at full throttle.
 #[derive(Resource, Default)]
 struct TestPilot {
     attack: bool,
     bay: bool,
+    /// `SF_PILOT=bayfast`: the same at full throttle (the tractor beam's too-fast catch)
+    bay_fast: bool,
 }
 
 /// One-shot radio hints per mission.
@@ -210,7 +226,11 @@ impl Plugin for FlightPlugin {
         let flying = in_state(AppState::Flight);
         let running = |p: Res<Paused>| !p.0;
         app.add_message::<AutopilotRequest>()
-            .insert_resource(TestPilot { attack: std::env::var("SF_PILOT").is_ok_and(|v| v == "attack"), bay: std::env::var("SF_PILOT").is_ok_and(|v| v == "bay") })
+            .insert_resource(TestPilot {
+                attack: std::env::var("SF_PILOT").is_ok_and(|v| v == "attack"),
+                bay: std::env::var("SF_PILOT").is_ok_and(|v| v == "bay" || v == "bayfast"),
+                bay_fast: std::env::var("SF_PILOT").is_ok_and(|v| v == "bayfast"),
+            })
             .init_resource::<FlightHints>()
             .configure_sets(
                 Update,
@@ -275,7 +295,7 @@ fn player_input(
     mut settings: ResMut<Settings>,
     mut autopilot: MessageWriter<AutopilotRequest>,
     mut sfx: MessageWriter<SfxMsg>,
-    mut pilots: Query<(&Transform, &Ship, &mut Player, &mut Pilot, &mut Trigger), Without<Dying>>,
+    mut pilots: Query<(&Transform, &Ship, &mut Player, &mut Pilot, &mut Trigger, Option<&SeqHold>), Without<Dying>>,
     others: Query<(Entity, &Transform, &Ship), (Without<Player>, Without<Dying>)>,
     mut list: Local<Vec<(f32, Entity)>>,
 ) {
@@ -284,22 +304,33 @@ fn player_input(
         paused.0 = !paused.0;
     }
     if paused.0 {
-        for (.., mut trig) in &mut pilots {
+        for (.., mut trig, _) in &mut pilots {
             trig.guns = false;
         }
         return;
     }
-    if keys.any_just_pressed([KeyCode::KeyV, KeyCode::KeyC]) || pad_pressed(GamepadButton::East) {
+    // on rails (launch / landing): only pause and, except during the launch, the view switch
+    let hold = pilots.iter().find_map(|(.., h)| h.copied());
+    if (keys.any_just_pressed([KeyCode::KeyV, KeyCode::KeyC]) || pad_pressed(GamepadButton::East)) && !hold.is_some_and(|h| h.launch) {
         settings.view = if settings.view == View::Cockpit { View::Chase } else { View::Cockpit };
         save_json("settings.json", &*settings);
     }
-    if keys.just_pressed(KeyCode::KeyJ) || pad_pressed(GamepadButton::Select) {
+    if (keys.just_pressed(KeyCode::KeyJ) || pad_pressed(GamepadButton::Select)) && hold.is_none() {
         autopilot.write(AutopilotRequest);
     }
     let dt = time.delta_secs().min(MAX_DT);
     let grabbed = cursor.iter().any(|c| c.grab_mode != CursorGrabMode::None);
 
-    for (tf, ship, mut player, mut pilot, mut trig) in &mut pilots {
+    for (tf, ship, mut player, mut pilot, mut trig, held) in &mut pilots {
+        if held.is_some() {
+            *trig = Trigger::default();
+            pilot.stick = Vec2::ZERO;
+            pilot.key = Vec2::ZERO;
+            pilot.mouse = Vec2::ZERO;
+            pilot.boost_held = false;
+            player.lock = 0.0;
+            continue;
+        }
         // keyboard: smoothed digital stick
         let axis = |pos: &[KeyCode], neg: &[KeyCode]| (keys.any_pressed(pos.iter().copied()) as i32 - keys.any_pressed(neg.iter().copied()) as i32) as f32;
         let kt = Vec2::new(
@@ -362,7 +393,7 @@ fn player_input(
                 let local = tf.rotation.inverse() * (aim - tf.translation).normalize_or(Vec3::Z);
                 let behind = if local.z < 0.0 { 1.0 } else { 0.0 };
                 pilot.stick = Vec2::new((-local.x * 4.0 + behind).clamp(-1.0, 1.0), (-local.y * 4.0).clamp(-1.0, 1.0));
-                player.throttle = if pilot.bay_lined { 0.05 } else { 0.4 };
+                player.throttle = if pilot.bay_lined && !test.bay_fast { 0.05 } else if pilot.bay_lined { 1.0 } else { 0.4 };
                 fire = false;
                 neutron = false;
                 pilot.bay_log -= dt;
@@ -500,14 +531,26 @@ fn player_flight(
     mut comm: MessageWriter<CommMsg>,
     mut sfx: MessageWriter<SfxMsg>,
     mut shake: ResMut<CameraShake>,
-    mut pilots: Query<(&mut Transform, &mut Ship, &mut Player, &mut Pilot, &Trigger, Option<&Neutron>), Without<Dying>>,
+    mut pilots: Query<(&mut Transform, &mut Ship, &mut Player, &mut Pilot, &Trigger, Option<&Neutron>, Has<SeqHold>), Without<Dying>>,
     others: OthersQuery,
     rocks: RocksQuery,
     obstacles: ObstaclesQuery,
     blocks: Query<(&Transform, &ImpulseBlock), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
-    for (mut tf, mut ship, mut player, mut pilot, trig, neutron) in &mut pilots {
+    for (mut tf, mut ship, mut player, mut pilot, trig, neutron, held) in &mut pilots {
+        if held {
+            // on rails: mission.rs moves the ship; the wings level out, the drives stay off
+            ship.bank *= 1.0 - (dt * 6.0).min(1.0);
+            pilot.tilt = 0.0;
+            pilot.imp_t = 0.0;
+            pilot.impulse_clear = false;
+            player.impulse = false;
+            player.impulse_prog = 0.0;
+            player.boosting = false;
+            player.want_speed = ship.speed;
+            continue;
+        }
         let (speed, turn) = (ship.def.speed, ship.def.turn);
         let boost_speed = ship.def.boost.unwrap_or(speed * 2.0);
         let sx = shape(pilot.stick.x);
@@ -583,7 +626,7 @@ fn player_flight(
 
 /// Computer-controlled ships turn towards `Steer::dir` (limited by their turn rate), bank into the turn
 /// and change speed towards `Steer::speed` (web `steer()` and the speed line of `updateAI`).
-fn ai_steer(time: Res<Time>, mut q: Query<(&mut Transform, &mut Ship, &Steer, Option<&Ai>), (Without<Player>, Without<Dying>)>) {
+fn ai_steer(time: Res<Time>, mut q: Query<(&mut Transform, &mut Ship, &Steer, Option<&Ai>), (Without<Player>, Without<Dying>, Without<SeqHold>)>) {
     let dt = time.delta_secs().min(MAX_DT);
     for (mut tf, mut ship, steer, ai) in &mut q {
         let dir = steer.dir.normalize_or_zero();
@@ -630,8 +673,8 @@ fn bank_bodies(ships: Query<(&Ship, &Children, Option<&Pilot>)>, mut bodies: Que
     }
 }
 
-/// Every ship flies along its +Z at its speed.
-fn move_ships(time: Res<Time>, mut q: Query<(&mut Transform, &Ship)>) {
+/// Every ship flies along its +Z at its speed (ships on rails are moved by mission.rs).
+fn move_ships(time: Res<Time>, mut q: Query<(&mut Transform, &Ship), Without<SeqHold>>) {
     let dt = time.delta_secs().min(MAX_DT);
     for (mut tf, ship) in &mut q {
         if ship.speed != 0.0 {
@@ -646,7 +689,7 @@ fn move_ships(time: Res<Time>, mut q: Query<(&mut Transform, &Ship)>) {
 #[allow(clippy::too_many_arguments)]
 fn player_collisions(
     time: Res<Time>,
-    mut pilots: Query<(Entity, &mut Transform, &mut Ship, &mut Pilot), Without<Dying>>,
+    mut pilots: Query<(Entity, &mut Transform, &mut Ship, &mut Pilot, Has<SeqHold>), Without<Dying>>,
     caps: Query<(&Transform, &Ship, &Hittable, Option<&HullBoxes>), (Without<Pilot>, Without<Dying>)>,
     rocks: Query<(&Transform, &Asteroid), Without<Pilot>>,
     obstacles: Query<(&Transform, &Obstacle), (Without<Pilot>, Without<Asteroid>)>,
@@ -654,8 +697,13 @@ fn player_collisions(
     mut shake: ResMut<CameraShake>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
-    for (e, mut tf, mut ship, mut pilot) in &mut pilots {
+    for (e, mut tf, mut ship, mut pilot, held) in &mut pilots {
         pilot.bump_t -= dt;
+        if held {
+            // on rails (clamped, landing autopilot, tractor beam): no collisions, no swept test across it
+            pilot.prev = None;
+            continue;
+        }
         // last frame's position for the swept hull test (not across a jump or teleport)
         let prev = pilot.prev.take().filter(|p| p.distance_squared(tf.translation) < 150.0 * 150.0);
         for (rtf, rock) in &rocks {
@@ -715,7 +763,8 @@ fn player_collisions(
 }
 
 /// Is a carrier-local point inside the hangar tube or its approach corridor (lined up with the opening)?
-fn in_bay_corridor(l: Vec3, ahead: f32) -> bool {
+/// (web `inBayCorridor`; `ahead` reaches past the mouth)
+pub fn in_bay_corridor(l: Vec3, ahead: f32) -> bool {
     let b = &AURORA_BAY;
     l.x.abs() < b.hw - 1.5 && (l.y - b.y).abs() < b.hh - 0.5 && l.z > b.back - 25.0 && l.z < b.mouth + ahead
 }

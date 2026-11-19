@@ -3,6 +3,7 @@
 //! - SF_VIEW=chase       start in the chase view
 //! - SF_SHOT=<file.png>  save a screenshot after SF_SHOT_AT seconds (default 6) of flight, then quit
 //! - SF_QUIT_AT=<secs>   quit after that many seconds (without a screenshot)
+//! - SF_WINDOW=<w>x<h>   window size (e.g. 2560x1080 to test ultra-wide layouts)
 
 use crate::common::*;
 use bevy::prelude::*;
@@ -23,14 +24,26 @@ struct DevRun {
 
 impl Plugin for DevToolsPlugin {
     fn build(&self, app: &mut App) {
-        if std::env::var("SF_MISSION").is_err() && std::env::var("SF_SHOT").is_err() && std::env::var("SF_QUIT_AT").is_err() {
+        if ["SF_MISSION", "SF_SHOT", "SF_QUIT_AT", "SF_WINDOW"].iter().all(|v| std::env::var(v).is_err()) {
             return;
         }
         app.init_resource::<DevRun>().add_systems(Startup, dev_start).add_systems(Update, dev_tick);
     }
 }
 
-fn dev_start(mut progress: ResMut<Progress>, mut settings: ResMut<Settings>, mut next: ResMut<NextState<AppState>>) {
+fn dev_start(
+    mut progress: ResMut<Progress>,
+    mut settings: ResMut<Settings>,
+    mut next: ResMut<NextState<AppState>>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+) {
+    let size = std::env::var("SF_WINDOW").ok().and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+    });
+    if let (Some((w, h)), Ok(mut win)) = (size, windows.single_mut()) {
+        win.resolution.set_physical_resolution(w, h);
+    }
     if let Some(m) = std::env::var("SF_MISSION").ok().and_then(|s| s.parse::<usize>().ok()) {
         progress.current = m;
         next.set(AppState::Flight);
