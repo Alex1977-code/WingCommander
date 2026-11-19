@@ -1,6 +1,9 @@
 //! Sternenfront – Der Perseus-Krieg, native PC version (Bevy, Vulkan, NVIDIA DLSS).
 //! Same campaign and ship data as the browser version (assets/data, exported from ../src).
 
+// release builds on Windows start without a console window
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod ai;
 mod audio;
 mod cockpit;
