@@ -6,16 +6,21 @@
 //!   with a voice limit and per-sound rate limits.
 //! - The engine hum is a live synthesizer voice (`EngineVoice`) whose parameters follow the player's
 //!   speed, boost and impulse drive through lock-free atomics.
-//! - The music is an original orchestral score in the 90s TV sci-fi style (strings, horns and trumpets,
-//!   low brass, choir, harp, timpani, cymbals; a heroic theme and a battle cue), rendered on a background
-//!   thread into two seamless ~60 s loops that cross-fade with the situation. `Settings.music` toggles it.
+//! - The music is an original orchestral score in the 90s TV sci-fi style (strings, horns, trumpets and a
+//!   flute, low brass, choir, harp, timpani, cymbals) with the seven moods of src/audio.js: menu theme,
+//!   briefing, travel, combat, tension, lament (sad) and victory fanfare. A background thread renders them
+//!   one by one into seamless loops (the most needed first); the mood follows the game state like the web
+//!   app (menu / briefing / travel vs combat in flight / victory, lament or briefing in the debrief; a
+//!   mission's `music` key overrides travel), switching with a short fade-out and fade-in, each mood from
+//!   its start. Until a mood is rendered a related one stands in. `Settings.music` toggles it.
 //! - Without an audio device (headless, CI) Bevy's audio systems do not run: this module notices that the
 //!   probe voice never gets a sink, then stops spawning anything and renders no music.
 //!
-//! Test hook: `SF_AUDIO_DUMP=<dir>` writes every clip and both music loops as WAV files into `<dir>`
+//! Test hook: `SF_AUDIO_DUMP=<dir>` writes every clip and all music loops as WAV files into `<dir>`
 //! (the music is rendered even without an audio device) and logs their levels.
 
 use crate::common::*;
+use crate::mission::MissionResult;
 use bevy::audio::{AddAudioSource, AudioSink, AudioSinkPlayback, ChannelCount, Decodable, PlaybackMode, Sample, SampleRate, Source, Volume};
 use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
@@ -616,8 +621,16 @@ enum Device {
     Missing,
 }
 
-/// Rendered music loops, filled by the background thread.
-type MusicSlot = Arc<Mutex<Option<[SynthClip; 2]>>>;
+/// Rendered music loops, filled by the background thread one mood at a time.
+type MusicSlot = Arc<Mutex<Vec<(Mood, SynthClip)>>>;
+
+/// A playing music loop (fading in, playing, or fading out before it is removed).
+struct MusicPlayer {
+    e: Entity,
+    mood: Mood,
+    vol: f32,
+    out: bool,
+}
 
 #[derive(Resource, Default)]
 pub struct AudioState {
@@ -628,9 +641,12 @@ pub struct AudioState {
     last_start: Vec<f32>,
     engine: Option<(Entity, Arc<EngineParams>)>,
     music_slot: Option<MusicSlot>,
-    /// theme and battle loop players
-    music: Option<[Entity; 2]>,
-    music_mix: [f32; 2],
+    /// rendered loops
+    music_clips: Vec<(Mood, Handle<SynthClip>)>,
+    /// the current loop and the ones fading out
+    players: Vec<MusicPlayer>,
+    /// time since the current loop started fading out (the next one starts after a short gap)
+    music_gap: f32,
     rng: u32,
 }
 
@@ -768,14 +784,46 @@ fn engine_hum(state: Res<AudioState>, settings: Res<Settings>, paused: Res<Pause
     EngineParams::set(&params.volume, on * settings.master_volume * SFX_GAIN * 1.1);
 }
 
-/// Start the music loops when they are rendered; cross-fade theme and battle cue; Settings.music.
+/// Which mood the game wants (web app.js): None keeps the current one (paused, mission over).
+fn wanted_mood(st: AppState, status: &MissionStatus, result: &MissionResult, data: &GameData, paused: bool) -> Option<Mood> {
+    match st {
+        AppState::Menu => Some(Mood::Menu),
+        AppState::Briefing => Some(Mood::Briefing),
+        AppState::Flight if paused || status.ended.is_some() => None,
+        AppState::Flight if status.hostiles > 0 => Some(Mood::Combat),
+        AppState::Flight => {
+            let own = data.mission(status.mission).extra.get("music").and_then(|v| v.as_str()).and_then(Mood::from_name);
+            Some(own.unwrap_or(Mood::Travel))
+        }
+        AppState::Debrief => {
+            let win = status.ended.as_ref().map_or(result.win, |e| e.win);
+            // an objective lost without dying: the story branches (lament); a death or a plain failure: retry
+            let branch = !win && !result.death && data.mission(result.mission).extra.get("lose").is_some_and(|l| !l.is_null());
+            Some(if win {
+                Mood::Victory
+            } else if branch {
+                Mood::Sad
+            } else {
+                Mood::Briefing
+            })
+        }
+        #[allow(unreachable_patterns)]
+        _ => None,
+    }
+}
+
+/// Collect rendered loops, pick the mood for the game state, fade the old loop out and start the new one
+/// from its beginning (web Music.setMood); Settings.music.
 #[allow(clippy::too_many_arguments)]
 fn music(
     mut commands: Commands,
     time: Res<Time>,
     settings: Res<Settings>,
+    paused: Res<Paused>,
     app_state: Res<State<AppState>>,
     status: Res<MissionStatus>,
+    result: Res<MissionResult>,
+    data: Res<GameData>,
     mut state: ResMut<AudioState>,
     mut clips: ResMut<Assets<SynthClip>>,
     mut sinks: Query<&mut AudioSink>,
@@ -783,32 +831,61 @@ fn music(
     if state.device != Device::Present {
         return;
     }
-    if state.music.is_none() {
-        let ready = state.music_slot.as_ref().and_then(|s| s.lock().ok().and_then(|mut g| g.take()));
-        if let Some([theme, battle]) = ready {
-            let mut spawn = |clip: SynthClip, name: &'static str| {
-                commands.spawn((AudioPlayer(clips.add(clip)), PlaybackSettings { mode: PlaybackMode::Once, volume: Volume::Linear(0.0), ..default() }, Name::new(name))).id()
-            };
-            state.music = Some([spawn(theme, "Musik Thema"), spawn(battle, "Musik Gefecht")]);
-            state.music_slot = None;
-        }
-        return;
+    let done = state.music_slot.as_ref().map(|s| s.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()).unwrap_or_default();
+    for (mood, clip) in done {
+        let h = clips.add(clip);
+        state.music_clips.push((mood, h));
     }
-    let Some([theme, battle]) = state.music else { return };
-    let combat = *app_state.get() == AppState::Flight && status.hostiles > 0 && status.ended.is_none();
+    let dt = time.delta_secs().min(0.1);
+    let current = state.players.iter().find(|p| !p.out).map(|p| p.mood);
+    let ready = |m: Mood| state.music_clips.iter().find(|c| c.0 == m).map(|c| c.1.clone());
+    // the wanted mood, else a related one that is already rendered
+    let mut goal = wanted_mood(*app_state.get(), &status, &result, &data, paused.0).or(current);
+    let mut clip = None;
+    while let Some(m) = goal {
+        if let Some(c) = ready(m) {
+            clip = Some(c);
+            break;
+        }
+        goal = m.fallback();
+    }
+    if let (Some(goal), Some(clip)) = (goal, clip)
+        && current != Some(goal)
+    {
+        for p in &mut state.players {
+            p.out = true;
+        }
+        state.music_gap += dt;
+        // web: fade out (0.35 s), switch after 1.1 s; straight away when nothing is audible
+        if state.music_gap >= 0.9 || state.players.iter().all(|p| p.vol < 0.01) {
+            state.music_gap = 0.0;
+            let e = commands
+                .spawn((AudioPlayer(clip), PlaybackSettings { mode: PlaybackMode::Once, volume: Volume::Linear(0.0), ..default() }, Name::new(format!("Musik {}", goal.name()))))
+                .id();
+            state.players.push(MusicPlayer { e, mood: goal, vol: 0.0, out: false });
+        }
+    } else {
+        state.music_gap = 0.0;
+    }
     let on = if settings.music { settings.master_volume * MUSIC_GAIN } else { 0.0 };
-    let goal = if combat { [0.0, on] } else { [on, 0.0] };
-    let k = 1.0 - (-time.delta_secs() / 1.2).exp();
-    for (i, e) in [theme, battle].into_iter().enumerate() {
-        let v = state.music_mix[i] + (goal[i] - state.music_mix[i]) * k;
-        state.music_mix[i] = if (v - goal[i]).abs() < 1e-4 { goal[i] } else { v };
-        if let Ok(mut sink) = sinks.get_mut(e) {
-            let want = Volume::Linear(state.music_mix[i]);
+    for p in &mut state.players {
+        let (target, tau) = if p.out { (0.0, 0.35) } else { (on, 0.6) };
+        let v = p.vol + (target - p.vol) * (1.0 - (-dt / tau).exp());
+        p.vol = if (v - target).abs() < 1e-4 { target } else { v };
+        if let Ok(mut sink) = sinks.get_mut(p.e) {
+            let want = Volume::Linear(p.vol);
             if sink.volume() != want {
                 sink.set_volume(want);
             }
         }
     }
+    state.players.retain(|p| {
+        let gone = p.out && p.vol < 1e-3;
+        if gone {
+            commands.entity(p.e).try_despawn();
+        }
+        !gone
+    });
 }
 
 /// Safety net: voices whose sink never reported the end (or never started) are removed in time.
@@ -824,16 +901,18 @@ fn reap_voices(mut commands: Commands, time: Res<Time>, voices: Query<(Entity, &
 // ---------- music ----------
 
 fn start_music_render(state: &mut AudioState) {
-    let slot: MusicSlot = Arc::new(Mutex::new(None));
+    let slot: MusicSlot = Arc::new(Mutex::new(Vec::new()));
     state.music_slot = Some(slot.clone());
     let spawned = std::thread::Builder::new().name("musik".into()).spawn(move || {
         let t0 = std::time::Instant::now();
-        let theme = render_score(&Score::theme());
-        let battle = render_score(&Score::battle());
-        info!("audio: Musik in {:.1} s gerendert", t0.elapsed().as_secs_f32());
-        if let Ok(mut g) = slot.lock() {
-            *g = Some([theme, battle]);
+        // the most needed first: each loop is handed over as soon as it is done
+        for mood in Mood::RENDER_ORDER {
+            let clip = render_score(&mood.score());
+            if let Ok(mut g) = slot.lock() {
+                g.push((mood, clip));
+            }
         }
+        info!("audio: Musik ({} Stimmungen) in {:.1} s gerendert", Mood::RENDER_ORDER.len(), t0.elapsed().as_secs_f32());
     });
     if spawned.is_err() {
         state.music_slot = None;
@@ -918,14 +997,115 @@ const BATTLE_CHORDS: [[i32; 4]; 8] = [
     chord!("A2", "E3", "A3", "C#4"),
 ];
 
+// Briefing: the theme's opening, quietly, over a pulsing low-string figure
+const BRIEF: [Bar; 4] = [
+    bar![(0, "A4", 3), (3, "D5", 1), (4, "E5", 12)],
+    bar![(0, "G#5", 8), (8, "F#5", 8)],
+    bar![(0, "D5", 4), (4, "F#5", 4), (8, "E5", 8)],
+    bar![(0, "B4", 16)],
+];
+const BRIEF_CHORDS: [[i32; 4]; 4] = [chord!("D3", "A3", "D4", "F#4"), chord!("D3", "B3", "E4", "G#4"), chord!("B2", "F#3", "B3", "D4"), chord!("G2", "D3", "G3", "B3")];
+// Lament for the fallen: solo horn over strings
+const LAMENT: [Bar; 4] = [
+    bar![(0, "A4", 6), (6, "G4", 2), (8, "F4", 4), (12, "E4", 4)],
+    bar![(0, "D4", 8), (8, "F4", 4), (12, "A4", 4)],
+    bar![(0, "Bb4", 6), (6, "A4", 2), (8, "G4", 4), (12, "F4", 4)],
+    bar![(0, "E4", 12), (12, "C#4", 4)],
+];
+const LAMENT_CHORDS: [[i32; 4]; 4] = [chord!("D3", "A3", "D4", "F4"), chord!("Bb2", "F3", "Bb3", "D4"), chord!("G2", "D3", "G3", "Bb3"), chord!("A2", "E3", "A3", "C#4")];
+// Victory fanfare in D major
+const FANFARE: [Bar; 4] = [
+    bar![(0, "A4", 2), (2, "D5", 1), (3, "D5", 1), (4, "A5", 6), (10, "F#5", 2), (12, "G5", 2), (14, "A5", 2)],
+    bar![(0, "C6", 4), (4, "B5", 2), (6, "G5", 2), (8, "A5", 8)],
+    bar![(0, "D5", 2), (2, "E5", 2), (4, "F#5", 4), (8, "G#5", 2), (10, "A5", 2), (12, "B5", 4)],
+    bar![(0, "D6", 12)],
+];
+const FANFARE_CHORDS: [[i32; 4]; 4] = [chord!("D3", "A3", "D4", "F#4"), chord!("C3", "G3", "C4", "E4"), chord!("D3", "B3", "E4", "G#4"), chord!("D3", "A3", "D4", "F#4")];
+// Tension: dark, unresolved harmony over a timpani rumble (no tune)
+const TENSION_CHORDS: [[i32; 4]; 4] = [chord!("D2", "A2", "Eb3", "A3"), chord!("D2", "G2", "C#3", "G3"), chord!("D2", "A2", "Eb3", "Bb3"), chord!("Bb1", "F2", "B2", "E3")];
+
+/// The music moods of src/audio.js.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mood {
+    Menu,
+    Briefing,
+    Travel,
+    Combat,
+    Tension,
+    Sad,
+    Victory,
+}
+
+impl Mood {
+    /// render order: what the game needs first comes first
+    const RENDER_ORDER: [Mood; 7] = [Mood::Menu, Mood::Briefing, Mood::Combat, Mood::Travel, Mood::Victory, Mood::Sad, Mood::Tension];
+
+    fn name(self) -> &'static str {
+        match self {
+            Mood::Menu => "menu",
+            Mood::Briefing => "briefing",
+            Mood::Travel => "travel",
+            Mood::Combat => "combat",
+            Mood::Tension => "tension",
+            Mood::Sad => "sad",
+            Mood::Victory => "victory",
+        }
+    }
+
+    fn from_name(s: &str) -> Option<Self> {
+        Self::RENDER_ORDER.into_iter().find(|m| m.name() == s)
+    }
+
+    /// what plays while this mood is not rendered yet
+    fn fallback(self) -> Option<Self> {
+        match self {
+            Mood::Menu => None,
+            Mood::Combat | Mood::Tension | Mood::Sad => Some(Mood::Briefing),
+            Mood::Briefing | Mood::Travel | Mood::Victory => Some(Mood::Menu),
+        }
+    }
+
+    fn score(self) -> Score {
+        match self {
+            Mood::Menu => Score::theme(),
+            Mood::Combat => Score::battle(),
+            Mood::Briefing => Score::briefing(),
+            Mood::Travel => Score::travel(),
+            Mood::Tension => Score::tension(),
+            Mood::Sad => Score::sad(),
+            Mood::Victory => Score::victory(),
+        }
+    }
+}
+
+/// Melody instrument of a mood (the tutti passes always take trumpets with the horns below).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Lead {
+    Horns,
+    Horn,
+    Trumpets,
+    Flute,
+}
+
 /// Mood recipe (web MOODS): volumes per orchestra layer, 0 = off.
 struct Score {
     bpm: f32,
     bars: usize,
     chords: &'static [[i32; 4]],
     melody: &'static [Bar],
+    lead: Lead,
     lead_vol: f32,
+    /// the tune plays every n-th pass of the phrase (and in every tutti pass)
+    melody_every: u32,
     tutti_every: u32,
+    /// tremolo string chords (tension)
+    tremolo: f32,
+    /// low brass and choir swell every bar, bass drum on the phrase marks (tension)
+    brass_swell: bool,
+    /// timpani rumble every second bar instead of phrase marks (tension)
+    timp_rumble: bool,
+    /// loudness relative to the combat cue (the web moods differ in level; all loops are normalised)
+    level: f32,
     strings: f32,
     basses: f32,
     harp: f32,
@@ -945,13 +1125,162 @@ struct Score {
 }
 
 impl Score {
-    /// menus, briefings, travel: the heroic theme, every second pass tutti (~62 s)
+    /// every layer off: the recipes below switch on what they use
+    const SILENT: Score = Score {
+        bpm: 70.0,
+        bars: 8,
+        chords: &HERO_CHORDS,
+        melody: &[],
+        lead: Lead::Horns,
+        lead_vol: 0.0,
+        melody_every: 1,
+        tutti_every: 0,
+        tremolo: 0.0,
+        brass_swell: false,
+        timp_rumble: false,
+        level: 1.0,
+        strings: 0.0,
+        basses: 0.0,
+        harp: 0.0,
+        celesta: 0.0,
+        ostinato: 0.0,
+        brass: 0.0,
+        low_brass: 0.0,
+        riff: false,
+        stabs: 0.0,
+        choir: 0.0,
+        drum: 0.0,
+        timp: 0.0,
+        snare: 0.0,
+        swell: 0.0,
+        crash: 0.0,
+        seed: 1,
+    };
+
+    /// briefings (and a failed mission's debrief): the theme's opening on the flute over a soft pulse (~46 s)
+    fn briefing() -> Self {
+        Self {
+            bpm: 84.0,
+            bars: 16,
+            chords: &BRIEF_CHORDS,
+            melody: &BRIEF,
+            lead: Lead::Flute,
+            lead_vol: 0.06,
+            melody_every: 2,
+            strings: 0.035,
+            basses: 0.04,
+            ostinato: 0.03,
+            celesta: 0.02,
+            brass: 0.02,
+            timp: 0.15,
+            level: 0.75,
+            seed: 0xb41e,
+            ..Self::SILENT
+        }
+    }
+    /// quiet flight between the fights: the theme, lighter and faster, tutti every fourth pass (~83 s)
+    fn travel() -> Self {
+        Self {
+            bpm: 92.0,
+            bars: 32,
+            chords: &HERO_CHORDS,
+            melody: &HERO,
+            lead: Lead::Horns,
+            lead_vol: 0.085,
+            melody_every: 2,
+            tutti_every: 4,
+            strings: 0.04,
+            basses: 0.045,
+            harp: 0.032,
+            celesta: 0.01,
+            brass: 0.03,
+            low_brass: 0.04,
+            choir: 0.02,
+            drum: 0.35,
+            timp: 0.25,
+            swell: 0.04,
+            crash: 0.06,
+            level: 0.85,
+            seed: 0x7a1e,
+            ..Self::SILENT
+        }
+    }
+    /// dark suspense, no tune (~27 s)
+    fn tension() -> Self {
+        Self {
+            bpm: 70.0,
+            bars: 8,
+            chords: &TENSION_CHORDS,
+            tremolo: 0.045,
+            basses: 0.06,
+            low_brass: 0.05,
+            brass_swell: true,
+            choir: 0.018,
+            timp: 0.4,
+            timp_rumble: true,
+            drum: 0.3,
+            swell: 0.03,
+            level: 0.8,
+            seed: 0x7e45,
+            ..Self::SILENT
+        }
+    }
+    /// lament for the fallen: solo horn over strings (~33 s)
+    fn sad() -> Self {
+        Self {
+            bpm: 58.0,
+            bars: 8,
+            chords: &LAMENT_CHORDS,
+            melody: &LAMENT,
+            lead: Lead::Horn,
+            lead_vol: 0.1,
+            strings: 0.05,
+            basses: 0.04,
+            harp: 0.012,
+            brass: 0.018,
+            choir: 0.015,
+            level: 0.75,
+            seed: 0x5ad0,
+            ..Self::SILENT
+        }
+    }
+    /// victory fanfare, every pass tutti (~19 s)
+    fn victory() -> Self {
+        Self {
+            bpm: 100.0,
+            bars: 8,
+            chords: &FANFARE_CHORDS,
+            melody: &FANFARE,
+            lead: Lead::Trumpets,
+            lead_vol: 0.1,
+            tutti_every: 1,
+            strings: 0.05,
+            basses: 0.05,
+            harp: 0.03,
+            brass: 0.045,
+            low_brass: 0.06,
+            choir: 0.03,
+            drum: 0.5,
+            timp: 0.5,
+            swell: 0.05,
+            crash: 0.09,
+            seed: 0xf4f4,
+            ..Self::SILENT
+        }
+    }
+    /// menus: the heroic theme, every second pass tutti (~55 s)
     fn theme() -> Self {
         Self {
-            bpm: 62.0,
+            bpm: 70.0,
             bars: 16,
             chords: &HERO_CHORDS,
             melody: &HERO,
+            lead: Lead::Horns,
+            melody_every: 1,
+            tremolo: 0.0,
+            brass_swell: false,
+            timp_rumble: false,
+            level: 1.0,
             lead_vol: 0.1,
             tutti_every: 2,
             strings: 0.045,
@@ -972,13 +1301,19 @@ impl Score {
             seed: 0x51f1,
         }
     }
-    /// combat: the squadron's motif over a driving ostinato (~60 s)
+    /// combat: the squadron's motif over a driving ostinato (~58 s)
     fn battle() -> Self {
         Self {
-            bpm: 128.0,
+            bpm: 132.0,
             bars: 32,
             chords: &BATTLE_CHORDS,
             melody: &BATTLE,
+            lead: Lead::Horns,
+            melody_every: 1,
+            tremolo: 0.0,
+            brass_swell: false,
+            timp_rumble: false,
+            level: 1.0,
             lead_vol: 0.085,
             tutti_every: 2,
             strings: 0.03,
@@ -1299,6 +1634,22 @@ impl Band {
         self.noise_hit(at, 0.3, vol * 0.25, Filter::Low, 300.0, 80.0, 0.7, 0.0, 0.0);
     }
 
+    /// flute: breathy sine with a soft second partial and a chiff of breath noise
+    fn flute(&mut self, f0: f32, at: f32, dur: f32, vol: f32) {
+        let hold = dur.max(0.09);
+        let gain = move |t: f32| {
+            if t < 0.09 {
+                vol * t / 0.09
+            } else if t < hold {
+                vol
+            } else {
+                vol * (-(t - hold) / 0.15).exp()
+            }
+        };
+        self.voice(at, dur + 0.6, f0, &[(Wave::Sine, 1.0, 0.0, 1.0), (Wave::Tri, 2.0, 0.0, 0.18)], Some(Vib(5.6, 11.0, 0.4)), None, |_| 0.0, gain, -0.15, 1.2);
+        self.noise_hit(at, dur.min(0.25), vol * 0.25, Filter::Band, f0 * 2.0, f0 * 2.0, 1.0, 1.0, -0.15);
+    }
+
     fn horns(&mut self, f0: f32, at: f32, dur: f32, vol: f32) {
         for (d, dt) in [(-7.0f32, 0.0f32), (8.0, 0.015)] {
             self.horn(f0 * 2f32.powf(d / 1200.0), at + dt, dur, vol * 0.62, false, -0.25);
@@ -1334,6 +1685,9 @@ fn render_score(m: &Score) -> SynthClip {
             if m.strings > 0.0 {
                 b.strings(&ch, t, sd * 16.0, m.strings * if tutti { 1.15 } else { 1.0 }, if fast { 0.25 } else { 0.7 }, false);
             }
+            if m.tremolo > 0.0 {
+                b.strings(&ch, t, sd * 16.0, m.tremolo, 1.2, true);
+            }
             if m.basses > 0.0 {
                 b.strings(&[ch[0] - 12], t, sd * 16.0, m.basses, 0.4, false);
             }
@@ -1344,17 +1698,17 @@ fn render_score(m: &Score) -> SynthClip {
                     b.horn(midi(k), t, sd * if fast { 8.0 } else { 15.0 }, m.brass * big / n, true, 0.3);
                 }
             }
-            if m.low_brass > 0.0 && !m.riff && (tutti || in_phrase % 2 == 0) {
-                b.low_brass(midi(ch[0]), t, sd * 14.0, m.low_brass * big, false, false);
+            if m.low_brass > 0.0 && !m.riff && (tutti || m.brass_swell || in_phrase % 2 == 0) {
+                b.low_brass(midi(ch[0]), t, sd * 14.0, m.low_brass * big, m.brass_swell, false);
             }
-            if m.choir > 0.0 && (tutti || m.tutti_every == 0) {
+            if m.choir > 0.0 && (tutti || m.brass_swell || m.tutti_every == 0) {
                 let f: [f32; 3] = [midi(ch[1] + 12), midi(ch[2] + 12), midi(ch[3] + 12)];
                 b.choir(&f, t, sd * 16.0, m.choir);
             }
             if m.crash > 0.0 && tutti && in_phrase == 0 {
                 b.crash(t, m.crash);
             }
-            if m.drum > 0.0 && !m.riff && tutti && in_phrase % 4 == 0 {
+            if m.drum > 0.0 && !m.riff && (tutti || m.brass_swell) && in_phrase % 4 == 0 {
                 b.bass_drum(t, m.drum);
             }
         }
@@ -1387,23 +1741,34 @@ fn render_score(m: &Score) -> SynthClip {
         if m.celesta > 0.0 && !tutti && (s == 0 || s == 6 || s == 10) && rng.f() < 0.8 {
             b.celesta(midi(ch[(bar + s as usize) % 4] + 24), t, m.celesta);
         }
-        // low-string ostinato: urgent sixteenths
+        // low-string ostinato: urgent sixteenths in battle, a soft pulse in briefings
         if m.ostinato > 0.0 {
             let root = ch[0] - 12;
-            const PAT: [i32; 16] = [0, 0, 12, 0, 0, 0, 7, 0, 0, 0, 12, 0, 10, 0, 7, 0];
-            b.staccato(midi(root + PAT[s as usize]), t, sd * 0.9, m.ostinato * if s % 4 == 0 { 1.25 } else { 0.85 });
-        }
-        // melody: horns in the quiet passes, trumpets with the horns an octave below in the tutti
-        for &(st, n, len) in m.melody[bar % m.melody.len()] {
-            if st != s {
-                continue;
+            if fast {
+                const PAT: [i32; 16] = [0, 0, 12, 0, 0, 0, 7, 0, 0, 0, 12, 0, 10, 0, 7, 0];
+                b.staccato(midi(root + PAT[s as usize]), t, sd * 0.9, m.ostinato * if s % 4 == 0 { 1.25 } else { 0.85 });
+            } else if s % 2 == 0 {
+                b.staccato(midi(root), t, sd * 1.6, m.ostinato * if s % 8 == 0 { 1.2 } else { 0.8 });
             }
-            let f = midi(n);
-            if tutti {
-                b.trumpets(f, t, sd * len as f32, m.lead_vol);
-                b.horns(f / 2.0, t, sd * len as f32, m.lead_vol * 0.95);
-            } else {
-                b.horns(f, t, sd * len as f32, m.lead_vol);
+        }
+        // melody: the mood's lead in the quiet passes, trumpets with the horns an octave below in the tutti
+        if !m.melody.is_empty() && (pass % m.melody_every.max(1) == 0 || tutti) {
+            for &(st, n, len) in m.melody[bar % m.melody.len()] {
+                if st != s {
+                    continue;
+                }
+                let (f, d) = (midi(n), sd * len as f32);
+                if tutti {
+                    b.trumpets(f, t, d, m.lead_vol);
+                    b.horns(f / 2.0, t, d, m.lead_vol * 0.95);
+                } else {
+                    match m.lead {
+                        Lead::Horns => b.horns(f, t, d, m.lead_vol),
+                        Lead::Horn => b.horn(f, t, d, m.lead_vol, false, -0.2),
+                        Lead::Trumpets => b.trumpets(f, t, d, m.lead_vol),
+                        Lead::Flute => b.flute(f, t, d, m.lead_vol),
+                    }
+                }
             }
         }
         // brass hits answer the ostinato between the phrases of the tune
@@ -1416,7 +1781,11 @@ fn render_score(m: &Score) -> SynthClip {
         // timpani: phrase marks, battle hits and rolls into the climaxes
         if m.timp > 0.0 {
             let tp = midi(if ch[0] >= 48 { ch[0] - 12 } else { ch[0] });
-            if fast {
+            if m.timp_rumble {
+                if s == 0 && bar % 2 == 0 {
+                    b.roll(tp, t, sd * 12.0, m.timp * 0.5);
+                }
+            } else if fast {
                 if s == 0 || s == 8 || (tutti && (s == 6 || s == 14)) {
                     b.timpani(tp, t, m.timp * if s == 0 { 1.0 } else { 0.7 }, false);
                 }
@@ -1461,7 +1830,7 @@ fn render_score(m: &Score) -> SynthClip {
     }
     let peak = out.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-6);
     let rms = (out.iter().map(|v| v * v).sum::<f32>() / out.len().max(1) as f32).sqrt().max(1e-6);
-    let gain = (0.9 / peak).min(0.17 / rms);
+    let gain = (0.9 / peak).min(0.17 * m.level / rms);
     for v in &mut out {
         *v *= gain;
     }
@@ -1508,8 +1877,9 @@ fn dump(dir: &str, clips: &Assets<SynthClip>, handles: &[Handle<SynthClip>]) {
         }
     }
     let t0 = std::time::Instant::now();
-    for (name, score) in [("music_theme", Score::theme()), ("music_battle", Score::battle())] {
-        let c = render_score(&score);
+    for mood in Mood::RENDER_ORDER {
+        let name = format!("music_{}", mood.name());
+        let c = render_score(&mood.score());
         let (peak, rms) = levels(&c);
         info!("audio dump: {name} {:.1} s peak {peak:.3} rms {rms:.4} (rendered in {:.1} s)", c.seconds(), t0.elapsed().as_secs_f32());
         let _ = write_wav(&dir.join(format!("{name}.wav")), &c);
