@@ -265,7 +265,7 @@ impl Screens {
     pub fn log_fmt(&mut self, screen: usize, t: f32, color: u32, args: std::fmt::Arguments) {
         let l = self.logs[screen].push(t, hex(color, 1.0));
         let _ = l.text.write_fmt(args);
-        upper_trim(&mut l.text, 34);
+        trim_chars(&mut l.text, 34);
         l.chars = l.text.chars().count();
     }
 
@@ -314,12 +314,8 @@ impl Screens {
     }
 }
 
-/// upper case, cut to `max` characters
-fn upper_trim(s: &mut String, max: usize) {
-    if s.chars().any(|c| c.is_lowercase()) {
-        let up: String = s.chars().flat_map(|c| if c == 'ß' { vec!['S', 'S'] } else { c.to_uppercase().collect() }).collect();
-        *s = up;
-    }
+/// cut to `max` characters (the stroke font draws everything in capitals)
+fn trim_chars(s: &mut String, max: usize) {
     if let Some((i, _)) = s.char_indices().nth(max) {
         s.truncate(i);
     }
@@ -354,9 +350,15 @@ fn model_triangles(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str, mut f: 
 }
 
 /// sharp edges of a model (dihedral angle above `deg`, or open), as segments
-fn sharp_edges(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Vec<([i32; 3], [i32; 3], Vec3, Vec3, f32)> {
+/// (start, end, smallest normal dot of the faces sharing it; -1 for open edges)
+type Edge = (Vec3, Vec3, f32);
+/// quantised end points -> (start, end, first normal, smallest normal dot, face count)
+type EdgeMap = HashMap<([i32; 3], [i32; 3]), (Vec3, Vec3, Vec3, f32, u32)>;
+type MineQuery<'w, 's> = Query<'w, 's, (&'static Name, &'static Transform), (With<InMission>, Without<Ship>)>;
+
+fn sharp_edges(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Vec<Edge> {
     let q = |p: Vec3| [(p.x * 1000.0).round() as i32, (p.y * 1000.0).round() as i32, (p.z * 1000.0).round() as i32];
-    let mut edges: HashMap<([i32; 3], [i32; 3]), (Vec3, Vec3, Vec3, f32, u32)> = HashMap::new();
+    let mut edges: EdgeMap = HashMap::new();
     model_triangles(lib, meshes, kind, |a, b, c| {
         let n = (b - a).cross(c - a);
         if n.length_squared() < 1e-12 {
@@ -375,7 +377,7 @@ fn sharp_edges(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Vec<([i3
                 .or_insert((p, r, n, 1.0, 1));
         }
     });
-    edges.into_iter().map(|((ka, kb), (p, r, _, min_dot, count))| (ka, kb, p, r, if count == 1 { -1.0 } else { min_dot })).collect()
+    edges.into_values().map(|(p, r, _, min_dot, count)| (p, r, if count == 1 { -1.0 } else { min_dot })).collect()
 }
 
 fn build_outline(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str, n: usize) -> Option<Outline> {
@@ -416,7 +418,7 @@ fn build_outline(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str, n: usize)
     }
     // panel lines from the model's sharp edges, clipped to the silhouette
     let mut det = Canvas::new(n, n, [0.0; 4]);
-    for (_, _, p, r, dot) in sharp_edges(lib, meshes, kind) {
+    for (p, r, dot) in sharp_edges(lib, meshes, kind) {
         if dot < 0.85 {
             let (a, b) = (o.map(p.x, p.z), o.map(r.x, r.z));
             det.line(a.x, a.y, b.x, b.y, 0.7, white);
@@ -436,7 +438,7 @@ fn build_wire(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Option<Ve
     for thr in [28.0f32, 40.0, 55.0, 70.0] {
         let c = thr.to_radians().cos();
         segs.clear();
-        segs.extend(edges.iter().filter(|e| e.4 < c).map(|e| [e.2, e.3]));
+        segs.extend(edges.iter().filter(|e| e.2 < c).map(|e| [e.0, e.1]));
         if segs.len() < 1600 {
             break;
         }
@@ -464,7 +466,7 @@ pub fn update_screens(
     mut images: ResMut<Assets<Image>>,
     players: Query<PlayerItem, Without<Dying>>,
     ships: Query<ShipItem>,
-    mines: Query<(&Name, &Transform), (With<InMission>, Without<Ship>)>,
+    mines: MineQuery,
 ) {
     let Some(mut screens) = screens else { return };
     let Ok((pe, ptf, ship, player, aim, trigger)) = players.single() else { return };
@@ -513,7 +515,7 @@ pub fn update_screens(
         let elem = sc.screens[si].elem;
         sc.screens[si].next = (sc.screens[si].next + elem.period()).max(t);
         let f = state.fail[elem as usize];
-        let mut canvas = std::mem::replace(&mut sc.screens[si].canvas, Canvas::new(1, 1, BG));
+        let mut canvas = std::mem::take(&mut sc.screens[si].canvas);
         if f == Fail::Dead || (f == Fail::Flicker && state.rng.chance(0.35)) {
             canvas.static_noise(&mut sc.rng, t, f == Fail::Dead);
         } else {
@@ -521,7 +523,7 @@ pub fn update_screens(
                 Elem::Mfd0 => {
                     mfd_frame(&mut canvas, "SCHIFF");
                     let outline = sc.outline(&lib, &meshes, &ship.kind);
-                    draw_ship(&mut canvas, t, ship, player, trigger, outline.as_deref(), &state, &progress.callsign);
+                    draw_ship(&mut canvas, t, ship, player, trigger, outline.as_deref(), &state, &progress.callsign, &mut sc.txt);
                 }
                 Elem::Mfd1 => {
                     mfd_frame(&mut canvas, "RAD");
@@ -657,7 +659,7 @@ fn mfd_frame(c: &mut Canvas, title: &str) {
 // ---------- left MFD: own ship ----------
 
 #[allow(clippy::too_many_arguments)]
-fn draw_ship(c: &mut Canvas, t: f32, ship: &Ship, player: &Player, trigger: Option<&Trigger>, ol: Option<&Outline>, state: &CockpitState, callsign: &str) {
+fn draw_ship(c: &mut Canvas, t: f32, ship: &Ship, player: &Player, trigger: Option<&Trigger>, ol: Option<&Outline>, state: &CockpitState, callsign: &str, buf: &mut String) {
     let (w, h) = (c.w as f32, c.h as f32);
     let (cx, cy, sc) = (w * 0.5, h * 0.54, h * 0.33);
     let sk = if ship.max_shield > 0.0 { ship.shield / ship.max_shield } else { 0.0 };
@@ -725,16 +727,16 @@ fn draw_ship(c: &mut Canvas, t: f32, ship: &Ship, player: &Player, trigger: Opti
         // no model data: a simple arrow
         c.tri((cx, cy - 40.0), (cx + 28.0, cy + 30.0), (cx - 28.0, cy + 30.0), with_a(hull_col, 0.5));
     }
-    let mut buf = String::new();
+    buf.clear();
     let _ = write!(buf, "SCHILD {}%", (sk * 100.0).round() as i32);
-    c.text_ex(&buf, 12.0, h - 26.0, 14.0, 1.3, if sk > 0.15 { G } else { R }, Align::Left, 1.0);
+    c.text_ex(buf, 12.0, h - 26.0, 14.0, 1.3, if sk > 0.15 { G } else { R }, Align::Left, 1.0);
     buf.clear();
     let _ = write!(buf, "HÜLLE {}%", (hk * 100.0).round() as i32);
-    c.text_ex(&buf, w - 12.0, h - 26.0, 14.0, 1.3, if hk > 0.3 { G } else { R }, Align::Right, 1.0);
+    c.text_ex(buf, w - 12.0, h - 26.0, 14.0, 1.3, if hk > 0.3 { G } else { R }, Align::Right, 1.0);
     buf.clear();
     let _ = write!(buf, "{callsign} · {}", ship.def.name);
-    upper_trim(&mut buf, 28);
-    c.text_fit(&buf, w - 12.0, 11.0, 13.0, w * 0.62, A, Align::Right);
+    trim_chars(buf, 28);
+    c.text_fit(buf, w - 12.0, 11.0, 13.0, w * 0.62, A, Align::Right);
 }
 
 // ---------- centre MFD: radar ----------
@@ -746,7 +748,7 @@ fn gather_contacts(
     ptf: &Transform,
     player: &Player,
     ships: &Query<ShipItem>,
-    mines: &Query<(&Name, &Transform), (With<InMission>, Without<Ship>)>,
+    mines: &MineQuery,
     nav: Option<Vec3>,
 ) {
     let inv = ptf.rotation.inverse();
@@ -769,7 +771,7 @@ fn gather_contacts(
         c.label.clear();
         if let Some(l) = label {
             c.label.push_str(l);
-            upper_trim(&mut c.label, 10);
+            trim_chars(&mut c.label, 10);
         }
         n += 1;
     };
@@ -1000,7 +1002,7 @@ fn draw_scan(c: &mut Canvas, t: f32, scan: f32, tg: &Ship, foe: bool, d: f32, wi
     // data column
     buf.clear();
     buf.push_str(&tg.name);
-    upper_trim(buf, 12);
+    trim_chars(buf, 12);
     c.text_fit(buf, 12.0, 38.0, 16.0, w * 0.3, col, Align::Left);
     let st = if scan < 1.0 {
         buf.clear();
@@ -1012,9 +1014,9 @@ fn draw_scan(c: &mut Canvas, t: f32, scan: f32, tg: &Ship, foe: bool, d: f32, wi
         "FREUNDLICH"
     };
     c.text_fit(st, 12.0, 66.0, 12.0, w * 0.28, G, Align::Left);
-    let mut b2 = String::new();
-    let _ = write!(b2, "{} M", d.round() as i32);
-    c.text_ex(&b2, 12.0, 86.0, 12.0, 1.1, G, Align::Left, 1.0);
+    buf.clear();
+    let _ = write!(buf, "{} M", d.round() as i32);
+    c.text_ex(buf, 12.0, 86.0, 12.0, 1.1, G, Align::Left, 1.0);
     let bar = |c: &mut Canvas, y: f32, label: &str, k: f32, cc: Rgba| {
         c.text_ex(label, 12.0, y, 11.0, 1.1, G, Align::Left, 1.0);
         c.rect_line(12.0, y + 18.0, w * 0.27, 12.0, 1.2, G);
@@ -1032,9 +1034,9 @@ fn draw_scan(c: &mut Canvas, t: f32, scan: f32, tg: &Ship, foe: bool, d: f32, wi
     if player.lock >= 1.0 {
         c.text_ex("NEUTRON LOCK", 12.0, h - 56.0, 13.0, 1.4, if blink { R } else { hex(0x3a0a12, 1.0) }, Align::Left, 1.0);
     } else if player.lock > 0.0 {
-        b2.clear();
-        let _ = write!(b2, "ERFASSUNG {}%", (player.lock * 100.0).round() as i32);
-        c.text_ex(&b2, 12.0, h - 56.0, 13.0, 1.4, A, Align::Left, 1.0);
+        buf.clear();
+        let _ = write!(buf, "ERFASSUNG {}%", (player.lock * 100.0).round() as i32);
+        c.text_ex(buf, 12.0, h - 56.0, 13.0, 1.4, A, Align::Left, 1.0);
     }
     if aim.is_some_and(|a| a.locked) {
         c.text_ex("LASER LOCK", 12.0, h - 32.0, 13.0, 1.4, if blink { G } else { BG }, Align::Left, 1.0);

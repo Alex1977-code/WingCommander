@@ -206,6 +206,7 @@ pub fn cylinder(r_top: f32, r_bot: f32, h: f32, seg: usize, caps: bool) -> Geo {
 
 /// UV sphere patch: azimuth `phi` from `p0` over `dp` (0 = +Z, towards +X), polar `theta` from `t0` over `dt`
 /// (0 = +Y). `inward` flips the faces to be seen from inside.
+#[allow(clippy::too_many_arguments)]
 pub fn sphere_patch(r: f32, p0: f32, dp: f32, t0: f32, dt: f32, seg: usize, rings: usize, inward: bool) -> Geo {
     let mut g = Geo::default();
     for j in 0..=rings {

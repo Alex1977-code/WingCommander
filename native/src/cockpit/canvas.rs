@@ -70,6 +70,13 @@ pub struct Canvas {
     pts: Vec<(f32, f32)>,
 }
 
+/// empty canvas (no allocation), a placeholder while a screen's canvas is being drawn
+impl Default for Canvas {
+    fn default() -> Self {
+        Self { w: 0, h: 0, px: Vec::new(), additive: false, clip: (0, 0, 0, 0), xs: Vec::new(), cover: Vec::new(), pts: Vec::new() }
+    }
+}
+
 impl Canvas {
     pub fn new(w: usize, h: usize, fill: Rgba) -> Self {
         Self { w, h, px: vec![fill; w * h], additive: false, clip: (0, 0, w as i32, h as i32), xs: Vec::with_capacity(16), cover: vec![0.0; w], pts: Vec::with_capacity(64) }
@@ -208,6 +215,7 @@ impl Canvas {
     }
 
     /// stroked elliptical arc from angle a0 to a1 (radians, 0 = +x, clockwise on screen as y points down)
+    #[allow(clippy::too_many_arguments)]
     pub fn arc(&mut self, cx: f32, cy: f32, rx: f32, ry: f32, a0: f32, a1: f32, lw: f32, c: Rgba) {
         let n = (((a1 - a0).abs() * rx.max(ry) / 4.0).ceil() as usize).clamp(4, 96);
         let mut prev = (cx + a0.cos() * rx, cy + a0.sin() * ry);
@@ -279,7 +287,7 @@ impl Canvas {
                     }
                 }
                 xs.sort_unstable_by(|a, b| a.total_cmp(b));
-                for pair in xs.chunks_exact(2) {
+                for pair in xs.as_chunks::<2>().0 {
                     let (xa, xb) = (pair[0].max(minx as f32), pair[1].min(maxx as f32));
                     if xb <= xa {
                         continue;
@@ -311,6 +319,7 @@ impl Canvas {
     }
 
     /// draws `mask` (alpha 0..1, `mw` x `mh`) tinted with `c`, scaled into the box at (x, y, w, h)
+    #[allow(clippy::too_many_arguments)]
     pub fn mask(&mut self, mask: &[f32], mw: usize, mh: usize, x: f32, y: f32, w: f32, h: f32, c: Rgba) {
         let (x0, y0) = ((x.floor() as i32).max(self.clip.0), (y.floor() as i32).max(self.clip.1));
         let (x1, y1) = (((x + w).ceil() as i32).min(self.clip.2), ((y + h).ceil() as i32).min(self.clip.3));
@@ -471,6 +480,7 @@ impl Canvas {
     }
 
     /// text squeezed to fit `max_w`
+    #[allow(clippy::too_many_arguments)]
     pub fn text_fit(&mut self, txt: &str, x: f32, y: f32, h: f32, max_w: f32, c: Rgba, align: Align) -> f32 {
         let w = Self::text_width(txt, h, 1.1);
         let sx = if w > max_w { max_w / w } else { 1.0 };
@@ -480,6 +490,7 @@ impl Canvas {
     // ---------- instruments ----------
 
     /// one seven-segment digit (also '-', ' ', 'E', 'r', 'o') of size w x h
+    #[allow(clippy::too_many_arguments)]
     pub fn seg7(&mut self, ch: char, x: f32, y: f32, w: f32, h: f32, on: Rgba, off: Rgba) {
         let segs = match ch {
             '0' | 'O' => "abcdef",
@@ -575,7 +586,7 @@ impl Canvas {
 
     /// RGBA8 sRGB bytes (the canvas holds sRGB values already)
     pub fn write_rgba8(&self, out: &mut [u8]) {
-        for (o, p) in out.chunks_exact_mut(4).zip(&self.px) {
+        for (o, p) in out.as_chunks_mut::<4>().0.iter_mut().zip(&self.px) {
             o[0] = to_u8(p[0]);
             o[1] = to_u8(p[1]);
             o[2] = to_u8(p[2]);

@@ -2,6 +2,8 @@
 //! scratches, chipped edges, grime, hazard stripes and faded stencils; brushed steel; cable sleeves;
 //! maintenance stickers; canopy smudges; fingerprints for the displays.
 
+use std::f32::consts::TAU;
+
 use super::canvas::{hex, with_a, Align, Canvas, Rng};
 
 /// Colour and roughness maps of a worn surface. Roughness is in the green channel (Bevy layout), metal in blue.
@@ -64,7 +66,7 @@ pub fn worn(base: u32, size: usize, seed: u32, stripes: bool, labels: &[&str], r
     }
     // scratches (bright, and smoother in the roughness map)
     for _ in 0..140 {
-        let (x, y, a, l) = (rng.f() * s, rng.f() * s, rng.f() * 6.283, rng.range(6.0, 60.0));
+        let (x, y, a, l) = (rng.f() * s, rng.f() * s, rng.f() * TAU, rng.range(6.0, 60.0));
         let (mx, my) = (x + a.cos() * l * 0.5 + rng.range(-4.0, 4.0), y + a.sin() * l * 0.5 + rng.range(-4.0, 4.0));
         let (ex, ey) = (x + a.cos() * l, y + a.sin() * l);
         let c = [0.9, 0.92, 0.94, rng.range(0.08, 0.32)];
@@ -103,7 +105,7 @@ pub fn brushed(seed: u32) -> Canvas {
         g.glow(x, y, rr, [0.24, 0.22, 0.2, 0.18]);
     }
     for _ in 0..60 {
-        let (x, y, a, l) = (rng.f() * s, rng.f() * s, rng.f() * 6.283, rng.range(8.0, 50.0));
+        let (x, y, a, l) = (rng.f() * s, rng.f() * s, rng.f() * TAU, rng.range(8.0, 50.0));
         g.line(x, y, x + a.cos() * l, y + a.sin() * l, 0.7, [1.0, 1.0, 1.0, 0.25]);
     }
     g
@@ -160,7 +162,7 @@ pub fn smudges(seed: u32) -> Canvas {
         g.glow(x, y, rr, [1.0, 1.0, 1.0, rng.range(0.04, 0.12)]);
     }
     for _ in 0..90 {
-        let (x, y, a, l) = (rng.f() * 512.0, rng.f() * 512.0, rng.f() * 6.283, rng.range(20.0, 140.0));
+        let (x, y, a, l) = (rng.f() * 512.0, rng.f() * 512.0, rng.f() * TAU, rng.range(20.0, 140.0));
         g.line(x, y, x + a.cos() * l, y + a.sin() * l, rng.range(0.5, 1.5), [1.0, 1.0, 1.0, rng.range(0.05, 0.25)]);
     }
     g
@@ -173,7 +175,7 @@ pub fn fingerprints(w: usize, h: usize, seed: u32) -> Vec<f32> {
     for _ in 0..5 {
         let (x, y) = (rng.range(20.0, w as f32 - 20.0), rng.range(20.0, h as f32 - 20.0));
         for k in 1..9 {
-            g.arc(x, y, k as f32 * 2.2, k as f32 * 3.0, 0.0, 6.283, 1.0, [1.0, 1.0, 1.0, 0.05]);
+            g.arc(x, y, k as f32 * 2.2, k as f32 * 3.0, 0.0, TAU, 1.0, [1.0, 1.0, 1.0, 0.05]);
         }
     }
     for _ in 0..3 {
@@ -190,7 +192,7 @@ pub fn add_crack(c: &mut Canvas, rng: &mut Rng) {
     let arms = 6 + (rng.f() * 6.0) as usize;
     for a in 0..arms {
         let (mut px, mut py) = (x, y);
-        let mut ang = a as f32 / arms as f32 * 6.283 + rng.range(-0.3, 0.3);
+        let mut ang = a as f32 / arms as f32 * TAU + rng.range(-0.3, 0.3);
         let len = rng.range(60.0, 200.0);
         let col = [0.92, 0.96, 1.0, rng.range(0.22, 0.5)];
         let lw = rng.range(0.8, 2.0);
@@ -207,7 +209,7 @@ pub fn add_crack(c: &mut Canvas, rng: &mut Rng) {
     for ring in 1..4 {
         let mut prev: Option<(f32, f32)> = None;
         for a in 0..=arms {
-            let ang = a as f32 / arms as f32 * 6.283;
+            let ang = a as f32 / arms as f32 * TAU;
             let rr = ring as f32 * rng.range(12.0, 22.0);
             let p = (x + ang.cos() * rr, y + ang.sin() * rr);
             if let Some(q) = prev {

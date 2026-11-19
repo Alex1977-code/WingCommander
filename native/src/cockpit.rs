@@ -142,6 +142,7 @@ enum M {
     Glass,
     Crack,
     Inset,
+    ScreenGlass,
 }
 
 /// texture tile size (m) of a material: UVs in metres are divided by it
@@ -247,6 +248,8 @@ fn setup_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut m
     m.insert(M::HudEdge, mats.add(StandardMaterial { base_color: Color::LinearRgba(LinearRgba::rgb(0.4 * WEB, 1.6 * WEB, 0.8 * WEB)), unlit: true, ..default() }));
     let smudge = images.add(tex::smudges(16).static_image(true, false));
     m.insert(M::Glass, mats.add(StandardMaterial { base_color: Color::linear_rgb(0.1, 0.1, 0.1), base_color_texture: Some(smudge), unlit: true, alpha_mode: AlphaMode::Add, double_sided: true, cull_mode: None, ..default() }));
+    // display cover glass: only its reflections show (premultiplied, nearly no base colour)
+    m.insert(M::ScreenGlass, mats.add(StandardMaterial { base_color: Color::srgba(0.0, 0.0, 0.0, 0.03), perceptual_roughness: 0.14, reflectance: 0.5, alpha_mode: AlphaMode::Premultiplied, ..default() }));
     let screens = Screens::new(&mut images, &mut mats);
     m.insert(M::Crack, screens.crack_mat.clone());
     let bolt = meshes.add(geom::cylinder(0.0035, 0.0035, 0.003, 6, true).transformed(&Mat4::from_rotation_x(FRAC_PI_2)).to_mesh());
@@ -591,7 +594,7 @@ fn ensure_built(
     let root = commands
         .spawn((Name::new("Cockpit"), CockpitRoot { layout }, Transform::from_scale(Vec3::splat(SCALE)), Visibility::Hidden, ChildOf(cam)))
         .id();
-    let mut b = Builder { commands, meshes: &mut *meshes, assets: &mut *assets, mats: &mut *mats, root, merged: HashMap::new(), bolts: Vec::new() };
+    let mut b = Builder { commands, meshes: &mut meshes, assets: &mut assets, mats: &mut mats, root, merged: HashMap::new(), bolts: Vec::new() };
     build_cockpit(&mut b, &layout, &screens, &mut state);
     b.finish();
 }
@@ -627,6 +630,7 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
         screen_frame(b, mw, mh, l.place(deg, my, 0.0085 + fl));
         let xf = l.place(deg, my, 0.0085 + fl);
         b.part(root, &geom::plane(mw, mh), screens.mat(elem), xf);
+        b.add(M::ScreenGlass, &geom::plane(mw, mh), xf * tr(0.0, 0.0, 0.0012));
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
         // sun visor over the display, with side cheeks
         let vz = l.place(deg, my + mh * 0.65 + 0.004, 0.006 + fl);
@@ -652,6 +656,7 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
         screen_frame(b, 0.064, 0.08, l.place(deg, 0.012, 0.0095 + fl));
         let xf = l.place(deg, 0.012, 0.0095 + fl);
         b.part(root, &geom::plane(0.064, 0.08), screens.mat(elem), xf);
+        b.add(M::ScreenGlass, &geom::plane(0.064, 0.08), xf * tr(0.0, 0.0, 0.0012));
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
     }
     // banks of illuminated push-buttons under the displays
@@ -1076,7 +1081,7 @@ fn cockpit_events(
 }
 
 /// Stick, throttle, toggles and the cabin's vibration follow the pilot's inputs.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn animate_controls(
     time: Res<Time>,
     settings: Res<Settings>,
@@ -1192,9 +1197,8 @@ fn update_lamps(
     let fail = state.fail;
     for (bt, mut mat) in &mut caps.p0() {
         let f = fail[bt.bank as usize];
-        let e: [f32; 3] = if f == Fail::Dead {
-            [0.0; 3]
-        } else if f == Fail::Flicker && (t * 37.0 + bt.phase * 11.0).sin() > 0.2 {
+        let off = f == Fail::Dead || (f == Fail::Flicker && (t * 37.0 + bt.phase * 11.0).sin() > 0.2);
+        let e: [f32; 3] = if off {
             [0.0; 3]
         } else {
             match bt.kind {
