@@ -2,10 +2,13 @@
 //! debrief and the pause overlay. Keyboard (arrows/WASD, Enter, Esc), mouse (hover + click, right click
 //! steps a value back) and gamepad (D-pad / left stick, A, B) all drive the same focus model.
 //!
-//! Owns `Progress` (campaign position, saved to progress.json) and `Settings` changes (settings.json).
+//! Owns `Progress` (campaign position, saved to progress.json), the story state (`mission::StorySave`,
+//! story.json: flags, wingman affinity, score) and `Settings` changes (settings.json). The campaign rules
+//! follow the web onMissionEnd(): see `catch_mission_end`.
 
 use crate::common::*;
 use crate::flight::FlightSet;
+use crate::mission::{wing_for, MissionResult, StorySave, STORY_FILE};
 use crate::hud::{
     AMBER, CYAN, DIM, GREEN, INK, LINE, MUTED, ORANGE, PANEL, RED, UiFonts, WHITE, abs_node, char_color, corner_accents, decoded, display_safe, label,
 };
@@ -29,14 +32,19 @@ impl Plugin for MenuPlugin {
         app.init_resource::<MenuNav>()
             .init_resource::<Shown>()
             .init_resource::<Focus>()
-            .init_resource::<FlightStats>()
             .init_resource::<Debriefing>()
             .init_resource::<RestartPending>()
             .insert_resource(Campaign2::load())
+            .insert_resource(Story(load_json(STORY_FILE)))
             .add_message::<MenuEvent>()
-            .add_systems(OnEnter(AppState::Flight), |mut s: ResMut<FlightStats>| *s = FlightStats { alive: true, ..default() })
-            .add_systems(Update, track_flight_stats.run_if(in_state(AppState::Flight)))
-            .add_systems(Update, (ui_test_hook, catch_mission_end, sync_screen, menu_input, menu_actions, button_looks, animate).chain().after(FlightSet::Input))
+            // nothing else may see a stale pause once the mission is over
+            .add_systems(OnExit(AppState::Flight), |mut p: ResMut<Paused>| p.0 = false)
+            .add_systems(
+                Update,
+                (ui_test_hook, catch_mission_end, pause_settings_back, sync_screen, menu_input, menu_actions, button_looks, animate)
+                    .chain()
+                    .after(FlightSet::Input),
+            )
             .add_systems(Update, restart_flight.run_if(in_state(AppState::Briefing)))
             .add_systems(Update, apply_window_mode.run_if(resource_changed::<Settings>))
             .add_systems(PreUpdate, key_script.after(bevy::input::InputSystems).run_if(|| std::env::var("SF_UI_KEYS").is_ok()));
@@ -89,15 +97,19 @@ struct Focus {
     restore: Option<usize>,
 }
 
-/// Player statistics, sampled every frame of a mission (the player entity is gone once the debrief opens).
-#[derive(Resource, Default, Clone, Copy)]
+/// Player statistics of the finished mission (from `mission::MissionResult`).
+#[derive(Default, Clone, Copy)]
 struct FlightStats {
     kills: u32,
     shots: u32,
     hits: u32,
     time: f32,
-    alive: bool,
+    score: u32,
 }
+
+/// Persistent story state (owner: menu.rs; saved to story.json, read by mission.rs at mission start).
+#[derive(Resource, Default)]
+struct Story(StorySave);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Outcome {
@@ -127,11 +139,64 @@ struct Debriefing {
 #[derive(Resource, Default)]
 struct RestartPending(bool);
 
-/// Campaign fields the shared `Campaign` type does not carry (ranks, mission ids, win/lose texts).
+/// Campaign fields the shared `Campaign` type does not carry (ranks, mission ids, conditional story lines,
+/// story flags a mission sets).
 #[derive(Resource, Default)]
 struct Campaign2 {
     ranks: Vec<(u32, String)>,
     ids: HashMap<String, usize>,
+    texts: Vec<MissionTexts>,
+}
+
+/// A dialogue line with its conditions (web: `if` / `ifNot` story flags, `aff: [who, min]` affinity).
+#[derive(Clone, Default, Debug)]
+struct StoryLine {
+    who: String,
+    text: String,
+    cond_if: Option<String>,
+    cond_not: Option<String>,
+    aff: Option<(String, i32)>,
+}
+
+impl StoryLine {
+    /// web lineVisible()
+    fn visible(&self, story: &StorySave) -> bool {
+        self.cond_if.as_ref().is_none_or(|f| story.flags.contains(f))
+            && self.cond_not.as_ref().is_none_or(|f| !story.flags.contains(f))
+            && self.aff.as_ref().is_none_or(|(w, n)| story.aff.get(w).copied().unwrap_or(0) >= *n)
+    }
+}
+
+#[derive(Default)]
+struct MissionTexts {
+    briefing: Vec<StoryLine>,
+    win: Vec<StoryLine>,
+    lose: Vec<StoryLine>,
+    /// flags set on a win (`set`) and on the story branch (`lose.set`)
+    set: Vec<String>,
+    lose_set: Vec<String>,
+}
+
+fn story_lines(v: &serde_json::Value) -> Vec<StoryLine> {
+    let s = |l: &serde_json::Value, k: &str| l[k].as_str().map(str::to_string);
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|l| StoryLine {
+                    who: s(l, "who").unwrap_or_default(),
+                    text: s(l, "text").unwrap_or_default(),
+                    cond_if: s(l, "if"),
+                    cond_not: s(l, "ifNot"),
+                    aff: l["aff"].as_array().and_then(|a| Some((a.first()?.as_str()?.to_string(), a.get(1)?.as_i64()? as i32))),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// keys of a `set` object whose value is true
+fn set_flags(v: &serde_json::Value) -> Vec<String> {
+    v.as_object().map(|o| o.iter().filter(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k.clone()).collect()).unwrap_or_default()
 }
 
 impl Campaign2 {
@@ -146,7 +211,24 @@ impl Campaign2 {
             .as_array()
             .map(|a| a.iter().enumerate().filter_map(|(i, m)| Some((m["id"].as_str()?.to_string(), i))).collect())
             .unwrap_or_default();
-        Self { ranks, ids }
+        let texts = v["missions"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|m| MissionTexts {
+                        briefing: story_lines(&m["briefing"]),
+                        win: story_lines(&m["win"]),
+                        lose: story_lines(&m["lose"]["lines"]),
+                        set: set_flags(&m["set"]),
+                        lose_set: set_flags(&m["lose"]["set"]),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { ranks, ids, texts }
+    }
+    fn texts(&self, idx: usize) -> Option<&MissionTexts> {
+        self.texts.get(idx)
     }
     fn rank(&self, kills: u32) -> String {
         self.ranks.iter().filter(|(k, _)| *k <= kills).last().map(|(_, r)| r.clone()).unwrap_or_else(|| "Fähnrich".into())
@@ -156,8 +238,9 @@ impl Campaign2 {
     }
 }
 
-fn lines_of(v: Option<&serde_json::Value>) -> Vec<Line> {
-    v.and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
+/// The lines the story state lets through, as plain dialogue lines.
+fn visible_lines(lines: &[StoryLine], story: &StorySave) -> Vec<Line> {
+    lines.iter().filter(|l| l.visible(story)).map(|l| Line { who: l.who.clone(), text: l.text.clone() }).collect()
 }
 
 // ---------- actions ----------
@@ -297,6 +380,7 @@ struct Ctx<'w> {
     dlss: Res<'w, DlssAvailable>,
     debrief: Res<'w, Debriefing>,
     camp: Res<'w, Campaign2>,
+    story: Res<'w, Story>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -895,7 +979,9 @@ fn briefing_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx) {
                 cols.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(14.0), flex_grow: 1.0, flex_basis: px(0.0), ..default() }).with_children(|l| {
                     b.h3(l, "Einsatzbesprechung");
                     let mut at = 0.35;
-                    for line in &m.briefing {
+                    // conditional lines (if / ifNot / aff) are filtered against the saved story state
+                    let lines = ctx.camp.texts(idx).map(|t| visible_lines(&t.briefing, &ctx.story.0)).unwrap_or_else(|| m.briefing.clone());
+                    for line in &lines {
                         let text = fill_callsign(&line.text, &cs);
                         l.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(3.0), ..default() }, Reveal(at), Visibility::Hidden)).with_children(|blk| {
                             blk.spawn(label(&f.display, 12.0, char_color(data, &line.who), 2.5, display_safe(&data.speaker(&line.who))));
@@ -932,7 +1018,7 @@ fn briefing_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx) {
                         ),
                     ));
                     b.h3(r, "Flügel");
-                    let wing = m.wingman.as_deref().map(|w| data.speaker(w)).unwrap_or_else(|| "Keiner".into());
+                    let wing = wing_for(m, |k| ctx.story.0.flags.contains(k)).map(|w| data.speaker(&w)).unwrap_or_else(|| "Keiner".into());
                     r.spawn(label(&f.semi, 19.0, INK, 0.2, wing));
                 });
             });
@@ -1063,8 +1149,8 @@ fn debrief_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx) {
                 let stats = [
                     ("Abschüsse", d.stats.kills as f32, CountKind::Int),
                     ("Trefferquote", acc.round(), CountKind::Percent),
-                    ("Einsatzzeit", d.stats.time.round(), CountKind::Clock),
-                    ("Gesamtabschüsse", d.total_kills as f32, CountKind::Int),
+                    ("Einsatzzeit", d.stats.time.floor(), CountKind::Clock),
+                    ("Punkte", d.stats.score as f32, CountKind::Int),
                 ];
                 for (name, v, kind) in stats {
                     g.spawn((
@@ -1079,7 +1165,12 @@ fn debrief_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx) {
                 }
             });
             if d.outcome != Outcome::Lose {
-                let mut extra = format!("Rang: {}", d.rank);
+                // web debrief(): "… Die Geschichte geht weiter. · Gesamtabschüsse: n · Rang: r"
+                let mut extra = String::new();
+                if d.outcome == Outcome::Branch {
+                    extra.push_str("Die Geschichte geht weiter. · ");
+                }
+                extra.push_str(&format!("Gesamtabschüsse: {} · Rang: {}", d.total_kills, d.rank));
                 if d.promoted {
                     extra.push_str(&format!(" · BEFÖRDERUNG zum {}!", d.rank));
                 } else if d.stats.kills >= 8 && acc >= 30.0 {
@@ -1244,9 +1335,10 @@ fn menu_input(
     if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]) || pad(GamepadButton::South) {
         out.write(MenuEvent { action: cf.action, dir: 1 });
     }
-    // back: Esc in the pause screen belongs to flight.rs (it toggles the pause)
-    let esc = keys.any_just_pressed([KeyCode::Escape, KeyCode::Backspace]);
-    let back = pad(GamepadButton::East) || (esc && screen != Screen::Pause && !(screen == Screen::Settings && nav.pause_settings));
+    // back: Esc in the pause screen and its settings belongs to flight.rs (it toggles the pause; see
+    // `pause_settings_back`); Backspace and pad B step back everywhere
+    let esc = keys.just_pressed(KeyCode::Escape) && screen != Screen::Pause && !(screen == Screen::Settings && nav.pause_settings);
+    let back = pad(GamepadButton::East) || keys.just_pressed(KeyCode::Backspace) && screen != Screen::Pause || esc;
     if back {
         let action = match screen {
             Screen::Title => None,
@@ -1507,62 +1599,64 @@ fn animate(
 
 // ---------- mission end ----------
 
-fn track_flight_stats(time: Res<Time>, paused: Res<Paused>, mut stats: ResMut<FlightStats>, player: Query<(&Player, Has<Dying>)>) {
-    if !paused.0 {
-        stats.time += time.delta_secs();
-    }
-    match player.iter().next() {
-        Some((p, dying)) => {
-            stats.kills = p.kills;
-            stats.shots = p.shots;
-            stats.hits = p.hits;
-            stats.alive = !dying;
-        }
-        None => stats.alive = false,
-    }
-}
-
-/// MissionEndMsg -> debrief data, campaign progress, Debrief state.
+/// MissionEndMsg -> debrief data, campaign progress and story state (web onMissionEnd()), Debrief state.
+/// mission.rs writes `MissionResult` in the same system that sends the message, so it is complete here.
+/// - win: the mission's `set` flags, kills and score count, `current` moves to `next`;
+/// - objective lost (not a death) with a `lose` branch: `lose.set` flags, kills and score count,
+///   `current` moves to `lose.next`;
+/// - otherwise (death, or a failure without a branch): nothing changes, the mission is flown again.
 #[allow(clippy::too_many_arguments)]
 fn catch_mission_end(
     mut ends: MessageReader<MissionEndMsg>,
     state: Res<State<AppState>>,
     mut next: ResMut<NextState<AppState>>,
-    stats: Res<FlightStats>,
+    result: Res<MissionResult>,
     data: Res<GameData>,
     camp: Res<Campaign2>,
     mut progress: ResMut<Progress>,
+    mut story: ResMut<Story>,
     mut debrief: ResMut<Debriefing>,
 ) {
     let Some(end) = ends.read().last().cloned() else { return };
-    let idx = progress.current.min(data.campaign.missions.len().saturating_sub(1));
+    let idx = result.mission.min(data.campaign.missions.len().saturating_sub(1));
     let m = data.mission(idx);
     let lose = m.extra.get("lose");
+    let texts = camp.texts(idx);
     // the story branches when an objective is lost while the pilot survived
     let outcome = if end.win {
         Outcome::Win
-    } else if lose.is_some() && stats.alive {
+    } else if lose.is_some() && !result.death {
         Outcome::Branch
     } else {
         Outcome::Lose
     };
+    let stats = FlightStats { kills: result.kills, shots: result.shots, hits: result.hits, time: result.time, score: result.score };
     let old_rank = camp.rank(progress.total_kills);
-    let (next_idx, title, lines) = match outcome {
-        Outcome::Win => (camp.index(m.next.as_ref()), String::new(), lines_of(m.extra.get("win"))),
+    let (next_idx, title, flags) = match outcome {
+        Outcome::Win => (camp.index(m.next.as_ref()), String::new(), texts.map(|t| t.set.clone())),
         Outcome::Branch => {
             let l = lose.expect("lose branch");
-            (camp.index(l.get("next")), l["title"].as_str().unwrap_or_default().to_string(), lines_of(l.get("lines")))
+            (camp.index(l.get("next")), l["title"].as_str().unwrap_or_default().to_string(), texts.map(|t| t.lose_set.clone()))
         }
-        Outcome::Lose => (None, String::new(), Vec::new()),
+        Outcome::Lose => (None, String::new(), None),
     };
     if outcome != Outcome::Lose {
+        story.0.flags.extend(flags.unwrap_or_default());
+        story.0.score += stats.score;
         progress.total_kills += stats.kills;
         if let Some(n) = next_idx {
             progress.current = n;
             progress.unlocked = progress.unlocked.max(n);
         }
         save_json("progress.json", &*progress);
+        save_json(STORY_FILE, &story.0);
     }
+    // the radio lines after the mission, filtered with the flags this result just set (web: after Object.assign)
+    let lines = match (outcome, texts) {
+        (Outcome::Win, Some(t)) => visible_lines(&t.win, &story.0),
+        (Outcome::Branch, Some(t)) => visible_lines(&t.lose, &story.0),
+        _ => Vec::new(),
+    };
     let rank = camp.rank(progress.total_kills);
     *debrief = Debriefing {
         mission: idx,
@@ -1570,7 +1664,7 @@ fn catch_mission_end(
         reason: end.reason.clone(),
         title,
         lines,
-        stats: *stats,
+        stats,
         next: next_idx,
         total_kills: progress.total_kills,
         promoted: rank != old_rank,
@@ -1578,6 +1672,24 @@ fn catch_mission_end(
     };
     if *state.get() == AppState::Flight {
         next.set(AppState::Debrief);
+    }
+}
+
+/// Esc / P / Start in the settings opened from the pause screen: flight.rs has just toggled the pause off
+/// (its input runs first); turn it back on and return to the pause screen instead of resuming the flight.
+fn pause_settings_back(
+    keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
+    state: Res<State<AppState>>,
+    mut paused: ResMut<Paused>,
+    mut nav: ResMut<MenuNav>,
+) {
+    if *state.get() != AppState::Flight || !nav.pause_settings || paused.0 {
+        return;
+    }
+    if keys.any_just_pressed([KeyCode::Escape, KeyCode::KeyP]) || pads.iter().any(|p| p.just_pressed(GamepadButton::Start)) {
+        paused.0 = true;
+        nav.pause_settings = false;
     }
 }
 
@@ -1595,7 +1707,7 @@ fn ui_test_hook(
     mut paused: ResMut<Paused>,
     mut progress: ResMut<Progress>,
     mut ends: MessageWriter<MissionEndMsg>,
-    mut stats: ResMut<FlightStats>,
+    mut result: ResMut<MissionResult>,
 ) {
     let Ok(what) = std::env::var("SF_UI_SHOT") else { return };
     *t += time.delta_secs();
@@ -1619,9 +1731,19 @@ fn ui_test_hook(
         match what.as_str() {
             "pause" => paused.0 = true,
             "debrief" | "debrief-lose" | "debrief-branch" => {
-                *stats = FlightStats { kills: 9, shots: 240, hits: 86, time: 412.0, alive: what != "debrief-lose" };
                 let win = what == "debrief";
                 let reason = if win { "Alle Navpunkte gesichert." } else { "Die Samariter wurde zerstört." };
+                *result = MissionResult {
+                    mission: progress.current,
+                    win,
+                    reason: reason.into(),
+                    death: what == "debrief-lose",
+                    kills: 9,
+                    shots: 240,
+                    hits: 86,
+                    score: 1140,
+                    time: 412.0,
+                };
                 ends.write(MissionEndMsg { win, reason: reason.into() });
             }
             _ => {}

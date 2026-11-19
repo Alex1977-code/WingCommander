@@ -12,21 +12,23 @@
 //!   the game quits after the debrief appears (end-to-end test of every mission)
 //! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman, or run out the timer (`timer`),
 //!   after s seconds of mission time (failure paths); the game quits after the debrief
+//! - SF_FLAGS=a,b,...  extra story flags for this run (on top of story.json)
 
 use crate::ai::{AiContext, AiRng, Cruise};
 use crate::common::*;
-use crate::flight::{rotation_facing as facing, AutopilotRequest, Obstacle, MAX_DT};
+use crate::flight::{rotation_facing as facing, AutopilotRequest, ImpulseBlock, Obstacle, MAX_DT};
 use crate::render::CameraCutMsg;
 use crate::ships::{spawn_ship, ShipLibrary};
-use crate::weapons::{JumpedOut, WeaponsSet};
+use crate::weapons::{CancelSeekersMsg, JumpedOut, Neutron, WeaponsSet};
 use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::fmt::Write as _;
 
@@ -101,10 +103,48 @@ fn env_on(name: &str) -> bool {
 pub struct MissionSet;
 
 
-/// Story flags from earlier missions and dialogue choices (owner: menu.rs / campaign flow). They switch
-/// conditional wave entries (`["klinge", 1, "holtEscaped"]`) and radio lines (`if` / `ifNot`).
+/// Story flags from earlier missions and dialogue choices. They switch conditional wave entries
+/// (`["klinge", 1, "holtEscaped"]`) and radio lines (`if` / `ifNot`). mission.rs fills this from
+/// `StorySave` (story.json) when a mission starts.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct StoryFlags(pub HashSet<String>);
+
+/// Persistent story state (web `save.flags`, `save.aff`, `save.score`), saved as `STORY_FILE` in `save_dir()`.
+/// Owner: menu.rs (it applies the mission results); mission.rs only reads it at mission start.
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct StorySave {
+    /// story flags that are set (web: `save.flags[k] === true`)
+    pub flags: BTreeSet<String>,
+    /// wingman affinity from dialogue choices (web `save.aff`)
+    pub aff: BTreeMap<String, i32>,
+    /// campaign score (web `save.score`)
+    pub score: u32,
+}
+
+pub const STORY_FILE: &str = "story.json";
+
+impl StorySave {
+    /// Web launch(): `min(0.92, 0.7 + 0.06 * aff[who])`.
+    pub fn wing_skill(&self, who: &str) -> f32 {
+        (0.7 + 0.06 * self.aff.get(who).copied().unwrap_or(0) as f32).min(0.92)
+    }
+}
+
+/// Web wingFor(): the wingman who actually flies this mission. Kolibri is replaced by Juno once she is lost
+/// (or captured and not rescued), Rook once he is dead.
+/// `flag(k)` tells whether story flag `k` is set.
+pub fn wing_for(m: &Mission, flag: impl Fn(&str) -> bool) -> Option<String> {
+    let mut w = m.wingman.clone().filter(|w| !w.is_empty())?;
+    let f = flag;
+    if w == "kolibri" && (f("kolibriLost") || (f("kolibriCaptured") && !f("kolibriSaved"))) {
+        w = "juno".into();
+    }
+    if w == "rook" && f("rookDead") {
+        w = "juno".into();
+    }
+    Some(w)
+}
 
 /// Statistics of the last finished mission (for the debrief screen, menu.rs).
 #[allow(dead_code)]
@@ -115,9 +155,12 @@ pub struct MissionResult {
     pub reason: String,
     /// the player died (retry) rather than failing an objective (story may branch)
     pub death: bool,
+    /// kills by the player on Aszendenz ships
     pub kills: u32,
     pub shots: u32,
     pub hits: u32,
+    /// web stats.score: `def.score || 100` per player kill on an Aszendenz ship
+    pub score: u32,
     pub time: f32,
 }
 
@@ -150,6 +193,10 @@ pub struct MissionState {
     pub wingman: Option<Entity>,
     pub player: Option<Entity>,
     pub kills: u32,
+    pub score: u32,
+    /// the player's shots / hits, copied every frame while the player lives (the entity is gone at the end)
+    pub shots: u32,
+    pub hits: u32,
     pub time: f32,
     wave_t: Option<f32>,
     prog: f32,
@@ -480,7 +527,7 @@ struct Spawner<'w, 's> {
     lib: Res<'w, ShipLibrary>,
     data: Res<'w, GameData>,
     rng: ResMut<'w, AiRng>,
-    flags: Res<'w, StoryFlags>,
+    flags: ResMut<'w, StoryFlags>,
 }
 
 #[derive(SystemParam)]
@@ -489,6 +536,7 @@ struct Radio<'w> {
     sfx: MessageWriter<'w, SfxMsg>,
     banner: MessageWriter<'w, crate::hud::HudBanner>,
     warp: MessageWriter<'w, WarpFlashMsg>,
+    cancel_seekers: MessageWriter<'w, CancelSeekersMsg>,
     progress: Res<'w, Progress>,
     test: Res<'w, TestHooks>,
 }
@@ -650,9 +698,11 @@ fn lay_mines(commands: &mut Commands, assets: &MissionAssets, rng: &mut AiRng, c
         commands
             .spawn((
                 Mine { phase: rng.range(0.0, 6.0), active: false },
-                // an obstacle stops bolts (weapons.rs reports the impact, see `mine_hits`), blocks the impulse drive
-                // and makes the AI steer around it
+                // an obstacle stops bolts (weapons.rs reports the impact, see `mine_hits`) and makes the AI steer
+                // around it; a live mine blocks the impulse drive within 2.2 km (web IMPULSE.mine). Both go away
+                // with the mine entity when it detonates.
                 Obstacle { radius: 5.0 },
+                ImpulseBlock(2200.0),
                 InMission,
                 Transform::from_translation(pos).with_rotation(rot),
                 Visibility::default(),
@@ -699,6 +749,13 @@ fn start_mission(
     let navs: Vec<NavPlan> = m.navs.iter().enumerate().map(|(i, n)| NavPlan::from(n, raw_navs.as_ref().and_then(|a| a.get(i)))).collect();
     let protect_kind = m.extra.get("protect").and_then(Value::as_str).map(str::to_string);
 
+    // story flags (story.json, written by menu.rs) plus the SF_FLAGS test hook
+    let story: StorySave = load_json(STORY_FILE);
+    sp.flags.0 = story.flags.iter().cloned().collect();
+    if let Ok(extra) = std::env::var("SF_FLAGS") {
+        sp.flags.0.extend(extra.split(',').map(str::trim).filter(|f| !f.is_empty()).map(str::to_string));
+    }
+
     *st = MissionState {
         mission_idx: idx,
         no_return: m.extra.get("noReturn").and_then(Value::as_bool).unwrap_or(false),
@@ -724,14 +781,14 @@ fn start_mission(
         .insert((pship, Player { throttle: 0.75, energy: 1.0, want_speed: 160.0, ..default() }, Trigger::default(), Name::new("Spieler")));
     st.player = Some(player);
 
-    // wingman: same ship type, on the left
-    if let Some(who) = m.wingman.clone().filter(|w| !w.is_empty()) {
+    // wingman (web wingFor: replaced by Juno when the story lost him or her): same ship type, on the left
+    if let Some(who) = wing_for(&m, |k| sp.flags.0.contains(k)) {
         // web: CHARS[who].call ("Rook"); the typed Character has no call sign, so read it from the raw JSON
         let call = raw
             .as_ref()
             .and_then(|r| r.get("chars")?.get(who.as_str())?.get("call")?.as_str().map(str::to_string))
             .unwrap_or_else(|| call_sign(&who));
-        let ai = Ai { wingman: true, who: Some(who), skill: 0.75, ..default() };
+        let ai = Ai { wingman: true, skill: story.wing_skill(&who), who: Some(who), ..default() };
         st.wingman = Some(spawn_ai_ship(&mut sp, &m.ship, Vec3::new(40.0, -8.0, 270.0), Vec3::Z, ai, Some(call), Some(160.0)));
     }
 
@@ -766,7 +823,7 @@ fn start_mission(
     st.navs = Arc::new(navs);
     *ctx = AiContext { carrier: Some(carrier), protect_carrier: st.protect_carrier, travel: true };
     *status = MissionStatus { mission: idx, ..default() };
-    radio.log(|| format!("start mission {} '{}' ({} navs, ship {}, wingman {:?})", idx, m.title, st.navs.len(), m.ship, m.wingman));
+    radio.log(|| format!("start mission {} '{}' ({} navs, ship {}, wingman {:?}, flags {:?})", idx, m.title, st.navs.len(), m.ship, wing_for(&m, |k| sp.flags.0.contains(k)), sp.flags.0));
     activate_nav(&mut st, &mut sp, &mut radio, Some(ptf.translation), Vec3::Z);
     radio.say("flug", "Startfreigabe erteilt. Klare Bahn, {cs}!");
 }
@@ -801,10 +858,14 @@ fn activate_nav(st: &mut MissionState, sp: &mut Spawner, radio: &mut Radio, play
 
 // ---------- per-frame systems ----------
 
-fn count_kills(mut kills: MessageReader<KilledMsg>, mut st: ResMut<MissionState>) {
+/// Web kill(): a player kill on an Aszendenz ship counts, scores `def.score || 100` and gets a banner.
+fn count_kills(mut kills: MessageReader<KilledMsg>, mut st: ResMut<MissionState>, data: Res<GameData>, mut banner: MessageWriter<crate::hud::HudBanner>) {
     for k in kills.read() {
         if k.by_player && k.team == Team::Aszendenz {
+            let def = data.ship(&k.kind);
             st.kills += 1;
+            st.score += if def.score == 0 { 100 } else { def.score };
+            banner.write(crate::hud::HudBanner(format!("{} ZERSTÖRT", def.name.to_uppercase())));
         }
     }
 }
@@ -1137,6 +1198,8 @@ fn complete_nav(
             }
         }
     }
+    // seekers and fusion torpedoes still in flight must not undo an objective that is already met
+    radio.cancel_seekers.write(CancelSeekersMsg(Team::Aszendenz));
     for (e, _) in pickups.iter() {
         sp.commands.entity(e).try_despawn();
     }
@@ -1214,7 +1277,7 @@ fn mine_hits(mut hits: MessageReader<HitFxMsg>, mines: Query<(Entity, &Transform
         if h.ship != Entity::PLACEHOLDER {
             continue;
         }
-        if let Some((e, _)) = mines.iter().find(|(_, tf)| tf.translation.distance_squared(h.pos) < 8.0 * 8.0) {
+        if let Some((e, _)) = mines.iter().find(|(_, tf)| tf.translation.distance_squared(h.pos) < 7.0 * 7.0) {
             shot.0.push(e);
         }
     }
@@ -1364,7 +1427,7 @@ fn autopilot(
     mut req: MessageReader<AutopilotRequest>,
     status: Res<MissionStatus>,
     mut st: ResMut<MissionState>,
-    mut player: Query<(&mut Transform, &mut Ship, &mut Player), Without<Dying>>,
+    mut player: Query<(&mut Transform, &mut Ship, &mut Player, Option<&mut Neutron>), Without<Dying>>,
     mut others: Query<(&mut Transform, &mut Ship), (Without<Player>, Without<Dying>)>,
     mut radio: Radio,
     mut cut: MessageWriter<CameraCutMsg>,
@@ -1377,8 +1440,15 @@ fn autopilot(
         radio.sfx.write(SfxMsg::Beep);
         return;
     }
-    let Ok((mut ptf, mut pship, mut pl)) = player.single_mut() else { return };
+    let Ok((mut ptf, mut pship, mut pl, neutron)) = player.single_mut() else { return };
     let Some(np) = st.nav_target else { return };
+    // web cancelLances(): a charging neutron cannon is aborted, the shot goes back into the capacitors
+    if let Some(mut n) = neutron {
+        if n.charge.take().is_some() {
+            n.target = None;
+            pship.missiles += 1;
+        }
+    }
     let lp = ptf.translation;
     let back = (lp - np).normalize_or(Vec3::NEG_Z);
     radio.sfx.write(SfxMsg::Warp);
@@ -1418,9 +1488,14 @@ fn publish_status(
     pickups: Query<&Transform, (With<Pickup>, Without<Ship>)>,
     test: Res<TestHooks>,
     time: Res<Time>,
+    players: Query<&Player, Without<Dying>>,
     mut log_t: Local<f32>,
 ) {
     let player_pos = alive_pos(&ships, st.player);
+    if let Some(p) = st.player.and_then(|e| players.get(e).ok()) {
+        st.shots = p.shots;
+        st.hits = p.hits;
+    }
     let hostiles = ships.iter().filter(|(_, _, s, d)| !d && s.team == Team::Aszendenz).count();
     let navs = st.navs.clone();
     let nav = navs.get(st.nav_idx);
@@ -1443,10 +1518,6 @@ fn publish_status(
     status.timer = st.timer;
 
     // objective text (web objectiveText())
-    let fmt = |t: f32| {
-        let t = t.max(0.0);
-        format!("{}:{:02}", (t / 60.0).floor() as u32, (t % 60.0).floor() as u32)
-    };
     let o = &mut status.objective;
     o.clear();
     match (st.phase, nav) {
@@ -1460,7 +1531,10 @@ fn publish_status(
             let _ = match n.kind {
                 NavKind::Scan => write!(o, "{} · {} %", obj.unwrap_or("Scanne den Sektor"), ((st.prog / n.scan).min(1.0) * 100.0).floor()),
                 NavKind::Pickup => write!(o, "{} · {}/{}", obj.unwrap_or("Bergung"), st.pickups_got, st.pickups_total),
-                NavKind::Survive => write!(o, "{} · {}", obj.unwrap_or("Halte durch"), fmt(st.surv)),
+                NavKind::Survive => {
+                    let _ = write!(o, "{} · ", obj.unwrap_or("Halte durch"));
+                    write_mmss(o, st.surv)
+                }
                 NavKind::Convoy => {
                     let mut alive = 0;
                     let mut dist = f32::INFINITY;
@@ -1480,7 +1554,8 @@ fn publish_status(
         }
     }
     if let Some(t) = st.timer {
-        let _ = write!(o, " · noch {}", fmt(t));
+        o.push_str(" · noch ");
+        let _ = write_mmss(o, t);
     }
 
     // extra markers (entries and their label strings are reused from frame to frame)
@@ -1555,6 +1630,12 @@ fn publish_status(
     }
 }
 
+/// "m:ss" without allocating.
+fn write_mmss(o: &mut String, t: f32) -> std::fmt::Result {
+    let t = t.max(0.0);
+    write!(o, "{}:{:02}", (t / 60.0) as u32, (t % 60.0) as u32)
+}
+
 /// Write marker `idx` (upper-case label), reusing the slot's String; appends when the list is shorter.
 fn set_marker(markers: &mut Vec<(Vec3, String, [f32; 3])>, idx: &mut usize, pos: Vec3, label: &str, rgb: [f32; 3]) {
     if let Some(m) = markers.get_mut(*idx) {
@@ -1576,14 +1657,12 @@ impl MissionState {
     }
 }
 
-/// Mission over: debrief data, progress, state change.
-#[allow(clippy::too_many_arguments)]
+/// Mission over: debrief data (`MissionResult`, written together with `MissionEndMsg`), state change.
+/// Campaign progress and story flags are menu.rs' business (it reads `MissionResult`).
 fn finish_mission(
     mut st: ResMut<MissionState>,
     mut status: ResMut<MissionStatus>,
     mut result: ResMut<MissionResult>,
-    mut progress: ResMut<Progress>,
-    player: Query<&Player>,
     mut end: MessageWriter<MissionEndMsg>,
     mut next: ResMut<NextState<AppState>>,
     test: Res<TestHooks>,
@@ -1596,15 +1675,22 @@ fn finish_mission(
     let msg = MissionEndMsg { win, reason: reason.clone() };
     status.ended = Some(msg.clone());
     end.write(msg);
-    let (shots, hits) = player.iter().next().map_or((0, 0), |p| (p.shots, p.hits));
-    *result = MissionResult { mission: st.mission_idx, win, reason: reason.clone(), death, kills: st.kills, shots, hits, time: st.time };
-    progress.total_kills += st.kills;
-    if win {
-        progress.unlocked = progress.unlocked.max(st.mission_idx + 1);
-    }
-    save_json("progress.json", &*progress);
+    *result = MissionResult {
+        mission: st.mission_idx,
+        win,
+        reason: reason.clone(),
+        death,
+        kills: st.kills,
+        shots: st.shots,
+        hits: st.hits,
+        score: st.score,
+        time: st.time,
+    };
     if test.log {
-        println!("[mission] END mission {} win={} reason='{}' kills={} time={:.0}s", st.mission_idx, win, reason, st.kills, st.time);
+        println!(
+            "[mission] END mission {} win={} death={} reason='{}' kills={} score={} shots={} hits={} time={:.0}s",
+            st.mission_idx, win, death, reason, st.kills, st.score, st.shots, st.hits, st.time
+        );
     }
     next.set(AppState::Debrief);
 }
@@ -1642,6 +1728,7 @@ fn autowin(
             boom.write(ExplodeMsg { pos: tf.translation, size: if s.capital() { 4.0 } else { 1.0 } });
             commands.entity(e).try_despawn();
             st.kills += 1;
+            st.score += if s.def.score == 0 { 100 } else { s.def.score };
         }
     }
     // where to put the player, and how close
