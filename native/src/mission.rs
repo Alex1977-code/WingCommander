@@ -1921,6 +1921,23 @@ fn bay_seq(
         st.want_landing = false;
 
         // ---- landing on rails (web updateSeq, landing part) ----
+        // stop marks on the final approach follow the order in the tube: whoever is deeper in takes the deeper
+        // free mark, so nobody flies through a ship parked in front of him (web nextBayStop hands them out by
+        // the start of the final approach; with an AI wingman a later starter can be the first one in)
+        let mut finals: Vec<(f32, usize)> = (0..pilots.len())
+            .filter(|&i| pilots[i].held && pilots[i].stage == Some(LandStage::Final) && pilots[i].frozen.is_none() && alive(&pilots[i], &ships, st.wingman))
+            .filter_map(|i| ships.get(pilots[i].e).ok().map(|s| (bay_local(&c, s.1.translation).z, i)))
+            .collect();
+        if finals.len() > 1 {
+            finals.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for &(_, i) in &finals {
+                pilots[i].stop = None;
+            }
+            for &(_, i) in &finals {
+                let stop = next_bay_stop(&pilots, i);
+                pilots[i].stop = Some(stop);
+            }
+        }
         for idx in 0..pilots.len() {
             if !pilots[idx].held || pilots[idx].stage.is_none() || !alive(&pilots[idx], &ships, st.wingman) {
                 continue;
