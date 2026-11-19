@@ -10,7 +10,7 @@ use crate::hud::{
     AMBER, CYAN, DIM, GREEN, INK, LINE, MUTED, ORANGE, PANEL, RED, UiFonts, WHITE, abs_node, char_color, corner_accents, decoded, display_safe, label,
 };
 use bevy::ecs::system::SystemParam;
-use bevy::picking::events::{PointerClick, PointerOver};
+use bevy::picking::events::{PointerClick, PointerMove};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::text::Justify;
@@ -260,9 +260,11 @@ enum CountKind {
     Clock,
 }
 
-/// Horizontal scan band sweeping down a panel.
+/// Scan band sweeping down a panel (or across the map when `across`).
 #[derive(Component)]
-struct Sweep;
+struct Sweep {
+    across: bool,
+}
 
 /// Hidden until the screen has been open for this long.
 #[derive(Component)]
@@ -468,7 +470,7 @@ impl Build<'_> {
             },
             BackgroundColor(PANEL),
             BorderColor::all(LINE),
-            BoxShadow::new(rgba(60, 150, 230, 0.16), px(0.0), px(0.0), px(0.0), px(34.0)),
+            BoxShadow::new(rgba(60, 150, 230, 0.09), px(0.0), px(0.0), px(0.0), px(40.0)),
             UiTransform::default(),
         ));
         if self.animate {
@@ -479,11 +481,11 @@ impl Build<'_> {
                 Node { position_type: PositionType::Absolute, left: px(0.0), right: px(0.0), top: px(0.0), height: percent(40.0), ..default() },
                 BackgroundGradient::from(LinearGradient::to_bottom(vec![
                     ColorStop::percent(rgba(127, 214, 255, 0.0), 0.0),
-                    ColorStop::percent(rgba(127, 214, 255, 0.05), 80.0),
-                    ColorStop::percent(rgba(170, 230, 255, 0.13), 99.0),
+                    ColorStop::percent(rgba(127, 214, 255, 0.03), 80.0),
+                    ColorStop::percent(rgba(170, 230, 255, 0.08), 99.0),
                     ColorStop::percent(rgba(170, 230, 255, 0.0), 100.0),
                 ])),
-                Sweep,
+                Sweep { across: false },
                 Pickable::IGNORE,
             ));
             corner_accents(c, CYAN, 18.0, 6.0);
@@ -504,9 +506,10 @@ impl Build<'_> {
     }
 }
 
-/// Hover focuses, click activates (right click steps back).
+/// Moving the mouse over an element focuses it (a pointer that merely rests where a new screen opens does not),
+/// click activates (right click steps back).
 fn observe_button(ec: &mut EntityCommands, id: Entity) {
-    ec.observe(move |_: On<PointerOver>, mut focus: ResMut<Focus>, disabled: Query<(), With<Disabled>>, mut sfx: MessageWriter<SfxMsg>| {
+    ec.observe(move |_: On<PointerMove>, mut focus: ResMut<Focus>, disabled: Query<(), With<Disabled>>, mut sfx: MessageWriter<SfxMsg>| {
         if disabled.get(id).is_err() && focus.entity != Some(id) {
             focus.entity = Some(id);
             sfx.write(SfxMsg::UiMove);
@@ -850,7 +853,7 @@ fn controls_screen(p: &mut ChildSpawnerCommands, b: &mut Build) {
                         b.h3(col, head);
                         for (k, d) in list {
                             col.spawn(Node { column_gap: px(16.0), align_items: AlignItems::Center, ..default() }).with_children(|r| {
-                                r.spawn((label(&f.display, 13.0, AMBER, 1.5, *k), Node { width: px(230.0), flex_shrink: 0.0, ..default() }));
+                                r.spawn((label(&f.display, 13.0, AMBER, 1.5, display_safe(k)), Node { width: px(230.0), flex_shrink: 0.0, ..default() }));
                                 r.spawn(label(&f.semi, 19.0, INK, 0.3, *d));
                             });
                         }
@@ -1014,7 +1017,7 @@ fn nav_map(p: &mut ChildSpawnerCommands, f: &UiFonts, m: &Mission) {
         mp.spawn((
             Node { position_type: PositionType::Absolute, left: px(0.0), top: px(0.0), width: px(60.0), height: percent(100.0), ..default() },
             BackgroundGradient::from(LinearGradient::to_right(vec![ColorStop::auto(rgba(127, 214, 255, 0.0)), ColorStop::auto(rgba(127, 214, 255, 0.16))])),
-            Sweep,
+            Sweep { across: true },
             Pickable::IGNORE,
         ));
     });
@@ -1085,10 +1088,11 @@ fn debrief_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx) {
                 b.h3(c, "Funkverkehr");
                 for (i, line) in d.lines.iter().enumerate() {
                     let at = 0.6 + i as f32 * 0.5;
-                    c.spawn((Node { column_gap: px(14.0), margin: UiRect::bottom(px(6.0)), ..default() }, Reveal(at), Visibility::Hidden)).with_children(|r| {
-                        r.spawn((label(&f.display, 11.0, char_color(data, &line.who), 2.0, display_safe(&data.speaker(&line.who))), Node { width: px(260.0), flex_shrink: 0.0, ..default() }));
-                        r.spawn(label(&f.semi, 19.0, INK, 0.2, fill_callsign(&line.text, &cs)));
-                    });
+                    c.spawn((Node { flex_direction: FlexDirection::Column, row_gap: px(2.0), margin: UiRect::bottom(px(8.0)), ..default() }, Reveal(at), Visibility::Hidden))
+                        .with_children(|r| {
+                            r.spawn(label(&f.display, 11.0, char_color(data, &line.who), 2.0, display_safe(&data.speaker(&line.who))));
+                            r.spawn(label(&f.semi, 19.0, INK, 0.2, fill_callsign(&line.text, &cs)));
+                        });
                 }
             }
             row(c, JustifyContent::FlexEnd, |r| {
@@ -1415,7 +1419,7 @@ fn animate(
     mut holo: Query<&mut UiTransform, (With<HoloIn>, Without<Spin>, Without<Glitch>, Without<Sweep>)>,
     mut spin: Query<(&Spin, &mut UiTransform), (Without<HoloIn>, Without<Glitch>, Without<Sweep>)>,
     mut glitch: Query<(&Glitch, &mut UiTransform, &mut Visibility), (Without<HoloIn>, Without<Spin>, Without<Sweep>, Without<Reveal>)>,
-    mut sweep: Query<&mut UiTransform, (With<Sweep>, Without<HoloIn>, Without<Spin>, Without<Glitch>)>,
+    mut sweep: Query<(&Sweep, &mut UiTransform), (Without<HoloIn>, Without<Spin>, Without<Glitch>)>,
     mut decode: Query<(&Decode, &mut Text)>,
     mut count: Query<(&CountUp, &mut Text), Without<Decode>>,
     mut reveal: Query<(&Reveal, &mut Visibility), Without<Glitch>>,
@@ -1450,8 +1454,8 @@ fn animate(
     }
     // scan bands sweep down (panels) or across (map) every 5 s
     let p = (t / 5.0).fract();
-    for mut tf in &mut sweep {
-        tf.translation = Val2::percent(0.0, -100.0 + 360.0 * p);
+    for (s, mut tf) in &mut sweep {
+        tf.translation = if s.across { Val2::percent(-100.0 + 1130.0 * p, 0.0) } else { Val2::percent(0.0, -100.0 + 360.0 * p) };
     }
     for (d, mut text) in &mut decode {
         let el = age - d.delay;
