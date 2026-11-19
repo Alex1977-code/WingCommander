@@ -148,6 +148,19 @@ pub fn decoded(out: &mut String, text: &str, elapsed: f32, cps: f32) {
     }
 }
 
+/// Orbitron lacks a few glyphs the campaign texts use (· „ “ ”): swap them for ones it has.
+pub fn display_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '·' => '•',
+            '„' | '“' | '”' => '"',
+            '‚' | '‘' => '\'',
+            c => c,
+        })
+        .collect::<String>()
+        .to_uppercase()
+}
+
 /// Character colour from campaign.json ("#5fb8ff"), cyan for unknown speakers.
 pub fn char_color(data: &GameData, who: &str) -> Color {
     data.campaign.chars.get(who).and_then(|c| Srgba::hex(c.color.trim_start_matches('#')).ok()).map(Color::Srgba).unwrap_or(CYAN)
@@ -249,7 +262,6 @@ const TAG_W: f32 = 420.0;
 struct HudIds {
     root: Entity,
     // status panel
-    ship_name: Entity,
     shield: Bar,
     hull: Bar,
     boost: Bar,
@@ -286,7 +298,6 @@ struct HudIds {
     // world markers
     reticle: Entity,
     reticle_parts: Vec<Entity>,
-    reticle_tag: Tag,
     lead: Entity,
     lead_parts: Vec<Entity>,
     lead_tag: Tag,
@@ -680,7 +691,6 @@ impl HudBuilder {
             })
             .id();
         self.e.push(reticle); // 10
-        self.tags.push(spawn_tag(p, &f.display, 12.0, GREEN)); // reticle tag 4
 
         // off-screen arrows: chevrons (square with two borders, rotated)
         for col in [RED, AMBER] {
@@ -1065,7 +1075,6 @@ impl HudBuilder {
             lead: e[9],
             reticle: e[10],
             arrows: [e[11], e[12]],
-            ship_name: e[13],
             speed: e[14],
             neutron: e[15],
             thr_fill: e[16],
@@ -1109,7 +1118,6 @@ impl HudBuilder {
             tgt_tag: t[1],
             lock_tag: t[2],
             lead_tag: t[3],
-            reticle_tag: t[4],
             reticle_parts: self.reticle_parts,
             lead_parts: self.lead_parts,
             blips: self.blips,
@@ -1131,7 +1139,7 @@ fn start_cine(data: Res<GameData>, progress: Res<Progress>, mut anim: ResMut<Hud
     let no = progress.current.min(data.campaign.missions.len().saturating_sub(1)) + 1;
     anim.cine = [
         format!("MISSION {no:02} // {}", m.sector.to_uppercase()),
-        m.title.to_uppercase(),
+        display_safe(&m.title),
         m.objectives.first().cloned().unwrap_or_default().to_uppercase(),
     ];
     anim.cine_t = 0.0;
@@ -1204,7 +1212,7 @@ fn hud_status(
     if target.map(|(e, _)| e) != anim.target {
         anim.target = target.map(|(e, _)| e);
         anim.target_t = t;
-        anim.target_name = target.map(|(_, (_, s, _))| s.name.to_uppercase()).unwrap_or_default();
+        anim.target_name = target.map(|(_, (_, s, _))| display_safe(&s.name)).unwrap_or_default();
     }
     ui.show(ids.tgt_panel, target.is_some());
     if let Some((_, (ttf, ts, _))) = target {
@@ -1242,7 +1250,7 @@ fn hud_status(
             anim.obj_t = t;
         }
         anim.obj_src.clone_from(&status.objective);
-        anim.obj_upper = status.objective.to_uppercase();
+        anim.obj_upper = display_safe(&status.objective);
     }
     let obj_empty = anim.obj_upper.is_empty();
     decoded(&mut buf, &anim.obj_upper, t - anim.obj_t, 45.0);
@@ -1305,7 +1313,7 @@ fn hud_comm(
             q.queue.pop_front();
         }
         let ch = data.campaign.chars.get(&m.who);
-        let name = data.speaker(&m.who).to_uppercase();
+        let name = display_safe(&data.speaker(&m.who));
         let initials = ch.map(|c| c.short.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| name.chars().take(2).collect());
         let text = fill_callsign(&m.text, &progress.callsign);
         let chars = text.chars().count();
@@ -1546,7 +1554,7 @@ fn hud_world(
         for e in [ids.reticle, ids.lead, ids.brackets, ids.lock_ring, ids.lock_diamond, ids.nav, ids.arrows[0], ids.arrows[1]] {
             ui.show(e, false);
         }
-        for tg in [ids.reticle_tag, ids.lead_tag, ids.tgt_tag, ids.lock_tag, ids.nav_tag] {
+        for tg in [ids.lead_tag, ids.tgt_tag, ids.lock_tag, ids.nav_tag] {
             ui.show(tg.root, false);
         }
         for &(sq, tg) in &ids.markers {
@@ -1571,11 +1579,6 @@ fn hud_world(
     if ret.is_some() {
         ui.center(ids.reticle, ret_p, Vec2::splat(60.0), if locked { t * 3.0 } else { 0.0 }, 1.0);
         ui.tint(&ids.reticle_parts, if locked { GREEN } else { CYAN });
-    }
-    if locked && ret.is_some() {
-        ui.tag(ids.reticle_tag, ret_p + Vec2::new(0.0, 34.0), "LOCK", GREEN);
-    } else {
-        ui.show(ids.reticle_tag.root, false);
     }
 
     // target: brackets, distance, lead pipper, seeker lock
@@ -1639,7 +1642,7 @@ fn hud_world(
                 ui.show(ids.lock_diamond, true);
                 ui.border(ids.lock_diamond, col);
                 ui.center(ids.lock_diamond, q, Vec2::splat(60.0), FRAC_PI_4 + t * 2.0, rr * 1.414 / 60.0);
-                ui.tag(ids.lock_tag, q + Vec2::new(0.0, rr + 12.0), "NEUTRON AUFGESCHALTET", col);
+                ui.tag(ids.lock_tag, q - Vec2::new(0.0, r.max(rr) + 52.0), "NEUTRON AUFGESCHALTET", col);
             }
             Some(q) => {
                 let k = lock.powf(0.7);
@@ -1808,12 +1811,12 @@ fn hud_world(
     });
     let kq = flare.map_or(0, |(_, k)| (k * 12.0).round() as i32);
     const GHOSTS: [(f32, f32, [u8; 3], f32); 6] = [
-        (0.0, 170.0, [255, 240, 210], 0.12),
-        (0.35, 30.0, [120, 200, 255], 0.16),
-        (0.6, 66.0, [255, 160, 90], 0.1),
-        (0.85, 18.0, [170, 255, 200], 0.18),
-        (1.25, 100.0, [90, 140, 255], 0.08),
-        (1.6, 42.0, [255, 120, 200], 0.1),
+        (0.0, 150.0, [255, 240, 210], 0.06),
+        (0.35, 26.0, [120, 200, 255], 0.09),
+        (0.6, 56.0, [255, 160, 90], 0.05),
+        (0.85, 16.0, [170, 255, 200], 0.1),
+        (1.25, 90.0, [90, 140, 255], 0.04),
+        (1.6, 36.0, [255, 120, 200], 0.06),
     ];
     if kq != anim.flare_q {
         anim.flare_q = kq;
