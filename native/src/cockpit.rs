@@ -1166,7 +1166,7 @@ fn update_lamps(
     mut mats: ResMut<Assets<StandardMaterial>>,
     players: Query<(&Transform, &Ship, &Player, Option<&Pilot>, Option<&Trigger>, Option<&PlayerAim>)>,
     targets: Query<(), (With<Ship>, Without<Dying>)>,
-    mines: Query<(&Name, &Transform), (With<InMission>, Without<Ship>)>,
+    mines: Query<&Transform, With<crate::mission::Mine>>,
     mut caps: ParamSet<(
         Query<(&Button, &mut MeshMaterial3d<StandardMaterial>)>,
         Query<(&KeyCap, &mut MeshMaterial3d<StandardMaterial>)>,
@@ -1189,7 +1189,7 @@ fn update_lamps(
     let comm = t - state.comm_t < 4.0;
     let has_target = player.target.is_some_and(|e| targets.get(e).is_ok());
     let aim_locked = aim.is_some_and(|a| a.locked);
-    let mine_near = mines.iter().any(|(n, tf)| n.as_str() == "Mine" && tf.translation.distance_squared(ptf.translation) < 380.0 * 380.0);
+    let mine_near = mines.iter().any(|tf| tf.translation.distance_squared(ptf.translation) < 380.0 * 380.0);
 
     use LampCol::*;
     state.lamps = [

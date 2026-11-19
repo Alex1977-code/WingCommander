@@ -5,7 +5,9 @@
 //! Test hook: SF_AI_LOG=1 prints every fighter's state every 3 s.
 
 use crate::common::*;
-use crate::flight::{hull_distance, FlightSet, Obstacle, MAX_DT};
+use crate::flight::{hull_distance_shape, FlightSet, Obstacle, MAX_DT};
+use crate::ships::{HullBoxes, HullShape};
+use std::sync::Arc;
 use bevy::prelude::*;
 
 pub struct AiPlugin;
@@ -124,6 +126,8 @@ struct Snap {
     radius: f32,
     hit: Hittable,
     torus: Option<[f32; 2]>,
+    /// index into the frame's hull-shape list (capitals with a model hull)
+    shape: Option<usize>,
     player: bool,
     /// this ship's AI target (or the player's selected target)
     target: Option<Entity>,
@@ -210,9 +214,10 @@ fn think(
     mut comm: MessageWriter<CommMsg>,
     mut snaps: Local<Vec<Snap>>,
     mut rocks: Local<Vec<(Vec3, f32)>>,
+    mut shapes: Local<Vec<Arc<HullShape>>>,
     obstacles: Query<(&Transform, &Obstacle), Without<Ship>>,
     mut set: ParamSet<(
-        Query<(Entity, &Transform, &Ship, Option<&Ai>, Option<&Player>, &Hittable), Without<Dying>>,
+        Query<(Entity, &Transform, &Ship, Option<&Ai>, Option<&Player>, &Hittable, Option<&HullBoxes>), Without<Dying>>,
         AiQuery,
     )>,
 ) {
@@ -220,8 +225,13 @@ fn think(
     chatter.clock += dt;
     snaps.clear();
     rocks.clear();
+    shapes.clear();
     rocks.extend(obstacles.iter().map(|(tf, o)| (tf.translation, o.radius)));
-    for (e, tf, ship, ai, player, hit) in set.p0().iter() {
+    for (e, tf, ship, ai, player, hit, hull) in set.p0().iter() {
+        let shape = hull.map(|h| {
+            shapes.push(h.0.clone());
+            shapes.len() - 1
+        });
         snaps.push(Snap {
             e,
             pos: tf.translation,
@@ -230,9 +240,10 @@ fn think(
             team: ship.team,
             capital: ship.capital(),
             ghost: ship.def.ghost,
-            radius: hit.radius,
+            radius: hull.map_or(hit.radius, |h| hit.radius.max(h.0.extent)),
             hit: *hit,
             torus: ship.def.torus,
+            shape,
             player: player.is_some(),
             target: player.map_or_else(|| ai.and_then(|a| a.target), |p| p.target),
             hunts_player: false,
@@ -288,7 +299,7 @@ fn think(
             let to = dest - pos;
             let mut dir = to.normalize_or(f);
             avoid_rocks(&rocks, pos, 90.0, &mut dir);
-            avoid_hulls(&snaps, None, pos, &mut dir);
+            avoid_hulls(&snaps, &shapes, None, pos, &mut dir);
             *steer = Steer { dir, speed: cruise.map_or(ship.def.speed, |c| c.0) };
             continue;
         }
@@ -403,7 +414,7 @@ fn think(
             }
         }
         avoid_rocks(&rocks, pos, 70.0, &mut dir);
-        avoid_hulls(&snaps, ai.target, pos, &mut dir);
+        avoid_hulls(&snaps, &shapes, ai.target, pos, &mut dir);
         *steer = Steer { dir, speed: want };
     }
 }
@@ -469,7 +480,7 @@ fn pick_target(
 }
 
 /// Push the flight direction away from capital hulls closer than 60 m (except the ship being attacked).
-fn avoid_hulls(snaps: &[Snap], target: Option<Entity>, pos: Vec3, dir: &mut Vec3) {
+fn avoid_hulls(snaps: &[Snap], shapes: &[Arc<HullShape>], target: Option<Entity>, pos: Vec3, dir: &mut Vec3) {
     for c in snaps {
         if !c.capital || c.ghost || Some(c.e) == target {
             continue;
@@ -478,7 +489,8 @@ fn avoid_hulls(snaps: &[Snap], target: Option<Entity>, pos: Vec3, dir: &mut Vec3
             continue;
         }
         let tf = Transform::from_translation(c.pos).with_rotation(c.rot);
-        let (d, push) = hull_distance(&tf, &c.hit, c.torus, pos);
+        let shape = c.shape.map(|i| &*shapes[i]);
+        let (d, push) = hull_distance_shape(&tf, &c.hit, c.torus, shape, pos);
         if d < 60.0 {
             *dir = (*dir + push * 3.0).normalize_or(*dir);
         }

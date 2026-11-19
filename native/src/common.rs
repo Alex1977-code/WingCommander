@@ -298,7 +298,6 @@ pub struct Ai {
     pub who: Option<String>,
     /// fixed destination (convoy, courier) instead of fighting
     pub dest: Option<Vec3>,
-    pub timer: f32,
 }
 
 /// Something that can be hit: sphere radius, or for capitals an oriented box (half extents) as well.
@@ -332,6 +331,8 @@ pub struct KilledMsg {
     pub kind: String,
     pub team: Team,
     pub by_player: bool,
+    /// where it died (for future effects/scoring popups)
+    #[allow(dead_code)]
     pub pos: Vec3,
 }
 
@@ -399,6 +400,8 @@ pub struct MissionStatus {
     /// extra markers: (position, label, rgb)
     pub markers: Vec<(Vec3, String, [f32; 3])>,
     pub ended: Option<MissionEndMsg>,
+    /// the active nav is the mission's final showdown (aces no longer jump out)
+    pub final_nav: bool,
 }
 
 /// Which mission to fly next and the player's progress (owner: menu.rs; saved to disk).

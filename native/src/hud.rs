@@ -1311,6 +1311,7 @@ fn hud_comm(
     mut q: ResMut<CommQueue>,
     mut ui: Ui,
     mut buf: Local<String>,
+    mut sfx: MessageWriter<SfxMsg>,
 ) {
     for m in msgs.read() {
         // full: the new line is dropped (web app.js: `if (commQ.length < 6) commQ.push(...)`), so kill chatter
@@ -1338,6 +1339,10 @@ fn hud_comm(
         q.current = if anim.cine_t < CINE_DUR - 0.4 { None } else { q.queue.pop_front() };
         q.t = 0.0;
         q.fresh = true;
+        if q.current.is_some() {
+            // radio blip when a line comes in (web audio.radio())
+            sfx.write(SfxMsg::Comm);
+        }
     }
     let Some(c) = &q.current else {
         ui.show(ids.comm, false);

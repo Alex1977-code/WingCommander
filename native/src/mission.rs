@@ -402,8 +402,9 @@ impl NavPlan {
 #[derive(Component)]
 struct Pickup;
 
+/// A live mine (cockpit MINE lamp and radar use it).
 #[derive(Component)]
-struct Mine {
+pub struct Mine {
     phase: f32,
     /// a Union ship is in range (fast blink)
     active: bool,
@@ -1514,6 +1515,7 @@ fn publish_status(
         _ => {}
     }
     status.hostiles = hostiles;
+    status.final_nav = st.navs.get(st.nav_idx).is_some_and(|n| n.is_final);
     status.timer = st.timer;
 
     // objective text (web objectiveText())

@@ -354,7 +354,7 @@ fn model_triangles(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str, mut f: 
 type Edge = (Vec3, Vec3, f32);
 /// quantised end points -> (start, end, first normal, smallest normal dot, face count)
 type EdgeMap = HashMap<([i32; 3], [i32; 3]), (Vec3, Vec3, Vec3, f32, u32)>;
-type MineQuery<'w, 's> = Query<'w, 's, (&'static Name, &'static Transform), (With<InMission>, Without<Ship>)>;
+type MineQuery<'w, 's> = Query<'w, 's, &'static Transform, With<crate::mission::Mine>>;
 
 fn sharp_edges(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Vec<Edge> {
     let q = |p: Vec3| [(p.x * 1000.0).round() as i32, (p.y * 1000.0).round() as i32, (p.z * 1000.0).round() as i32];
@@ -790,8 +790,8 @@ fn gather_contacts(
         };
         push(sc, tf.translation, kind, s.capital(), player.target == Some(e), if s.capital() { Some(s.name.as_str()) } else { None });
     }
-    for (name, tf) in mines.iter() {
-        if name.as_str() == "Mine" && tf.translation.distance_squared(ptf.translation) < 6000.0 * 6000.0 {
+    for tf in mines.iter() {
+        if tf.translation.distance_squared(ptf.translation) < 6000.0 * 6000.0 {
             push(sc, tf.translation, Kind::Mine, false, false, None);
         }
     }

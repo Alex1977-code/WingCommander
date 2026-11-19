@@ -43,7 +43,9 @@ impl Plugin for MenuPlugin {
                 Update,
                 (ui_test_hook, catch_mission_end, pause_settings_back, sync_screen, menu_input, menu_actions, button_looks, animate)
                     .chain()
-                    .after(FlightSet::Input),
+                    .after(FlightSet::Input)
+                    // pause_settings_back must re-pause before the simulation sets look at `Paused`
+                    .before(FlightSet::Ai),
             )
             .add_systems(Update, restart_flight.run_if(in_state(AppState::Briefing)))
             .add_systems(Update, apply_window_mode.run_if(resource_changed::<Settings>))

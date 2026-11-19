@@ -926,7 +926,7 @@ impl Fx {
         }
         if size >= 6.0 {
             // the final blast: a big white flash and secondary blasts rippling through the wreck
-            self.flash(p, 500.0, C_BOOM, 0.4);
+            self.flash(p, 220.0, C_BOOM, 0.25);
             for _ in 0..7 {
                 let Some(q) = self.pending.iter().position(|q| !q.on) else { break };
                 let t = self.rng.range(0.12, 1.22);

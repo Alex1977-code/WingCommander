@@ -1296,6 +1296,7 @@ fn apply_damage(
     mut sfx: MessageWriter<SfxMsg>,
     mut comm: MessageWriter<CommMsg>,
     mut bodies: Query<&mut Visibility, With<ShipBody>>,
+    status: Res<MissionStatus>,
 ) {
     let now = clock.0;
     let player = cache.player;
@@ -1321,6 +1322,11 @@ fn apply_damage(
             }
         } else {
             ship.hp -= msg.amount;
+        }
+        // an ace escapes instead of dying outside the final showdown (web damage(): jumpOut below 40 % hull);
+        // mission.rs performs the jump-out, so a single big hit must not kill him first
+        if ship.def.ace && ship.team == Team::Aszendenz && !status.final_nav {
+            ship.hp = ship.hp.max(1.0);
         }
         let is_player = pl.is_some();
         if is_player {

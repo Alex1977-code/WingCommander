@@ -93,6 +93,7 @@ pub struct Pilot {
 /// Signed distance from `p` to a capital ship's hull (oriented box from `Hittable::half_extents`, plus the
 /// station ring `torus` = [ring radius, tube radius] around ship-space Z) and the outward world normal there.
 /// Without a box the hull is the sphere `Hittable::radius`.
+#[cfg(test)]
 pub fn hull_distance(tf: &Transform, hit: &Hittable, torus: Option<[f32; 2]>, p: Vec3) -> (f32, Vec3) {
     hull_distance_shape(tf, hit, torus, None, p)
 }
