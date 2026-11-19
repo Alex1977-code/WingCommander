@@ -1,0 +1,26 @@
+STERNENFRONT – DER PERSEUS-KRIEG · PC-Version
+=============================================
+
+Start
+-----
+ZIP entpacken und sternenfront.exe starten. Der Ordner "assets" und die Datei
+nvngx_dlss.dll müssen neben der .exe liegen.
+
+Grafik und DLSS
+---------------
+- NVIDIA-RTX-Grafikkarte (RTX 20 oder neuer): unter Einstellungen → „Grafik · Kantenglättung und Upscaling“
+  lassen sich die DLSS-Modi wählen (Auto, DLAA, Qualität, Ausgewogen, Leistung,
+  Ultra-Leistung).
+- Andere Grafikkarten (AMD, Intel, ältere NVIDIA): das Spiel läuft mit TAA oder FXAA,
+  die DLSS-Einträge sind dann ausgegraut.
+- Das Spiel nutzt Vulkan; ohne funktionierenden Vulkan-Treiber weicht es auf DirectX 12 aus.
+  Aktuelle Grafiktreiber helfen fast immer.
+
+Steuerung
+---------
+Maus/Tastatur oder Gamepad; die vollständige Belegung steht im Spiel unter „Steuerung“.
+
+Spielstand und Fehler
+---------------------
+Einstellungen und Spielstand liegen in %APPDATA%\Sternenfront.
+Stürzt das Spiel ab, steht der Grund in %APPDATA%\Sternenfront\absturz.log.

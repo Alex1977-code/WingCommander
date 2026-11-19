@@ -6,7 +6,9 @@
 
 use crate::common::*;
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 pub struct DevToolsPlugin;
 
@@ -15,6 +17,8 @@ struct DevRun {
     t: f32,
     shot_taken: bool,
     quit_t: Option<f32>,
+    /// set by the screenshot observer once the png is written
+    saved: Arc<AtomicBool>,
 }
 
 impl Plugin for DevToolsPlugin {
@@ -46,8 +50,16 @@ fn dev_tick(mut commands: Commands, time: Res<Time>, mut run: ResMut<DevRun>, st
     if let Ok(path) = std::env::var("SF_SHOT") {
         if !run.shot_taken && run.t >= shot_at {
             run.shot_taken = true;
-            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
-            run.quit_t = Some(run.t + 1.5);
+            let saved = run.saved.clone();
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path))
+                .observe(move |_: On<ScreenshotCaptured>| saved.store(true, Ordering::Release));
+            // quit once the png is on disk (slow software renderers can take several frames); give up after 30 s
+            run.quit_t = Some(run.t + 30.0);
+        }
+        if run.shot_taken && run.saved.load(Ordering::Acquire) {
+            run.quit_t = Some(run.quit_t.map_or(run.t, |q| q.min(run.t + 0.2)));
         }
     }
     if let Some(q) = std::env::var("SF_QUIT_AT").ok().and_then(|s| s.parse::<f32>().ok()) {

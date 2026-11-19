@@ -298,7 +298,6 @@ pub struct Ai {
     pub who: Option<String>,
     /// fixed destination (convoy, courier) instead of fighting
     pub dest: Option<Vec3>,
-    pub timer: f32,
 }
 
 /// Something that can be hit: sphere radius, or for capitals an oriented box (half extents) as well.
@@ -332,6 +331,8 @@ pub struct KilledMsg {
     pub kind: String,
     pub team: Team,
     pub by_player: bool,
+    /// where it died (for future effects/scoring popups)
+    #[allow(dead_code)]
     pub pos: Vec3,
 }
 
@@ -399,6 +400,8 @@ pub struct MissionStatus {
     /// extra markers: (position, label, rgb)
     pub markers: Vec<(Vec3, String, [f32; 3])>,
     pub ended: Option<MissionEndMsg>,
+    /// the active nav is the mission's final showdown (aces no longer jump out)
+    pub final_nav: bool,
 }
 
 /// Which mission to fly next and the player's progress (owner: menu.rs; saved to disk).
@@ -532,4 +535,33 @@ pub struct MainCamera;
 /// Forward direction of a transform (+Z is forward for ships, as in the web version).
 pub fn fwd(t: &Transform) -> Vec3 {
     t.rotation * Vec3::Z
+}
+
+/// Game paused (Esc). Toggled by flight.rs input, shown by menu.rs (pause overlay); while true nothing moves.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct Paused(pub bool);
+
+/// What a ship wants to fire this frame. Player input (flight.rs) and AI (ai.rs) write it, weapons.rs reads it.
+#[derive(Component, Default, Clone, Copy, Debug)]
+pub struct Trigger {
+    /// lasers / turrets
+    pub guns: bool,
+    /// neutron cannon (player) or plasma seeker (Aszendenz)
+    pub missile: bool,
+    /// where the guns should converge (lead point); None = straight ahead
+    pub aim: Option<Vec3>,
+}
+
+/// Steering request for computer-controlled ships (ai.rs writes, flight.rs turns the ship towards `dir`
+/// limited by the ship's turn rate and changes speed towards `speed`).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Steer {
+    pub dir: Vec3,
+    pub speed: f32,
+}
+
+impl Default for Steer {
+    fn default() -> Self {
+        Self { dir: Vec3::Z, speed: 0.0 }
+    }
 }
