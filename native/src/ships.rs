@@ -43,7 +43,8 @@ impl Plugin for ShipsPlugin {
         if let Some(cfg) = Showcase::from_env() {
             app.insert_resource(cfg)
                 .add_systems(OnEnter(AppState::Flight), showcase_spawn)
-                .add_systems(Update, showcase_hide_player.run_if(in_state(AppState::Flight)))
+                // after render.rs' rig, which shows the player's body again in the chase view
+                .add_systems(PostUpdate, showcase_hide_player.after(crate::render::CameraRigSet).before(VisibilitySystems::VisibilityPropagate).run_if(in_state(AppState::Flight)))
                 .add_systems(PostUpdate, showcase_follow.before(TransformSystems::Propagate).run_if(in_state(AppState::Flight)));
         }
     }
@@ -946,8 +947,19 @@ pub fn spawn_ship_model(commands: &mut Commands, lib: &ShipLibrary, kind: &str, 
 
 /// Blink the nav lights (web: visible while frac(t * rate + phase) < 0.14) and turn their halos to the camera.
 /// Runs after transform propagation and writes the final GlobalTransform, so the billboard never lags.
-fn blink_lights(time: Res<Time>, showcase: Option<Res<Showcase>>, cam: Query<&GlobalTransform, With<MainCamera>>, mut q: Query<(&Blinker, &mut Visibility, &mut GlobalTransform), Without<MainCamera>>) {
-    let t = time.elapsed_secs_wrapped();
+fn blink_lights(
+    time: Res<Time>,
+    paused: Res<Paused>,
+    mut clock: Local<f32>,
+    showcase: Option<Res<Showcase>>,
+    cam: Query<&GlobalTransform, With<MainCamera>>,
+    mut q: Query<(&Blinker, &mut Visibility, &mut GlobalTransform), Without<MainCamera>>,
+) {
+    // the lights hold their state while the game is paused
+    if !paused.0 {
+        *clock = (*clock + time.delta_secs()) % 3600.0;
+    }
+    let t = *clock;
     let cam_rot = cam.single().map(|c| c.rotation()).unwrap_or(Quat::IDENTITY);
     for (b, mut vis, mut gt) in &mut q {
         let on = showcase.as_ref().is_some_and(|s| s.lights_on) || (t * b.rate + b.phase).fract() < 0.14;

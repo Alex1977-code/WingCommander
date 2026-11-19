@@ -153,6 +153,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<TargetCache>()
             .init_resource::<SeekerWarning>()
             .init_resource::<WeaponClock>()
+            .init_resource::<BoltStats>()
             .insert_resource(WRng(0x9E37_79B9_7F4A_7C15))
             .configure_sets(
                 Update,
@@ -178,7 +179,7 @@ impl Plugin for WeaponsPlugin {
 }
 
 /// SF_PILOT test runs: once a second, what the weapons see.
-fn debug_log(time: Res<Time>, mut t: Local<f32>, cache: Res<TargetCache>, proj: Res<Projectiles>, players: Query<(&Transform, &Ship, &Player)>) {
+fn debug_log(time: Res<Time>, mut t: Local<f32>, cache: Res<TargetCache>, proj: Res<Projectiles>, stats: Res<BoltStats>, players: Query<(&Transform, &Ship, &Player)>) {
     *t += time.delta_secs();
     if *t < 1.0 {
         return;
@@ -186,14 +187,23 @@ fn debug_log(time: Res<Time>, mut t: Local<f32>, cache: Res<TargetCache>, proj: 
     *t = 0.0;
     for (tf, ship, p) in &players {
         let tgt = p.target.and_then(|e| cache.get(e)).map(|t| t.pos().distance(tf.translation));
+        let rock = cache.rocks.iter().map(|(rtf, r)| rtf.translation.distance(tf.translation) - r.radius).fold(f32::MAX, f32::min);
         info!(
-            "pilot pos {:.0} speed {:.0} energy {:.2} impulse {} {:.2} hp {:.0}/{:.0} target {:?} lock {:.2} shots {} hits {} kills {} | bolts {} seekers {} ships {}",
-            tf.translation, ship.speed, p.energy, p.impulse, p.impulse_prog, ship.hp, ship.shield, tgt, p.lock, p.shots, p.hits, p.kills, proj.bolts.len(), proj.seekers.len(), cache.ships.len()
+            "pilot pos {:.0} speed {:.0} energy {:.2} impulse {} {:.2} hp {:.0}/{:.0} target {:?} lock {:.2} shots {} hits {} kills {} | bolts {} seekers {} ships {} rocks {} (nearest {:.0} m) | bolt hits: fighters {} capitals {} rocks/mines {}",
+            tf.translation, ship.speed, p.energy, p.impulse, p.impulse_prog, ship.hp, ship.shield, tgt, p.lock, p.shots, p.hits, p.kills, proj.bolts.len(), proj.seekers.len(), cache.ships.len(), cache.rocks.len(), rock, stats.fighters, stats.capitals, stats.rocks
         );
     }
 }
 
 // ---------- internal state ----------
+
+/// Where bolts ended (SF_PILOT test log).
+#[derive(Resource, Default)]
+struct BoltStats {
+    fighters: u32,
+    capitals: u32,
+    rocks: u32,
+}
 
 /// Small xorshift generator (no extra crate).
 #[derive(Resource)]
@@ -966,6 +976,7 @@ fn update_bolts(
     mut vis: Query<(&mut Transform, &mut Visibility), With<WeaponVis>>,
     mut damage: MessageWriter<DamageMsg>,
     mut fx: MessageWriter<HitFxMsg>,
+    mut stats: ResMut<BoltStats>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     let p = &mut *proj;
@@ -995,6 +1006,11 @@ fn update_bolts(
                     (d2 < rr * rr).then_some(pt)
                 };
                 if let Some(point) = hit {
+                    if t.capital {
+                        stats.capitals += 1;
+                    } else {
+                        stats.fighters += 1;
+                    }
                     damage.write(DamageMsg { target: t.e, amount: b.dmg, source: Some(b.owner), point });
                     done = true;
                     break;
@@ -1012,6 +1028,7 @@ fn update_bolts(
                 .find_map(|(tf, rock)| rock.ray(tf, prev, dir, len).map(|t| prev + dir * t))
                 .or_else(|| cache.obstacles.iter().find_map(|&(c, r)| seg_hit(prev, b.pos, c, r)));
             if let Some(pt) = pt {
+                stats.rocks += 1;
                 fx.write(HitFxMsg { pos: pt, ship: Entity::PLACEHOLDER, shield: false, color: COL_SPARK });
                 done = true;
             }

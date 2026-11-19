@@ -760,6 +760,7 @@ fn bump(
         ship.speed *= 0.5;
         // web: a hull bump jolts the camera hard, a rock scrape less
         shake.bump(jolt);
+        debug!("bump: depth {depth:.1} normal {n:.2} jolt {jolt} at {:.0}", tf.translation);
     }
 }
 
