@@ -9,9 +9,9 @@
 //! - SF_WAVE_DIST=<m> enemy waves jump in this far ahead of the player (dogfight screenshots)
 //! - SF_TIMESCALE=<x>  run the game clock x times faster (as far as the frame rate allows: steps are capped)
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
-//!                     the game quits after the debrief appears (end-to-end test of every mission)
+//!   the game quits after the debrief appears (end-to-end test of every mission)
 //! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman, or run out the timer (`timer`),
-//!                     after s seconds of mission time (failure paths); the game quits after the debrief
+//!   after s seconds of mission time (failure paths); the game quits after the debrief
 
 use crate::ai::{AiContext, AiRng, Cruise};
 use crate::common::*;
@@ -772,7 +772,7 @@ fn start_mission(
     *ctx = AiContext { carrier: Some(carrier), protect_carrier: st.protect_carrier, travel: true };
     *status = MissionStatus { mission: idx, ..default() };
     radio.log(|| format!("start mission {} '{}' ({} navs, ship {}, wingman {:?})", idx, m.title, st.navs.len(), m.ship, m.wingman));
-    activate_nav(&mut *st, &mut sp, &mut radio, Some(ptf.translation), Vec3::Z);
+    activate_nav(&mut st, &mut sp, &mut radio, Some(ptf.translation), Vec3::Z);
     radio.say("flug", "Startfreigabe erteilt. Klare Bahn, {cs}!");
 }
 
@@ -957,7 +957,7 @@ fn update_mission(
                         .map(|(tf, o)| (tf.translation, o.radius))
                         .chain(ships.iter().filter(|(_, _, s, d)| !d && s.capital()).map(|(_, tf, s, _)| (tf.translation, s.radius())))
                         .collect();
-                    st.pickups_total = spawn_pickups(&mut sp.commands, &assets, &mut sp.rng, &nav, &solid);
+                    st.pickups_total = spawn_pickups(&mut sp.commands, &assets, &mut sp.rng, nav, &solid);
                     st.pickups_got = 0;
                 }
                 NavKind::Convoy => {
@@ -989,7 +989,7 @@ fn update_mission(
                 _ => {}
             }
             radio.log(|| format!("arrived at nav {} '{}'", st.nav_idx, nav.name));
-            spawn_wave(&mut sp, &mut radio, &nav, 0, center, Some(ppos), false);
+            spawn_wave(&mut sp, &mut radio, nav, 0, center, Some(ppos), false);
             radio.script(&nav.on_arrive, &sp.flags);
         }
         return;
@@ -1007,7 +1007,7 @@ fn update_mission(
             st.wave_t = None;
             st.wave += 1;
             let idx = if cycle { st.wave % nav.waves.len() } else { st.wave };
-            spawn_wave(&mut sp, &mut radio, &nav, idx, center, Some(ppos), cycle && st.wave >= nav.waves.len());
+            spawn_wave(&mut sp, &mut radio, nav, idx, center, Some(ppos), cycle && st.wave >= nav.waves.len());
         }
     }
     let done = match nav.kind {
@@ -1226,6 +1226,7 @@ fn mine_hits(mut hits: MessageReader<HitFxMsg>, mines: Query<(Entity, &Transform
 }
 
 /// Mines home in on Union ships within 170 m and explode within 20 m (75 m blast). Shooting one sets it off.
+#[allow(clippy::too_many_arguments)]
 fn update_mines(
     time: Res<Time>,
     mut commands: Commands,
@@ -1396,7 +1397,7 @@ fn autopilot(
         ptf.rotation = facing(-back, Vec3::Y);
         pship.speed = pship.speed.min(120.0);
         radio.log(|| "landing autopilot".into());
-        land(&mut *st, &mut radio);
+        land(&mut st, &mut radio);
         return;
     }
     let rot = facing(-back, Vec3::Y);
@@ -1413,6 +1414,7 @@ fn autopilot(
 }
 
 /// MissionStatus for the HUD and AiContext for the AI.
+#[allow(clippy::too_many_arguments)]
 fn publish_status(
     mut st: ResMut<MissionState>,
     mut status: ResMut<MissionStatus>,

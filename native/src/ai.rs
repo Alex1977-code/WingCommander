@@ -305,7 +305,7 @@ fn think(
             }
         }
         if tgt.is_none() || st.retarget <= 0.0 {
-            tgt = pick_target(&snaps, e, pos, &ship, leash, &ctx, &mut rng, &player_targets);
+            tgt = pick_target(&snaps, e, pos, ship, leash, &ctx, &mut rng, &player_targets);
             ai.target = tgt.map(|t| t.e);
             st.retarget = rng.range(3.0, 6.0);
             // the wingman calls it when it peels an enemy off the player's tail
