@@ -903,23 +903,27 @@ fn spawn_body(p: &mut ChildSpawnerCommands, lib: &ShipLibrary, model: Option<&Sh
     });
 }
 
+/// Let the ship fire from its model's gun ports (wing guns snapped to the pods, web fitStats) and from the
+/// turret heads on the hull (web ships.js turret projection) by writing them into its own `def` copy.
+/// Idempotent; a kind drawn with the fallback model, or with a port count that does not match, keeps its
+/// raw positions. weapons.rs applies it again to every new ship, in case a spawner replaced `Ship`.
+pub fn apply_model_ports(lib: &ShipLibrary, ship: &mut Ship) {
+    let Some(m) = lib.models.get(&ship.kind) else { return };
+    if m.guns.len() == ship.def.guns.len() {
+        ship.def.guns = m.guns.iter().map(|g| g.to_array()).collect();
+    }
+    if m.turrets.len() == ship.def.turrets.len() {
+        ship.def.turrets = m.turrets.iter().map(|(p, n)| (*p + *n * TURRET_MUZZLE).to_array()).collect();
+    }
+}
+
 /// Spawn a ship of `kind` (key of ships.json) at `transform`. The returned entity carries `Ship`, `Hittable`,
 /// `InMission`, `Transform`/`Visibility`; its model is a child with `ShipBody` (banking rotates only the body),
 /// engine nozzles are `EngineNozzle` children of the body, guns `Muzzle`, capital turrets `Turret`.
 pub fn spawn_ship(commands: &mut Commands, lib: &ShipLibrary, data: &GameData, kind: &str, transform: Transform) -> Entity {
     let def = data.ship(kind).clone();
     let mut ship = Ship::new(kind, &def);
-    // the ship fires from its model's gun ports (wing guns snapped to the pods) and from the turret heads
-    // on the hull (web fitStats / ships.js turret projection); a kind drawn with the fallback model keeps
-    // its raw positions
-    if let Some(m) = lib.models.get(kind) {
-        if m.guns.len() == ship.def.guns.len() {
-            ship.def.guns = m.guns.iter().map(|g| g.to_array()).collect();
-        }
-        if m.turrets.len() == ship.def.turrets.len() {
-            ship.def.turrets = m.turrets.iter().map(|(p, n)| (*p + *n * TURRET_MUZZLE).to_array()).collect();
-        }
-    }
+    apply_model_ports(lib, &mut ship);
     let r = ship.radius();
     let half = def.hull_box.map(|b| Vec3::new(b[0], b[1], b[2]));
     let name = def.name.clone();

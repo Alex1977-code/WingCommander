@@ -512,11 +512,13 @@ fn hide(vis: &mut Query<&mut Visibility, With<WeaponVis>>, e: Entity) {
 fn ensure_armament(
     mut commands: Commands,
     lib: Res<ShipLibrary>,
-    ships: Query<(Entity, &Ship), Without<Armament>>,
+    mut ships: Query<(Entity, &mut Ship), Without<Armament>>,
     players: Query<Entity, (With<Player>, Without<Neutron>)>,
     mut rng: ResMut<WRng>,
 ) {
-    for (e, ship) in &ships {
+    for (e, mut ship) in &mut ships {
+        // gun ports and turret heads of the model (mission.rs replaces the `Ship` spawn_ship made)
+        crate::ships::apply_model_ports(&lib, &mut ship);
         let turret_cool = ship.def.turrets.iter().map(|_| rng.range(0.0, 2.0)).collect();
         let turret_dir = vec![Vec3::ZERO; ship.def.turrets.len()];
         let extent = lib.model(&ship.kind).map_or(0.0, |m| m.extent);
