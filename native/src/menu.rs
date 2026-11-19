@@ -920,7 +920,7 @@ fn controls_screen(p: &mut ChildSpawnerCommands, b: &mut Build) {
         ("SHIFT", "Boost · gehalten ohne Feinde: Impulsantrieb"),
         ("Q / E · MAUSRAD", "Schub"),
         ("T", "Ziel wechseln"),
-        ("J", "Autopilot zum nächsten Navpunkt"),
+        ("J", "Autopilot (Navpunkt · Landung)"),
         ("V / C", "Cockpit / Außenansicht"),
         ("ESC / P", "Pause"),
         ("", ""),
