@@ -1482,38 +1482,40 @@ fn publish_status(
         let _ = write!(o, " · noch {}", fmt(t));
     }
 
-    // extra markers
-    status.markers.clear();
+    // extra markers (entries and their label strings are reused from frame to frame)
+    let mut n_markers = 0;
     if st.phase == Phase::Fight {
         if let Some(n) = nav {
+            let m = &mut status.markers;
             match n.kind {
                 NavKind::Pickup => {
                     for tf in &pickups {
-                        status.markers.push((tf.translation, n.pickup_label.clone(), COL_GREEN));
+                        set_marker(m, &mut n_markers, tf.translation, &n.pickup_label, COL_GREEN);
                     }
                 }
                 NavKind::Convoy => {
                     for &e in &st.convoy {
                         if let Ok((_, tf, s, false)) = ships.get(e) {
-                            status.markers.push((tf.translation, s.name.to_uppercase(), COL_GREEN));
+                            set_marker(m, &mut n_markers, tf.translation, &s.name, COL_GREEN);
                         }
                     }
                 }
-                NavKind::Scan if st.prog < n.scan => status.markers.push((n.pos, "SCANZONE".into(), COL_GOLD)),
+                NavKind::Scan if st.prog < n.scan => set_marker(m, &mut n_markers, n.pos, "SCANZONE", COL_GOLD),
                 NavKind::Intercept => {
                     if let Some(p) = alive_pos(&ships, st.courier.map(|c| c.0)) {
-                        status.markers.push((p, "KURIER".into(), COL_RED));
+                        set_marker(m, &mut n_markers, p, "KURIER", COL_RED);
                     }
                 }
                 NavKind::Dock if st.docking => {
                     if let Some(p) = alive_pos(&ships, st.prison) {
-                        status.markers.push((p, "ANDOCKEN".into(), COL_GREEN));
+                        set_marker(m, &mut n_markers, p, "ANDOCKEN", COL_GREEN);
                     }
                 }
                 _ => {}
             }
         }
     }
+    status.markers.truncate(n_markers);
 
     // autopilot (web autoAvailable())
     status.auto_available = match (st.phase, player_pos, target) {
@@ -1550,6 +1552,19 @@ fn publish_status(
             st.kills
         );
     }
+}
+
+/// Write marker `idx` (upper-case label), reusing the slot's String; appends when the list is shorter.
+fn set_marker(markers: &mut Vec<(Vec3, String, [f32; 3])>, idx: &mut usize, pos: Vec3, label: &str, rgb: [f32; 3]) {
+    if let Some(m) = markers.get_mut(*idx) {
+        m.0 = pos;
+        m.2 = rgb;
+        m.1.clear();
+        m.1.extend(label.chars().flat_map(char::to_uppercase));
+    } else {
+        markers.push((pos, label.to_uppercase(), rgb));
+    }
+    *idx += 1;
 }
 
 impl MissionState {

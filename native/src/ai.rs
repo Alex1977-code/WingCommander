@@ -172,6 +172,9 @@ fn kill_chatter(
     mut rng: ResMut<AiRng>,
     mut comm: MessageWriter<CommMsg>,
 ) {
+    if kills.is_empty() {
+        return;
+    }
     let wingman = wing.iter().find(|(_, a)| a.wingman).map(|(e, a)| (e, a.who.clone().unwrap_or_default()));
     for k in kills.read() {
         let Some((we, who)) = &wingman else { continue };
