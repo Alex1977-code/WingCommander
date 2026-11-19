@@ -689,6 +689,12 @@ fn upper(ch: char) -> impl Iterator<Item = char> {
     std::iter::once(a).chain(b)
 }
 
+/// true if the font draws `ch` (lower case and ß included)
+#[cfg(test)]
+pub fn has_glyph(ch: char) -> bool {
+    upper(ch).all(|g| !glyph(g).1.is_empty() || matches!(g, '▲' | '◆' | '▌'))
+}
+
 type Strokes = &'static [&'static [(f32, f32)]];
 
 /// Vector font on a 4 x 6 grid (y down, cap height 6). Returns (advance, strokes); single-point strokes are dots.

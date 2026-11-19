@@ -1350,3 +1350,28 @@ fn update_sparks(time: Res<Time>, mut state: ResMut<CockpitState>, mut q: Query<
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_top_sits_a_third_below_centre() {
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let l = Layout::new(aspect, layout_fov(aspect));
+            let top = l.panel().transform_point3(Vec3::new(0.0, l.h * 0.5, -l.r));
+            let fy = top.y / (-top.z * l.th);
+            assert!((fy + 0.33).abs() < 1e-3, "aspect {aspect}: top edge at {fy}");
+        }
+    }
+
+    #[test]
+    fn font_covers_all_cockpit_text() {
+        let extra = ["SCHILD 100%", "HÜLLE 24%", "ÄÖÜß ✓ ⚠ → … ▲ ◆ °", "KEIN ZIEL", "SIGNAL VERLOREN"];
+        for t in LAMP_LABELS.iter().chain(screens::IDLE_LINES.iter()).chain(extra.iter()) {
+            for ch in t.chars() {
+                assert!(ch == ' ' || canvas::has_glyph(ch), "no glyph for {ch:?} in {t:?}");
+            }
+        }
+    }
+}

@@ -585,7 +585,7 @@ pub fn update_screens(
     }
 }
 
-const IDLE_LINES: [&str; 18] = [
+pub(super) const IDLE_LINES: [&str; 18] = [
     "SCHILDGENERATOR · PHASE NOMINAL",
     "KÜHLMITTELDRUCK 2,4 BAR",
     "TRÄGHEITSDÄMPFER AKTIV",
