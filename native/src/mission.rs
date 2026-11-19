@@ -133,10 +133,9 @@ impl StorySave {
 
 /// Web wingFor(): the wingman who actually flies this mission. Kolibri is replaced by Juno once she is lost
 /// (or captured and not rescued), Rook once he is dead.
-/// `flag(k)` tells whether story flag `k` is set.
-pub fn wing_for(m: &Mission, flag: impl Fn(&str) -> bool) -> Option<String> {
+/// `f(k)` tells whether story flag `k` is set.
+pub fn wing_for(m: &Mission, f: impl Fn(&str) -> bool) -> Option<String> {
     let mut w = m.wingman.clone().filter(|w| !w.is_empty())?;
-    let f = flag;
     if w == "kolibri" && (f("kolibriLost") || (f("kolibriCaptured") && !f("kolibriSaved"))) {
         w = "juno".into();
     }
