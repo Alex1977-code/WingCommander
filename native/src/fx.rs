@@ -1335,7 +1335,7 @@ fn fx_damage(
         let n = ((k - 0.3) * 70.0 * dt + fx.rng.f()) as usize;
         let heavy = k > 0.65;
         for _ in 0..n {
-            let (sz, lf, shade) = if heavy { (fx.rng.range(5.0, 8.0), fx.rng.range(2.2, 3.4), fx.rng.range(0.2, 0.28)) } else { (fx.rng.range(3.0, 5.0), fx.rng.range(1.4, 2.2), fx.rng.range(0.42, 0.55)) };
+            let (sz, lf, shade) = if heavy { (fx.rng.range(5.0, 8.0), fx.rng.range(2.2, 3.4), fx.rng.range(0.2, 0.28)) } else { (fx.rng.range(3.0, 5.0), fx.rng.range(1.4, 2.2), fx.rng.range(0.32, 0.42)) };
             fx.smoke(p, sz, lf, wake, shade, if heavy { 0.85 } else { 0.6 }, 0.0);
             if heavy && fx.rng.f() < 0.5 {
                 let v = wake + Vec3::new(fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0));
@@ -1657,7 +1657,7 @@ impl FxTest {
         let num = |k: &str| std::env::var(k).ok().and_then(|s| s.parse::<f32>().ok());
         Some(Self {
             big: v == "big",
-            hits: v != "boom" && v != "big",
+            hits: v == "1" || v == "hits",
             booms: v != "hits" && v != "ships",
             ships: v == "ships",
             spawned: false,
@@ -1683,13 +1683,13 @@ fn fx_test(
     mut test: ResMut<FxTest>,
     lib: Res<crate::ships::ShipLibrary>,
     data: Res<GameData>,
-    players: Query<&Transform, With<Player>>,
+    players: Query<(&Transform, &Ship), With<Player>>,
     others: Query<(Entity, &Transform, &Ship), Without<Player>>,
     fx: Res<Fx>,
     mut explode: MessageWriter<ExplodeMsg>,
     mut hits: MessageWriter<HitFxMsg>,
 ) {
-    let Ok(pt) = players.single() else { return };
+    let Ok((pt, me)) = players.single() else { return };
     let dt = time.delta_secs();
     test.t += dt;
     if (test.t * 2.0) as u32 != ((test.t - dt) * 2.0) as u32 {
@@ -1707,13 +1707,14 @@ fn fx_test(
         // fighters flying ahead of the player and slowly across the view, the last one on boost
         for (i, kind) in ["falke", "klinge", "archon"].into_iter().enumerate() {
             let side = [1.0, -1.0, 0.4][i];
-            let at = pt.translation + fwd * (10.0 + 30.0 * i as f32) + right * side * 30.0 + up * (8.0 * i as f32 - 6.0);
-            let e = crate::ships::spawn_ship(&mut commands, &lib, &data, kind, Transform::from_translation(at).with_rotation(crate::flight::rotation_facing(fwd - right * side * 0.1, up)));
+            let at = if i == 0 { pt.translation + fwd * 4.0 + right * 16.0 + up * 2.0 } else { pt.translation + fwd * (10.0 + 30.0 * i as f32) + right * side * 30.0 + up * (8.0 * i as f32 - 6.0) };
+            let e = crate::ships::spawn_ship(&mut commands, &lib, &data, kind, Transform::from_translation(at).with_rotation(crate::flight::rotation_facing(if i == 0 { fwd } else { fwd - right * side * 0.1 }, up)));
             let def = data.ship(kind);
             let mut ship = Ship::new(kind, def);
-            ship.speed = def.speed * if i == 2 { 1.6 } else { 1.0 };
-            // damaged: heavy smoke and flames, light smoke, none
-            ship.hp = ship.max_hp * [0.2, 0.55, 1.0][i];
+            // the first one flies in formation on the right, close to the camera
+            ship.speed = if i == 0 { me.speed } else { def.speed * if i == 2 { 1.6 } else { 1.0 } };
+            // damaged: none, light smoke, heavy smoke and flames
+            ship.hp = ship.max_hp * [1.0, 0.55, 0.2][i];
             commands.entity(e).insert(ship);
         }
     }
