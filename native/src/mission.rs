@@ -2459,3 +2459,38 @@ fn test_kill(mut st: ResMut<MissionState>, test: Res<TestHooks>, ships: Query<(E
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pilot(stop: Option<f32>, held: bool) -> BayPilot {
+        let mut p = BayPilot::new(Entity::PLACEHOLDER, false, 0.0);
+        p.held = held;
+        p.stop = stop;
+        p
+    }
+
+    #[test]
+    fn stop_marks_fill_from_the_back() {
+        let deep = BAY.back + 18.0;
+        // nobody parked: the deepest mark
+        assert_eq!(next_bay_stop(&[pilot(None, true)], 0), deep);
+        // the deepest one is taken: the next one, 36 m further out
+        let ps = [pilot(Some(deep), true), pilot(None, true)];
+        assert_eq!(next_bay_stop(&ps, 1), deep + 36.0);
+        // a mark of a ship no longer on rails is free again
+        let ps = [pilot(Some(deep), false), pilot(None, true)];
+        assert_eq!(next_bay_stop(&ps, 1), deep);
+        // never closer to the mouth than 40 m
+        let ps: Vec<BayPilot> = (0..6).map(|k| pilot(Some(deep + k as f32 * 36.0), true)).chain([pilot(None, true)]).collect();
+        assert!(next_bay_stop(&ps, 6) <= BAY.mouth - 40.0);
+    }
+
+    #[test]
+    fn bay_coordinates_round_trip() {
+        let c = Transform::from_xyz(10.0, -5.0, 300.0).with_rotation(Quat::from_rotation_y(0.7));
+        let l = Vec3::new(1.0, BAY.y, 90.0);
+        assert!(bay_local(&c, bay_to_world(&c, l)).distance(l) < 1e-3);
+    }
+}

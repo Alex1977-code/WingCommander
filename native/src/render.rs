@@ -1821,6 +1821,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chase_camera_stays_in_the_bay_tube() {
+        let b = &AURORA_BAY;
+        let c = Transform::IDENTITY;
+        // ship parked in the tube, camera 7.5 m up (inside the hull above the ceiling): pulled into the tube
+        let ship = Vec3::new(0.0, b.y - 0.5, 84.0);
+        let cam = keep_in_bay(&c, ship, ship + Vec3::new(0.0, 7.5, -27.0));
+        assert!(cam.y <= b.y + b.hh - 1.0 && cam.x.abs() < b.hw);
+        // behind the back wall: in front of it
+        let cam = keep_in_bay(&c, Vec3::new(0.0, b.y, b.back + 10.0), Vec3::new(0.0, b.y + 7.5, b.back - 17.0));
+        assert!(cam.z > b.back);
+        // far from the carrier: untouched
+        let far = Vec3::new(500.0, 0.0, 900.0);
+        assert_eq!(keep_in_bay(&c, far, far + Vec3::Y * 7.5), far + Vec3::Y * 7.5);
+    }
+
+    #[test]
     fn cube_faces_round_trip() {
         for face in 0..6 {
             for (u, v) in [(-0.7, 0.3), (0.2, -0.9), (0.0, 0.0)] {
