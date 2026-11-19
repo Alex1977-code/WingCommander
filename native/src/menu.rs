@@ -38,7 +38,8 @@ impl Plugin for MenuPlugin {
             .add_systems(Update, track_flight_stats.run_if(in_state(AppState::Flight)))
             .add_systems(Update, (ui_test_hook, catch_mission_end, sync_screen, menu_input, menu_actions, button_looks, animate).chain().after(FlightSet::Input))
             .add_systems(Update, restart_flight.run_if(in_state(AppState::Briefing)))
-            .add_systems(Update, apply_window_mode.run_if(resource_changed::<Settings>));
+            .add_systems(Update, apply_window_mode.run_if(resource_changed::<Settings>))
+            .add_systems(PreUpdate, key_script.after(bevy::input::InputSystems).run_if(|| std::env::var("SF_UI_KEYS").is_ok()));
     }
 }
 
@@ -723,7 +724,12 @@ fn settings_screen(p: &mut ChildSpawnerCommands, b: &mut Build, ctx: &Ctx, in_fl
     let s = &ctx.settings;
     let dlss = ctx.dlss.0;
     let onoff = |v: bool| if v { "EIN" } else { "AUS" };
-    screen_root(p, if in_flight { 0.85 } else { 0.75 }).with_children(|root| {
+    let mut root = screen_root(p, 0.75);
+    if in_flight {
+        // over the running mission: dim evenly so the HUD does not show through the panel
+        root.insert(BackgroundColor(rgba(3, 6, 12, 0.7)));
+    }
+    root.with_children(|root| {
         b.panel(root, 1240.0, "System", "Einstellungen", WHITE, |c, b| {
             c.spawn(Node { column_gap: px(36.0), align_items: AlignItems::FlexStart, ..default() }).with_children(|cols| {
                 // graphics: anti-aliasing / upscaling choice
@@ -1201,7 +1207,7 @@ fn menu_input(
         }
     }
 
-    let (_, cf, ctf, ..) = items.get(cur).expect("focused item");
+    let Ok((_, cf, ctf, ..)) = items.get(cur) else { return };
     if dir.x != 0 && cf.action.adjustable() {
         out.write(MenuEvent { action: cf.action, dir: dir.x });
     } else if dir != IVec2::ZERO {
@@ -1621,4 +1627,30 @@ fn ui_test_hook(
             _ => {}
         }
     }
+}
+
+/// `SF_UI_KEYS=enter,down,wait,esc,...`: presses one key every 0.7 s, starting after 3 s (scripted menu tests).
+fn key_script(time: Res<Time>, mut keys: ResMut<ButtonInput<KeyCode>>, mut t: Local<f32>, mut step: Local<usize>, mut held: Local<Option<KeyCode>>) {
+    if let Some(k) = held.take() {
+        keys.release(k);
+    }
+    *t += time.delta_secs();
+    if *t < 3.0 + *step as f32 * 0.7 {
+        return;
+    }
+    let script = std::env::var("SF_UI_KEYS").unwrap_or_default();
+    let Some(name) = script.split(',').nth(*step) else { return };
+    *step += 1;
+    let key = match name.trim() {
+        "up" => KeyCode::ArrowUp,
+        "down" => KeyCode::ArrowDown,
+        "left" => KeyCode::ArrowLeft,
+        "right" => KeyCode::ArrowRight,
+        "enter" => KeyCode::Enter,
+        "esc" => KeyCode::Escape,
+        _ => return,
+    };
+    info!("key script: {name}");
+    keys.press(key);
+    *held = Some(key);
 }
