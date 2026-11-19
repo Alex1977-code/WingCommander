@@ -1928,6 +1928,6 @@ fn hud_test_hook(
         *done = true;
         comm.write(CommMsg { who: "rook".into(), text: "Rook an {cs}: Zwei Dorns auf zwölf Uhr. Ich nehme den linken, du den rechten.".into() });
         comm.write(CommMsg { who: "brandt".into(), text: "Aurora an Nachtfalken: Gute Jagd.".into() });
-        banner.write(HudBanner("NEUE FEINDWELLE".into()));
+        banner.write(HudBanner("Neue Feindwelle · Nav 2".into()));
     }
 }

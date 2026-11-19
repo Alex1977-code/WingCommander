@@ -49,8 +49,8 @@ const SUN_LUX: f32 = 2.4 * NIT * WEB;
 const SUN_HALF: f32 = 0.0926;
 /// distance of the sun sprite from the camera (web: 28 km, inside the far plane)
 const SUN_DIST: f32 = 28_000.0;
-/// web sun sprite colour (3.2, 2.7, 2.0) on the Bevy light scale
-const SUN_COLOR: Vec3 = Vec3::new(3.2 * WEB, 2.7 * WEB, 2.0 * WEB);
+/// web sun sprite colour (3.2, 2.7, 2.0); the profile in sun_mesh() sets the brightness
+const SUN_COLOR: Vec3 = Vec3::new(3.2, 2.7, 2.0);
 const PLANET_DIST: f32 = 24_000.0;
 const PLANET_R: f32 = 7_000.0;
 const CAM_NEAR: f32 = 0.1;
@@ -704,21 +704,19 @@ fn build_space_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, 
     });
 }
 
-/// unit disc in the XY plane, vertex colours = the web glow texture's radial profile (fx.js glowTexture)
+/// unit disc in the XY plane, vertex colours = the glow's radial profile: a small white-hot core that blooms,
+/// a soft halo and a faint wide skirt (the web glow texture's reach, but less flat-white in the middle)
 fn sun_mesh() -> Mesh {
-    const RINGS: [f32; 13] = [0.0, 0.03, 0.07, 0.12, 0.2, 0.27, 0.35, 0.43, 0.5, 0.62, 0.75, 0.88, 1.0];
+    const RINGS: [f32; 16] = [0.0, 0.02, 0.04, 0.06, 0.08, 0.11, 0.15, 0.2, 0.26, 0.33, 0.42, 0.52, 0.64, 0.78, 0.9, 1.0];
     const SEG: usize = 64;
     let glow = |r: f32| {
-        if r < 0.2 {
-            lerp(1.0, 0.65, r / 0.2)
-        } else if r < 0.5 {
-            lerp(0.65, 0.18, (r - 0.2) / 0.3)
-        } else {
-            lerp(0.18, 0.0, (r - 0.5) / 0.5)
-        }
+        let core = smoothstep(0.075, 0.03, r);
+        let skirt = 0.25 * (-r * r * 6.0).exp() * smoothstep(1.0, 0.6, r);
+        core * 3.0 + 0.9 * (-r * r * 30.0).exp() + skirt
     };
     let mut pos = vec![[0.0f32; 3]];
-    let mut col = vec![[1.0f32; 4]];
+    let g0 = glow(0.0);
+    let mut col = vec![[g0, g0, g0, 1.0]];
     for &r in &RINGS[1..] {
         let g = glow(r);
         for k in 0..SEG {

@@ -328,6 +328,11 @@ struct ScreenLight;
 #[derive(Component)]
 struct CanopyGlass;
 
+/// The blended crack layer over the canopy: only drawn once the canopy has cracks (a screen-sized blended
+/// plane in front of everything otherwise swallowed the additive sun glow behind it).
+#[derive(Component)]
+struct CrackLayer;
+
 #[derive(Component)]
 struct Spark(usize);
 
@@ -882,7 +887,8 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
     // cracks in the canopy glass (the texture grows with heavy hits)
     let d = 0.5;
     let (a, c) = (l.s(-1.0, 1.0, d), l.s(1.0, -0.28, d));
-    b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    b.commands.entity(cl).insert((CrackLayer, Visibility::Hidden));
     // HUD combiner frame
     let hc = l.s(0.0, -0.3, 0.58);
     let (hw, hh) = (0.075, 0.05);
@@ -953,12 +959,17 @@ fn cockpit_visibility(
     state: Res<State<AppState>>,
     settings: Res<Settings>,
     players: Query<Has<Dying>, With<Player>>,
-    mut roots: Query<&mut Visibility, With<CockpitRoot>>,
+    cockpit: Res<CockpitState>,
+    mut roots: Query<&mut Visibility, (With<CockpitRoot>, Without<CrackLayer>)>,
+    mut cracks: Query<&mut Visibility, (With<CrackLayer>, Without<CockpitRoot>)>,
 ) {
     let alive = players.iter().next().is_some_and(|dying| !dying);
     let on = *state.get() == AppState::Flight && settings.view == View::Cockpit && alive;
     for mut v in &mut roots {
         v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+    }
+    for mut v in &mut cracks {
+        v.set_if_neq(if cockpit.cracks > 0 { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
