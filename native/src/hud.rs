@@ -1197,9 +1197,12 @@ fn hud_status(
     ui.text(ids.neutron, &buf);
     ui.text_color(ids.neutron, if ship.missiles == 0 { MUTED } else { AMBER });
     ui.width_pct(ids.thr_fill, pl.throttle);
-    let top = ship.def.boost.unwrap_or(ship.def.speed * 1.6).max(1.0);
+    // the caret on the fill's scale: the throttle setting the speed the ship heads for corresponds to
+    // (web: want = speed * (0.15 + throttle * 0.85)); boost pins it to the end
+    let cruise = ship.def.speed.max(1.0);
+    let want_thr = ((pl.want_speed / cruise - 0.15) / 0.85).clamp(0.0, 1.0);
     if let Ok(mut n) = ui.nodes.get_mut(ids.thr_want) {
-        let want = percent(((pl.want_speed / top).clamp(0.0, 1.0) * 100.0).round() - 1.0);
+        let want = percent((want_thr * 100.0).round() - 1.0);
         if n.left != want {
             n.left = want;
         }
@@ -1315,13 +1318,15 @@ fn hud_comm(
         if q.queue.len() >= 6 {
             continue;
         }
-        let ch = data.campaign.chars.get(&m.who);
-        let name = display_safe(&data.speaker(&m.who));
+        // unknown speakers are the controller (web: CHARS[who] || CHARS.erz)
+        let who = if data.campaign.chars.contains_key(&m.who) { m.who.as_str() } else { "erz" };
+        let ch = data.campaign.chars.get(who);
+        let name = display_safe(&data.speaker(who));
         let initials = ch.map(|c| c.short.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| name.chars().take(2).collect());
         let text = fill_callsign(&m.text, &progress.callsign);
         let chars = text.chars().count();
         let dur = 2.4 + chars as f32 * 0.045;
-        q.queue.push_back(CommLine { name, initials, color: char_color(&data, &m.who), text, chars, dur });
+        q.queue.push_back(CommLine { name, initials, color: char_color(&data, who), text, chars, dur });
     }
     if paused.0 {
         return;
