@@ -9,6 +9,8 @@
 //! - SF_TIMESCALE=<x>  run the game clock x times faster (timer / fail tests)
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
 //!                     the game quits after the debrief appears (end-to-end test of every mission)
+//! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman after s seconds of mission time
+//!                     (failure paths); the game also quits after the debrief
 
 use crate::ai::{AiContext, AiRng, Cruise};
 use crate::common::*;
@@ -36,6 +38,10 @@ impl Plugin for MissionPlugin {
             autowin: env_on("SF_AUTOWIN"),
             autojump: env_on("SF_AUTOJUMP") || env_on("SF_AUTOWIN"),
             wave_dist: std::env::var("SF_WAVE_DIST").ok().and_then(|v| v.parse().ok()),
+            kill: std::env::var("SF_TEST_KILL").ok().and_then(|v| {
+                let (who, t) = v.split_once('@')?;
+                Some((who.to_string(), t.parse().ok()?))
+            }),
         };
         app.add_message::<BannerMsg>()
             .add_message::<WarpFlashMsg>()
@@ -53,6 +59,7 @@ impl Plugin for MissionPlugin {
                 Update,
                 (
                     autowin.run_if(|t: Res<TestHooks>| t.autowin),
+                    test_kill.run_if(|t: Res<TestHooks>| t.kill.is_some()),
                     autopilot,
                     count_kills,
                     mine_hits,
@@ -68,7 +75,7 @@ impl Plugin for MissionPlugin {
             )
             .add_systems(Update, (spin_pickups, blink_mines, warp_fx).run_if(in_state(AppState::Flight)).run_if(not_paused))
             .add_systems(PostUpdate, face_camera.after(TransformSystems::Propagate).before(VisibilitySystems::VisibilityPropagate))
-            .add_systems(Update, quit_after_debrief.run_if(in_state(AppState::Debrief)).run_if(|t: Res<TestHooks>| t.autowin));
+            .add_systems(Update, quit_after_debrief.run_if(in_state(AppState::Debrief)).run_if(|t: Res<TestHooks>| t.autowin || t.kill.is_some()));
     }
 }
 
@@ -391,9 +398,11 @@ struct MissionAssets {
     pickup_glow_mat: Handle<StandardMaterial>,
 }
 
-#[derive(Resource, Clone, Copy, Default)]
+#[derive(Resource, Clone, Default)]
 struct TestHooks {
     log: bool,
+    /// SF_TEST_KILL: (player | protect | convoy | wingman, mission seconds)
+    kill: Option<(String, f32)>,
     wave_dist: Option<f32>,
     autowin: bool,
     autojump: bool,
@@ -1599,6 +1608,7 @@ fn autowin(
     mut st: ResMut<MissionState>,
     mut ships: Query<(Entity, &mut Transform, &mut Ship, Has<Player>), (Without<Dying>, Without<Pickup>)>,
     pickups: Query<&Transform, (With<Pickup>, Without<Ship>)>,
+    status: Res<MissionStatus>,
     mut boom: MessageWriter<ExplodeMsg>,
     mut kill_t: Local<f32>,
 ) {
@@ -1620,6 +1630,8 @@ fn autowin(
     // where to put the player, and how close
     let goal: Option<(Vec3, f32)> = match (st.phase, &nav) {
         (Phase::Travel, Some(n)) if n.kind == NavKind::Escape => Some((n.pos, 0.0)),
+        // the autopilot (next system) takes player and wingman there when it may
+        (Phase::Travel, Some(_)) if status.auto_available => None,
         (Phase::Travel, Some(n)) => Some((st.nav_target.unwrap_or(n.pos), 1800.0)),
         (Phase::Fight, Some(n)) => match n.kind {
             NavKind::Pickup => pickups.iter().next().map(|t| (t.translation, 0.0)),
@@ -1654,6 +1666,31 @@ fn autowin(
                 let to = d - tf.translation;
                 tf.translation += to.normalize_or_zero() * (600.0 * dt).min(to.length());
             }
+        }
+    }
+}
+
+/// SF_TEST_KILL: destroys the named ship(s) with real damage once, to test the failure and wingman paths.
+fn test_kill(st: Res<MissionState>, test: Res<TestHooks>, ships: Query<(Entity, &Transform, &Ship), Without<Dying>>, mut done: Local<bool>, mut dmg: MessageWriter<DamageMsg>) {
+    let Some((who, at)) = &test.kill else { return };
+    if *done || st.time < *at {
+        return;
+    }
+    let victims: Vec<Entity> = match who.as_str() {
+        "player" => st.player.into_iter().collect(),
+        "protect" => st.protect.into_iter().collect(),
+        "wingman" => st.wingman.into_iter().collect(),
+        "convoy" => st.convoy.clone(),
+        _ => Vec::new(),
+    };
+    if victims.is_empty() {
+        return;
+    }
+    *done = true;
+    println!("[mission] TEST: destroying {who} ({} ships)", victims.len());
+    for e in victims {
+        if let Ok((e, tf, s)) = ships.get(e) {
+            dmg.write(DamageMsg { target: e, amount: (s.max_hp + s.max_shield) * 2.0 + 1.0, source: None, point: tf.translation });
         }
     }
 }
