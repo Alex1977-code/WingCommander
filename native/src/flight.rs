@@ -85,6 +85,9 @@ pub struct Pilot {
     prev: Option<Vec3>,
     /// flying inside the TUS Aurora's hangar tunnel (web `P.inTube`)
     in_tube: bool,
+    /// SF_PILOT=bay log timer
+    bay_log: f32,
+    bay_lined: bool,
 }
 
 /// Signed distance from `p` to a capital ship's hull (oriented box from `Hittable::half_extents`, plus the
@@ -187,9 +190,13 @@ pub fn seg_point(a: Vec3, b: Vec3, c: Vec3) -> (f32, Vec3) {
 
 pub struct FlightPlugin;
 
-/// `SF_PILOT=attack`: the player flies itself at its target (automated screenshot runs).
+/// `SF_PILOT=attack`: the player flies itself at its target (automated screenshot runs);
+/// `SF_PILOT=bay`: it flies into the TUS Aurora's hangar tunnel (collision test).
 #[derive(Resource, Default)]
-struct TestPilot(bool);
+struct TestPilot {
+    attack: bool,
+    bay: bool,
+}
 
 /// One-shot radio hints per mission.
 #[derive(Resource, Default)]
@@ -202,7 +209,7 @@ impl Plugin for FlightPlugin {
         let flying = in_state(AppState::Flight);
         let running = |p: Res<Paused>| !p.0;
         app.add_message::<AutopilotRequest>()
-            .insert_resource(TestPilot(std::env::var("SF_PILOT").is_ok_and(|v| v == "attack")))
+            .insert_resource(TestPilot { attack: std::env::var("SF_PILOT").is_ok_and(|v| v == "attack"), bay: std::env::var("SF_PILOT").is_ok_and(|v| v == "bay") })
             .init_resource::<FlightHints>()
             .configure_sets(
                 Update,
@@ -339,7 +346,32 @@ fn player_input(
             || pad_pressed(GamepadButton::South)
             || pad_pressed(GamepadButton::West);
 
-        if test.0 {
+        if test.bay {
+            // fly along the hangar's centre line into the tube, slowly
+            if let Some((_, ctf, _)) = others.iter().find(|(_, _, s)| s.kind == "aurora") {
+                let b = &AURORA_BAY;
+                let l = ctf.rotation.inverse() * (tf.translation - ctf.translation);
+                // first a point on the centre line far ahead of the mouth, then along the line into the tube
+                let start = Vec3::new(0.0, b.y - 0.5, b.mouth + 400.0);
+                if l.distance(start) < 40.0 {
+                    pilot.bay_lined = true;
+                }
+                let goal = if pilot.bay_lined { Vec3::new(0.0, b.y - 0.5, (l.z - 60.0).max(b.back)) } else { start };
+                let aim = ctf.translation + ctf.rotation * goal;
+                let local = tf.rotation.inverse() * (aim - tf.translation).normalize_or(Vec3::Z);
+                let behind = if local.z < 0.0 { 1.0 } else { 0.0 };
+                pilot.stick = Vec2::new((-local.x * 4.0 + behind).clamp(-1.0, 1.0), (-local.y * 4.0).clamp(-1.0, 1.0));
+                player.throttle = if pilot.bay_lined { 0.05 } else { 0.4 };
+                fire = false;
+                neutron = false;
+                pilot.bay_log -= dt;
+                if pilot.bay_log <= 0.0 {
+                    pilot.bay_log = 0.5;
+                    info!("bay pilot: carrier-local {:.1} in tube {} speed {:.0}", l, pilot.in_tube, ship.speed);
+                }
+            }
+        }
+        if test.attack {
             // automated pilot: steer at the target's lead point, fire when lined up, discharge the neutron cannon on lock
             if let Some((ttf, tship)) = player.target.and_then(|t| others.get(t).ok()).map(|(_, t, s)| (t, s)) {
                 let dist = ttf.translation.distance(tf.translation);

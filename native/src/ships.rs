@@ -835,6 +835,7 @@ mod hull_tests {
     }
 
     #[test]
+    #[test]
     fn aurora_saucer_is_solid_and_bay_open() {
         let h = hull("aurora");
         // saucer centre and a nacelle are solid (not only a shell), the hangar tunnel is free
