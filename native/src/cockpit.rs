@@ -52,6 +52,7 @@ impl Plugin for CockpitPlugin {
                     ensure_built,
                     hands::attach_hands,
                     cockpit_events,
+                    test_damage,
                     animate_controls,
                     update_lamps,
                     screens::update_screens,
@@ -101,6 +102,10 @@ impl Layout {
     }
     fn panel(&self) -> Mat4 {
         Mat4::from_translation(Vec3::new(0.0, self.panel_y, 0.0)) * Mat4::from_rotation_x(self.lean)
+    }
+    /// how far a flat part of width `w` must stand off the curved console face to clear it at its edges
+    fn flat(&self, w: f32) -> f32 {
+        self.r - (self.r * self.r - w * w * 0.25).max(0.0).sqrt()
     }
     /// a spot on the console face at `deg` around the arc, height `y`, `inset` towards the pilot; local +Z faces him
     fn place(&self, deg: f32, y: f32, inset: f32) -> Mat4 {
@@ -246,7 +251,7 @@ fn setup_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut m
     m.insert(M::Crack, screens.crack_mat.clone());
     let bolt = meshes.add(geom::cylinder(0.0035, 0.0035, 0.003, 6, true).transformed(&Mat4::from_rotation_x(FRAC_PI_2)).to_mesh());
     let spark = (
-        meshes.add(geom::sphere(0.0022, 6, 4).to_mesh()),
+        meshes.add(geom::sphere(0.0034, 6, 4).to_mesh()),
         mats.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(3.0 * WEB, 1.8 * WEB, 0.6 * WEB), unlit: true, ..default() }),
     );
     commands.insert_resource(CockpitAssets { mats: m, lamps: HashMap::new(), bolt, spark });
@@ -432,6 +437,39 @@ impl CockpitState {
     }
 }
 
+/// Test hook `SF_COCKPIT_DAMAGE=1`: one second into the mission the ship is badly hurt (low shield and hull,
+/// failed instruments, canopy cracks, sparks), for screenshots of the damaged cockpit.
+fn test_damage(
+    mut on: Local<Option<bool>>,
+    mut state: ResMut<CockpitState>,
+    mut screens: ResMut<Screens>,
+    mut images: ResMut<Assets<Image>>,
+    mut players: Query<&mut Ship, With<Player>>,
+) {
+    let enabled = *on.get_or_insert_with(|| std::env::var("SF_COCKPIT_DAMAGE").is_ok_and(|v| v != "0"));
+    if !enabled || state.mission_t < 1.0 {
+        return;
+    }
+    *on = Some(false);
+    if let Ok(mut ship) = players.single_mut() {
+        ship.hp = ship.max_hp * 0.24;
+        ship.shield = ship.max_shield * 0.1;
+    }
+    for (e, f) in [(Elem::Mfd2, Fail::Dead), (Elem::Log1, Fail::Flicker), (Elem::Bank2, Fail::Dead), (Elem::Seg, Fail::Flicker)] {
+        state.fail[e as usize] = f;
+        state.spark_at(e, 14);
+    }
+    let t = state.mission_t;
+    state.hit_side[0] = t + 60.0;
+    for _ in 0..3 {
+        state.cracks += 1;
+        screens.add_crack(&mut images, &mut state.rng);
+    }
+    state.marks.push((Vec2::new(1.5, 2.0), -100.0));
+    state.marks.push((Vec2::new(-2.0, -3.0), -100.0));
+    screens.log_fmt(0, t, 0xff4d6d, format_args!("STÖRUNG · ZIELDISPLAY AUSGEFALLEN"));
+}
+
 fn reset_cockpit(mut state: ResMut<CockpitState>, mut screens: ResMut<Screens>, mut images: ResMut<Assets<Image>>) {
     let elem_pos = state.elem_pos;
     *state = CockpitState { elem_pos, ..default() };
@@ -583,13 +621,15 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
     let mfd_place = [(-40.0, Elem::Mfd0, 0.155, 0.0), (0.0, Elem::Mfd1, 0.2, -0.012), (40.0, Elem::Mfd2, 0.155, 0.0)];
     for (deg, elem, mw, my) in mfd_place {
         let mh = mw * 0.75;
-        b.add(M::Bezel, &geom::rounded_slab(mw * 1.22, mh * 1.3, 0.014, 0.01, 0.004), l.place(deg, my, 0.004));
-        screen_frame(b, mw, mh, l.place(deg, my, 0.0085));
-        let xf = l.place(deg, my, 0.0085);
+        // flat parts stand proud of the curved console so their edges do not sink into it
+        let fl = l.flat(mw * 1.22);
+        b.add(M::Bezel, &geom::rounded_slab(mw * 1.22, mh * 1.3, 0.014, 0.01 + fl, 0.004), l.place(deg, my, 0.004 + fl));
+        screen_frame(b, mw, mh, l.place(deg, my, 0.0085 + fl));
+        let xf = l.place(deg, my, 0.0085 + fl);
         b.part(root, &geom::plane(mw, mh), screens.mat(elem), xf);
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
         // sun visor over the display, with side cheeks
-        let vz = l.place(deg, my + mh * 0.65 + 0.004, 0.006);
+        let vz = l.place(deg, my + mh * 0.65 + 0.004, 0.006 + fl);
         b.add(M::SteelDark, &geom::rounded_slab(mw * 1.3, 0.042, 0.006, 0.004, 0.002), vz * tr(0.0, 0.0, 0.019) * rx(-1.25));
         for sx in [-1.0, 1.0] {
             b.add(M::SteelDark, &geom::cuboid(0.004, 0.03, 0.036), vz * tr(sx * mw * 0.64, -0.012, 0.016) * rx(0.45));
@@ -597,19 +637,20 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
         for side in [-1.0, 1.0] {
             for k in 0..4 {
                 let d = deg + (side * mw * 0.56 / r).to_degrees();
-                b.add(M::Rubber, &geom::cuboid(0.009, 0.012, 0.006), l.place(d, my - mh * 0.38 + k as f32 * mh * 0.25, 0.011));
+                b.add(M::Rubber, &geom::cuboid(0.009, 0.012, 0.006), l.place(d, my - mh * 0.38 + k as f32 * mh * 0.25, 0.011 + fl * 0.3));
             }
         }
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             let (w, hh) = (mw * 1.22, mh * 1.3);
-            b.bolt(l.place(deg, my, 0.004), sx * (w / 2.0 - 0.008), sy * (hh / 2.0 - 0.008), 0.006);
+            b.bolt(l.place(deg, my, 0.004 + fl), sx * (w / 2.0 - 0.008), sy * (hh / 2.0 - 0.008), 0.006);
         }
     }
     // narrow text screens with scrolling system messages
     for (deg, elem) in [(-23.0, Elem::Log0), (23.0, Elem::Log1)] {
-        b.add(M::Bezel, &geom::rounded_slab(0.074, 0.112, 0.01, 0.008, 0.004), l.place(deg, 0.012, 0.005));
-        screen_frame(b, 0.064, 0.08, l.place(deg, 0.012, 0.0095));
-        let xf = l.place(deg, 0.012, 0.0095);
+        let fl = l.flat(0.074);
+        b.add(M::Bezel, &geom::rounded_slab(0.074, 0.112, 0.01, 0.008 + fl, 0.004), l.place(deg, 0.012, 0.005 + fl));
+        screen_frame(b, 0.064, 0.08, l.place(deg, 0.012, 0.0095 + fl));
+        let xf = l.place(deg, 0.012, 0.0095 + fl);
         b.part(root, &geom::plane(0.064, 0.08), screens.mat(elem), xf);
         state.elem_pos[elem as usize] = xf.transform_point3(Vec3::ZERO);
     }
@@ -623,6 +664,7 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
         (23.0, -0.075, 4, &[K::Comm, K::Idle, K::Ecm, K::Idle], Elem::Bank4),
     ];
     let cap = geom::rounded_slab(0.013, 0.009, 0.0015, 0.006, 0.0012);
+    let tray = geom::cuboid(0.0172, 0.017, 0.004);
     let off = b.assets.lamp(b.mats, CapBase::Button, [0.0; 3]);
     for (deg, y, n, kinds, bank) in banks {
         for k in 0..n {
@@ -634,19 +676,19 @@ fn build_cockpit(b: &mut Builder, l: &Layout, screens: &Screens, state: &mut Coc
             let e = b.part(root, &cap, off.clone(), xf);
             let phase = state.rng.f() * 6.0;
             b.commands.entity(e).insert(Button { kind: kinds[k % kinds.len()], idx: k, phase, bank });
+            // dark tray behind the bank, following the curve
+            b.add(M::Inset, &tray, l.place(d, y, 0.008));
         }
-        // recessed tray behind the bank
-        let tray_w = n as f32 * 0.017 + 0.01;
-        b.add(M::Inset, &geom::rounded_slab(tray_w, 0.017, 0.003, 0.004, 0.001), l.place(deg, y, 0.008));
     }
     // annunciator strip above the radar
-    b.add(M::Bezel, &geom::rounded_slab(0.29, 0.068, 0.008, 0.006, 0.003), l.place(0.0, 0.128, 0.006));
-    let xf = l.place(0.0, 0.128, 0.0095);
+    let fl = l.flat(0.29);
+    b.add(M::Bezel, &geom::rounded_slab(0.29, 0.068, 0.008, 0.006 + fl, 0.003), l.place(0.0, 0.128, 0.006 + fl));
+    let xf = l.place(0.0, 0.128, 0.0095 + fl);
     b.part(root, &geom::plane(0.27, 0.054), screens.mat(Elem::Annun), xf);
     state.elem_pos[Elem::Annun as usize] = xf.transform_point3(Vec3::ZERO);
     // stickers and maintenance plaques
     for (deg, y, i, rot) in [(-15.5, -0.135, 0u8, 0.03), (16.0, -0.14, 1, -0.04), (-58.0, 0.08, 2, 0.05)] {
-        b.add(M::Decal(i), &geom::plane(0.075, 0.028), l.place(deg, y, 0.009) * rz(rot));
+        b.add(M::Decal(i), &geom::plane(0.075, 0.028), l.place(deg, y, 0.002 + l.flat(0.075)) * rz(rot));
     }
     // master caution push-button
     let mc = l.place(-19.0, 0.11, 0.014);
@@ -842,7 +884,7 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
 /// flight stick (right) and throttle quadrant (left)
 fn build_controls(b: &mut Builder, l: &Layout) {
     let root = b.root;
-    let stick = b.pivot(root, trv(l.s(0.44, -1.5, 0.3)));
+    let stick = b.pivot(root, trv(l.s(0.37, -1.64, 0.3)));
     b.commands.entity(stick).insert(StickPivot);
     b.part_m(stick, &geom::cylinder(0.012, 0.03, 0.05, 14, true), M::Rubber, Mat4::IDENTITY);
     b.part_m(stick, &geom::cylinder(0.006, 0.007, 0.09, 10, true), M::Chrome, tr(0.0, 0.06, 0.0));
@@ -855,7 +897,7 @@ fn build_controls(b: &mut Builder, l: &Layout) {
     // boot at the base of the stick
     b.part_m(stick, &geom::cylinder(0.034, 0.05, 0.03, 16, true), M::Rubber, tr(0.0, -0.03, 0.0));
 
-    let thr = b.pivot(root, trv(l.s(-0.5, -1.48, 0.32)) * ry(0.25));
+    let thr = b.pivot(root, trv(l.s(-0.44, -1.56, 0.32)) * ry(0.25));
     b.part_m(thr, &geom::rounded_slab(0.05, 0.16, 0.012, 0.018, 0.004), M::Metal, rx(-FRAC_PI_2));
     // slot in the rail
     b.part_m(thr, &geom::cuboid(0.014, 0.004, 0.13), M::Inset, tr(0.0, 0.0035, 0.0));
@@ -1257,7 +1299,7 @@ fn update_lamps(
         }
     }
     for mut l in &mut alarm {
-        l.intensity = if red && flash { 0.9 * CANDELA * SCALE * SCALE } else { 0.0 };
+        l.intensity = if red && flash { 0.6 * CANDELA * SCALE * SCALE } else { 0.0 };
     }
     for mut l in &mut screen_light {
         l.color = if red { Color::srgb(1.0, 0.6, 0.63) } else { Color::srgb(0.5, 0.88, 1.0) };
@@ -1267,14 +1309,9 @@ fn update_lamps(
         let v = cam.rotation().inverse() * sky.sun_dir;
         let k = 0.05 + (-v.z).max(0.0).powi(3) * 0.55 * sky.sun_visible;
         for m in &mut glass {
-            if let Some(mut mat) = mats.get_mut(&m.0) {
-                let c = 0.1 * k / 0.1;
-                if let Color::LinearRgba(old) = mat.base_color
-                    && (old.red - c).abs() < 0.004
-                {
-                    continue;
-                }
-                mat.base_color = Color::linear_rgb(c, c, c);
+            let same = mats.get(&m.0).is_some_and(|mat| matches!(mat.base_color, Color::LinearRgba(old) if (old.red - k).abs() < 0.004));
+            if !same && let Some(mut mat) = mats.get_mut(&m.0) {
+                mat.base_color = Color::linear_rgb(k, k, k);
             }
         }
     }

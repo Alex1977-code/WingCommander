@@ -492,14 +492,26 @@ pub fn update_screens(
         }
     }
 
-    let mut drawn = 0;
+    // the (at most) two most overdue screens
+    let mut due = [usize::MAX; 2];
     for si in 0..sc.screens.len() {
-        if drawn >= 2 || t < sc.screens[si].next {
+        let nx = sc.screens[si].next;
+        if t < nx {
             continue;
         }
-        drawn += 1;
+        if due[0] == usize::MAX || nx < sc.screens[due[0]].next {
+            due[1] = due[0];
+            due[0] = si;
+        } else if due[1] == usize::MAX || nx < sc.screens[due[1]].next {
+            due[1] = si;
+        }
+    }
+    for si in due {
+        if si == usize::MAX {
+            continue;
+        }
         let elem = sc.screens[si].elem;
-        sc.screens[si].next = t + elem.period();
+        sc.screens[si].next = (sc.screens[si].next + elem.period()).max(t);
         let f = state.fail[elem as usize];
         let mut canvas = std::mem::replace(&mut sc.screens[si].canvas, Canvas::new(1, 1, BG));
         if f == Fail::Dead || (f == Fail::Flicker && state.rng.chance(0.35)) {

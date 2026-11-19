@@ -325,7 +325,7 @@ pub fn tube(pts: &[Vec3], rx: f32, ry: f32, steps: usize, radial: usize, up: Vec
             let (s, c) = a.sin_cos();
             let off = bin * (c * rx) + nrm * (s * ry);
             let n = (bin * (c / rx.max(1e-5)) + nrm * (s / ry.max(1e-5))).normalize_or(off);
-            g.vert(samples[i] + off, n, Vec2::new(along, a * (rx + ry) * 0.5));
+            g.vert(samples[i] + off, n, Vec2::new(along, -a * (rx + ry) * 0.5));
         }
     }
     let row = radial as u32 + 1;
