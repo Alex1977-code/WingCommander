@@ -27,7 +27,7 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use designs::{Cp, Pal, M};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[allow(unused_imports)]
@@ -67,12 +67,20 @@ pub struct Turret {
     pub idx: usize,
 }
 
-/// Capital ships only: the hull approximated by boxes in body space (centre, half extents), from a voxel
-/// pass over the solid model. Finer than `Hittable::half_extents` for saucers, nacelles, rings and prows;
-/// weapons/collisions may test against these after the bounding-sphere check.
+/// Capital ships only: the hull for hit tests and collisions (see `HullShape`), shared by every ship of the
+/// type. Finer than `Hittable::half_extents` for saucers, nacelles, rings and prows; weapons and collisions
+/// test against it after the bounding-sphere check with radius `max(Hittable::radius, extent)`.
 #[derive(Component, Clone, Debug)]
-#[allow(dead_code)] // read by other modules (weapons, collisions)
-pub struct HullBoxes(pub Arc<Vec<(Vec3, Vec3)>>);
+pub struct HullBoxes(pub Arc<HullShape>);
+
+/// The head of a capital-ship turret (child of its `Turret` mount). weapons.rs turns it towards the target:
+/// `base` is the mount's rotation in body space, `ship` the ship's root entity.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TurretHead {
+    pub idx: usize,
+    pub ship: Entity,
+    pub base: Quat,
+}
 
 /// Blinking nav light (billboard halo). Visible for 14 % of every 1/rate seconds, offset by `phase`.
 #[derive(Component, Clone, Copy, Debug)]
@@ -121,7 +129,7 @@ pub struct ShipModel {
     pub extent: f32,
     pub triangles: usize,
     /// capitals: hull approximation for hit tests (see `HullBoxes`)
-    pub hull_boxes: Arc<Vec<(Vec3, Vec3)>>,
+    pub hull: Option<Arc<HullShape>>,
 }
 
 /// Materials of the TUS Aurora's hangar signal lamps, energy field and clamps: shared handles a launch
@@ -451,29 +459,231 @@ fn build_library(mut lib: ResMut<ShipLibrary>, data: Res<GameData>, mut meshes: 
                 shadow: casts_shadow(m),
             });
         }
-        if def.capital {
-            let solid: Vec<&mesh::Geo> = built.geos.iter().filter(|(m, _)| casts_shadow(**m)).map(|(_, g)| g).collect();
-            let ext = lo.abs().max(hi.abs()).max_element();
-            model.hull_boxes = Arc::new(voxel_boxes(&solid, (ext / 14.0).max(2.0)));
-        }
         model.aabb_min = lo;
         model.aabb_max = hi;
         model.extent = lo.abs().max(hi.abs()).max_element();
+        if def.capital {
+            let t = std::time::Instant::now();
+            let hull = capital_hull(kind, &built, model.extent);
+            info!("ships: {kind}: hull {} boxes, {:.1} m cells, extent {:.0} m ({:.0?})", hull.boxes.len(), hull.cell, hull.extent, t.elapsed());
+            model.hull = Some(Arc::new(hull));
+        }
         model.lights = built.lights.iter().map(|l| NavLight { pos: l.pos, rate: l.rate, phase: l.phase, size: l.size, material: mat_of(M::Halo(l.color), &mut mats) }).collect();
         if let Some(tm) = built.turret_mat.filter(|_| !model.turrets.is_empty()) {
             model.turret_head = Some((head_mesh.clone(), mat_of(tm, &mut mats)));
         }
-        debug!("ships: {kind}: {} triangles, {} meshes, {} nozzles, {} hull boxes, extent {:.0} m", model.triangles, model.parts.len(), model.nozzles.len(), model.hull_boxes.len(), model.extent);
+        debug!("ships: {kind}: {} triangles, {} meshes, {} nozzles, {} hull boxes, extent {:.0} m", model.triangles, model.parts.len(), model.nozzles.len(), model.hull.as_ref().map_or(0, |h| h.boxes.len()), model.extent);
         total += model.triangles;
         lib.models.insert(kind.clone(), model);
     }
     info!("ships: {} models, {} triangles, {} materials in {:.2?} (textures {:.2?})", lib.models.len(), total, cache.len(), t0.elapsed(), t_tex);
 }
 
-/// Voxelise the triangle surfaces at `cell` metres and merge occupied cells into runs along x.
-fn voxel_boxes(geos: &[&mesh::Geo], cell: f32) -> Vec<(Vec3, Vec3)> {
-    let mut occ: HashSet<(i32, i32, i32)> = HashSet::new();
-    let key = |p: Vec3| ((p.x / cell).floor() as i32, (p.y / cell).floor() as i32, (p.z / cell).floor() as i32);
+// ---------- capital hull shape (hit tests, collisions) ----------
+
+/// A BVH node with at most this many boxes is a leaf.
+const HULL_LEAF: usize = 4;
+
+#[derive(Clone, Copy, Debug)]
+struct HullNode {
+    lo: Vec3,
+    hi: Vec3,
+    /// leaf (`count` > 0): index of its first box; inner node: index of the right child (left = node + 1)
+    first: u32,
+    count: u32,
+}
+
+/// A capital hull for hit tests and collisions: solid voxel boxes in body space (centre, half extents),
+/// built from the model's hull surfaces with the interior filled and neighbouring cells merged into larger
+/// boxes (disjoint), kept in a small bounding-volume tree. The Aurora's flyable hangar tunnel
+/// (`AURORA_BAY`) is left open. Queries allocate nothing.
+#[derive(Clone, Debug, Default)]
+pub struct HullShape {
+    pub boxes: Vec<(Vec3, Vec3)>,
+    nodes: Vec<HullNode>,
+    /// farthest model point from the origin (web `modelR`): broad-phase radius together with `Hittable::radius`
+    pub extent: f32,
+    /// voxel edge length the boxes were built with (m)
+    pub cell: f32,
+}
+
+impl HullShape {
+    pub fn new(mut boxes: Vec<(Vec3, Vec3)>, extent: f32, cell: f32) -> Self {
+        let mut nodes = Vec::with_capacity(boxes.len() / 2 + 1);
+        if !boxes.is_empty() {
+            Self::build_node(&mut boxes, 0, &mut nodes);
+        }
+        Self { boxes, nodes, extent, cell }
+    }
+
+    fn build_node(items: &mut [(Vec3, Vec3)], offset: usize, nodes: &mut Vec<HullNode>) -> usize {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        let (mut clo, mut chi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for (c, h) in items.iter() {
+            lo = lo.min(*c - *h);
+            hi = hi.max(*c + *h);
+            clo = clo.min(*c);
+            chi = chi.max(*c);
+        }
+        let idx = nodes.len();
+        nodes.push(HullNode { lo, hi, first: offset as u32, count: items.len() as u32 });
+        if items.len() <= HULL_LEAF {
+            return idx;
+        }
+        // median split along the longest axis of the box centres
+        let span = chi - clo;
+        let axis = if span.x >= span.y && span.x >= span.z {
+            0
+        } else if span.y >= span.z {
+            1
+        } else {
+            2
+        };
+        items.sort_unstable_by(|a, b| a.0[axis].total_cmp(&b.0[axis]));
+        let mid = items.len() / 2;
+        let (l, r) = items.split_at_mut(mid);
+        Self::build_node(l, offset, nodes);
+        let right = Self::build_node(r, offset + mid, nodes);
+        nodes[idx] = HullNode { lo, hi, first: right as u32, count: 0 };
+        idx
+    }
+
+    /// Entry fraction (0..1) of the body-space segment `a`-`b` into the hull grown by `margin` (0 when `a`
+    /// starts inside). Exact for the boxes.
+    pub fn segment(&self, a: Vec3, b: Vec3, margin: f32) -> Option<f32> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let d = b - a;
+        let safe = |v: f32| if v.abs() < 1e-12 { 1e-12 } else { v };
+        let inv = Vec3::new(1.0 / safe(d.x), 1.0 / safe(d.y), 1.0 / safe(d.z));
+        let m = Vec3::splat(margin);
+        let slab = |lo: Vec3, hi: Vec3, tmax: f32| -> Option<f32> {
+            let t1 = (lo - a) * inv;
+            let t2 = (hi - a) * inv;
+            let t0 = t1.min(t2).max_element().max(0.0);
+            (t0 <= t1.max(t2).min_element().min(tmax)).then_some(t0)
+        };
+        let mut best = 1.0f32;
+        let mut found = false;
+        let mut stack = [0u32; 64];
+        let mut sp = 1;
+        while sp > 0 {
+            sp -= 1;
+            let ni = stack[sp];
+            let n = self.nodes[ni as usize];
+            if slab(n.lo - m, n.hi + m, best).is_none() {
+                continue;
+            }
+            if n.count > 0 {
+                for &(c, h) in &self.boxes[n.first as usize..(n.first + n.count) as usize] {
+                    if let Some(t) = slab(c - h - m, c + h + m, best) {
+                        best = t;
+                        found = true;
+                    }
+                }
+            } else if sp + 2 <= stack.len() {
+                stack[sp] = n.first;
+                stack[sp + 1] = ni + 1;
+                sp += 2;
+            }
+        }
+        found.then_some(best)
+    }
+
+    /// Signed distance from the body-space point `p` to the nearest box (negative inside) and the outward
+    /// body-space normal there, if it is below `limit`. Exact outside the hull (the boxes are disjoint).
+    pub fn distance(&self, p: Vec3, limit: f32) -> Option<(f32, Vec3)> {
+        let mut best: Option<(f32, Vec3)> = None;
+        let mut bound = limit;
+        let mut stack = [0u32; 64];
+        let mut sp = usize::from(!self.nodes.is_empty());
+        while sp > 0 {
+            sp -= 1;
+            let ni = stack[sp];
+            let n = self.nodes[ni as usize];
+            let out = (n.lo - p).max(p - n.hi).max(Vec3::ZERO);
+            if out.length() >= bound {
+                continue;
+            }
+            if n.count > 0 {
+                for &(c, h) in &self.boxes[n.first as usize..(n.first + n.count) as usize] {
+                    let (d, nn) = box_sdf(h, p - c);
+                    if d < bound {
+                        bound = d;
+                        best = Some((d, nn));
+                    }
+                }
+            } else if sp + 2 <= stack.len() {
+                stack[sp] = n.first;
+                stack[sp + 1] = ni + 1;
+                sp += 2;
+            }
+        }
+        best
+    }
+
+    /// A body-space point inside a random box (`r` three values in 0..1, `pick` 0..1): capital death blasts.
+    pub fn random_point(&self, pick: f32, r: Vec3) -> Option<Vec3> {
+        let n = self.boxes.len();
+        let (c, h) = *self.boxes.get(((pick * n as f32) as usize).min(n.max(1) - 1))?;
+        Some(c + h * (r * 2.0 - Vec3::ONE))
+    }
+}
+
+/// Signed distance to an axis-aligned box (half extents `h`) at the origin, and the outward normal.
+fn box_sdf(h: Vec3, l: Vec3) -> (f32, Vec3) {
+    let off = l - l.clamp(-h, h);
+    let d = off.length();
+    if d > 1e-4 {
+        return (d, off / d);
+    }
+    let gap = h - l.abs();
+    let s = |v: f32| if v >= 0.0 { 1.0 } else { -1.0 };
+    if gap.x < gap.y && gap.x < gap.z {
+        (-gap.x, Vec3::X * s(l.x))
+    } else if gap.y < gap.z {
+        (-gap.y, Vec3::Y * s(l.y))
+    } else {
+        (-gap.z, Vec3::Z * s(l.z))
+    }
+}
+
+/// The hull shape of a capital ship type: its solid (shadow-casting) surfaces voxelised at about extent/40
+/// (2..6 m cells), the interior filled, the Aurora's hangar tunnel carved out, cells merged into boxes.
+fn capital_hull(kind: &str, built: &designs::Built, extent: f32) -> HullShape {
+    let solid: Vec<&mesh::Geo> = built.geos.iter().filter(|(m, _)| casts_shadow(**m)).map(|(_, g)| g).collect();
+    let cell = (extent / 40.0).clamp(2.0, 6.0);
+    // the tunnel plus a metre (the bow ring round the mouth too); it opens forward into space
+    let carve = (kind == "aurora").then(|| {
+        let b = &AURORA_BAY;
+        (Vec3::new(-b.hw - 1.0, b.y - b.hh - 1.0, b.back), Vec3::new(b.hw + 1.0, b.y + b.hh + 1.0, b.mouth + 2.0 * cell))
+    });
+    HullShape::new(voxel_boxes(&solid, cell, carve), extent, cell)
+}
+
+/// Voxelise the triangle surfaces at `cell` metres, fill everything the outside cannot reach (the hull's
+/// interior), clear the cells touching `carve` (body-space box lo, hi) and merge the solid cells greedily
+/// into disjoint boxes (runs along x, grown along z, then y).
+fn voxel_boxes(geos: &[&mesh::Geo], cell: f32, carve: Option<(Vec3, Vec3)>) -> Vec<(Vec3, Vec3)> {
+    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for g in geos {
+        for p in &g.pos {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+    }
+    if lo.x > hi.x {
+        return Vec::new();
+    }
+    // one empty cell of padding round the model, so the outside is connected
+    let i0 = (lo / cell).floor().as_ivec3() - IVec3::ONE;
+    let i1 = (hi / cell).floor().as_ivec3() + IVec3::ONE;
+    let dim = i1 - i0 + IVec3::ONE;
+    let (nx, ny, nz) = (dim.x as usize, dim.y as usize, dim.z as usize);
+    let at = |x: usize, y: usize, z: usize| (z * ny + y) * nx + x;
+    // 0 empty, 1 surface, 2 outside (flood fill), 3 carved
+    let mut grid = vec![0u8; nx * ny * nz];
     for g in geos {
         for t in g.idx.chunks_exact(3) {
             let (a, b, c) = (g.pos[t[0] as usize], g.pos[t[1] as usize], g.pos[t[2] as usize]);
@@ -482,33 +692,177 @@ fn voxel_boxes(geos: &[&mesh::Geo], cell: f32) -> Vec<(Vec3, Vec3)> {
             for i in 0..=n {
                 for j in 0..=(n - i) {
                     let (u, v) = (i as f32 / n as f32, j as f32 / n as f32);
-                    occ.insert(key(a + (b - a) * u + (c - a) * v));
+                    let k = ((a + (b - a) * u + (c - a) * v) / cell).floor().as_ivec3() - i0;
+                    grid[at(k.x as usize, k.y as usize, k.z as usize)] = 1;
                 }
             }
         }
     }
-    let mut cells: Vec<(i32, i32, i32)> = occ.into_iter().collect();
-    cells.sort_by_key(|&(x, y, z)| (y, z, x));
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < cells.len() {
-        let (x0, y, z) = cells[i];
-        let mut x1 = x0;
-        while i + 1 < cells.len() && cells[i + 1] == (x1 + 1, y, z) {
-            x1 += 1;
-            i += 1;
+    if let Some((clo, chi)) = carve {
+        let eps = 1e-3;
+        let a = ((clo / cell).floor().as_ivec3() - i0).max(IVec3::ZERO);
+        let b = ((chi / cell).floor().as_ivec3() - i0).min(dim - IVec3::ONE);
+        for z in a.z..=b.z {
+            for y in a.y..=b.y {
+                for x in a.x..=b.x {
+                    let c0 = (IVec3::new(x, y, z) + i0).as_vec3() * cell;
+                    let c1 = c0 + Vec3::splat(cell);
+                    if c1.cmpgt(clo + Vec3::splat(eps)).all() && c0.cmplt(chi - Vec3::splat(eps)).all() {
+                        grid[at(x as usize, y as usize, z as usize)] = 3;
+                    }
+                }
+            }
         }
-        let lo = Vec3::new(x0 as f32, y as f32, z as f32) * cell;
-        let hi = Vec3::new((x1 + 1) as f32, (y + 1) as f32, (z + 1) as f32) * cell;
-        out.push(((lo + hi) * 0.5, (hi - lo) * 0.5));
-        i += 1;
+    }
+    // flood the outside from a padding corner (6-neighbourhood): what it cannot reach is the hull's inside
+    let mut stack = vec![at(0, 0, 0)];
+    grid[at(0, 0, 0)] = 2;
+    while let Some(i) = stack.pop() {
+        let (x, y, z) = (i % nx, (i / nx) % ny, i / (nx * ny));
+        let mut visit = |x: usize, y: usize, z: usize| {
+            let j = at(x, y, z);
+            if grid[j] == 0 || grid[j] == 3 {
+                grid[j] = 2;
+                stack.push(j);
+            }
+        };
+        if x > 0 {
+            visit(x - 1, y, z);
+        }
+        if x + 1 < nx {
+            visit(x + 1, y, z);
+        }
+        if y > 0 {
+            visit(x, y - 1, z);
+        }
+        if y + 1 < ny {
+            visit(x, y + 1, z);
+        }
+        if z > 0 {
+            visit(x, y, z - 1);
+        }
+        if z + 1 < nz {
+            visit(x, y, z + 1);
+        }
+    }
+    // greedy merge of the solid cells (surface or enclosed, never carved) into disjoint boxes
+    let mut free: Vec<bool> = grid.iter().map(|&v| v == 0 || v == 1).collect();
+    let mut out = Vec::new();
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                if !free[at(x, y, z)] {
+                    continue;
+                }
+                let mut x1 = x;
+                while x1 + 1 < nx && free[at(x1 + 1, y, z)] {
+                    x1 += 1;
+                }
+                let mut z1 = z;
+                while z1 + 1 < nz && (x..=x1).all(|xx| free[at(xx, y, z1 + 1)]) {
+                    z1 += 1;
+                }
+                let mut y1 = y;
+                while y1 + 1 < ny && (z..=z1).all(|zz| (x..=x1).all(|xx| free[at(xx, y1 + 1, zz)])) {
+                    y1 += 1;
+                }
+                for zz in z..=z1 {
+                    for yy in y..=y1 {
+                        for xx in x..=x1 {
+                            free[at(xx, yy, zz)] = false;
+                        }
+                    }
+                }
+                let a = (IVec3::new(x as i32, y as i32, z as i32) + i0).as_vec3() * cell;
+                let b = (IVec3::new(x1 as i32 + 1, y1 as i32 + 1, z1 as i32 + 1) + i0).as_vec3() * cell;
+                out.push(((a + b) * 0.5, (b - a) * 0.5));
+            }
+        }
     }
     out
 }
 
+#[cfg(test)]
+mod hull_tests {
+    use super::*;
+
+    fn hull(kind: &str) -> HullShape {
+        let data = GameData::load();
+        let def = data.ship(kind);
+        let mut built = designs::build(kind).expect("model");
+        let mounts = designs::turret_mounts(kind, &def.turrets);
+        designs::add_turret_domes(&mut built, &mounts);
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for g in built.geos.values() {
+            for p in &g.pos {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+        }
+        capital_hull(kind, &built, lo.abs().max(hi.abs()).max_element())
+    }
+
+    #[test]
+    fn capital_hulls_are_compact_and_fast() {
+        let data = GameData::load();
+        let mut kinds: Vec<&String> = data.ships.iter().filter(|(_, d)| d.capital).map(|(k, _)| k).collect();
+        kinds.sort();
+        for kind in kinds {
+            let t = std::time::Instant::now();
+            let h = hull(kind);
+            let build = t.elapsed();
+            // 10k random segments through the hull's bounding sphere
+            let mut s = 0x1234_5678u32;
+            let mut rnd = || {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s as f32 / u32::MAX as f32) * 2.0 - 1.0
+            };
+            let t = std::time::Instant::now();
+            let mut hits = 0;
+            for _ in 0..10_000 {
+                let a = Vec3::new(rnd(), rnd(), rnd()) * h.extent;
+                let b = a + Vec3::new(rnd(), rnd(), rnd()) * 30.0;
+                hits += h.segment(a, b, 2.5).is_some() as u32;
+                hits += h.distance(a, 6.0).is_some() as u32;
+            }
+            println!("{kind}: {} boxes, cell {:.1} m, build {:.1?}, 10k segment+distance queries {:.2?} ({hits} hits)", h.boxes.len(), h.cell, build, t.elapsed());
+            assert!(h.boxes.len() < 6000, "{kind}: too many boxes");
+        }
+    }
+
+    #[test]
+    fn aurora_saucer_is_solid_and_bay_open() {
+        let h = hull("aurora");
+        // saucer centre and a nacelle are solid (not only a shell), the hangar tunnel is free
+        assert!(h.distance(Vec3::new(0.0, 12.0, 100.0), 0.0).is_some(), "saucer inside");
+        assert!(h.distance(Vec3::new(64.0, 16.0, -102.0), 0.0).is_some(), "nacelle inside");
+        let b = &AURORA_BAY;
+        for z in [b.back + 8.0, (b.back + b.mouth) * 0.5, b.mouth - 2.0, b.mouth + 10.0] {
+            let p = Vec3::new(0.0, b.y, z);
+            let d = h.distance(p, 100.0).map_or(100.0, |d| d.0);
+            assert!(d > b.hh - 0.5, "bay blocked at z {z}: {d}");
+        }
+        // a bolt along the tunnel's centre line flies in without hitting anything before the back wall
+        let t = h.segment(Vec3::new(0.0, b.y, b.mouth + 200.0), Vec3::new(0.0, b.y, b.back - 50.0), 0.0).expect("back wall");
+        let z = b.mouth + 200.0 + (b.back - 50.0 - b.mouth - 200.0) * t;
+        assert!(z < b.back + 1.0, "tunnel blocked at z {z}");
+        // the saucer rim and the nacelles are hit from the side
+        let t = h.segment(Vec3::new(400.0, 12.0, 100.0), Vec3::new(-400.0, 12.0, 100.0), 0.0).expect("saucer");
+        let x = 400.0 - 800.0 * t;
+        assert!((x - 110.0).abs() < 8.0, "saucer rim at x {x}");
+        assert!(h.segment(Vec3::new(64.0, 300.0, -102.0), Vec3::new(64.0, -300.0, -102.0), 0.0).is_some(), "nacelle");
+    }
+}
+
 // ---------- spawning ----------
 
+/// Height of a turret's barrels above its mount on the hull (the head sits 1.2 m up, barrels ~1.9 m above that).
+const TURRET_MUZZLE: f32 = 3.0;
+
 fn spawn_body(p: &mut ChildSpawnerCommands, lib: &ShipLibrary, model: Option<&ShipModel>) {
+    let root = p.target_entity();
     p.spawn((ShipBody, Transform::default(), Visibility::default())).with_children(|b| {
         let Some(model) = model else { return };
         for part in &model.parts {
@@ -532,7 +886,7 @@ fn spawn_body(p: &mut ChildSpawnerCommands, lib: &ShipLibrary, model: Option<&Sh
             let rot = Quat::from_mat3(&Mat3::from_cols(n.cross(fwd.normalize()), n, fwd.normalize()));
             let mut t = b.spawn((Turret { idx }, Transform::from_translation(pos).with_rotation(rot), Visibility::default()));
             if let Some((mesh, mat)) = &model.turret_head {
-                t.with_child((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 1.2, 0.0)));
+                t.with_child((TurretHead { idx, ship: root, base: rot }, Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_xyz(0.0, 1.2, 0.0)));
             }
         }
         for l in &model.lights {
@@ -553,14 +907,25 @@ fn spawn_body(p: &mut ChildSpawnerCommands, lib: &ShipLibrary, model: Option<&Sh
 /// engine nozzles are `EngineNozzle` children of the body, guns `Muzzle`, capital turrets `Turret`.
 pub fn spawn_ship(commands: &mut Commands, lib: &ShipLibrary, data: &GameData, kind: &str, transform: Transform) -> Entity {
     let def = data.ship(kind).clone();
-    let ship = Ship::new(kind, &def);
+    let mut ship = Ship::new(kind, &def);
+    // the ship fires from its model's gun ports (wing guns snapped to the pods) and from the turret heads
+    // on the hull (web fitStats / ships.js turret projection); a kind drawn with the fallback model keeps
+    // its raw positions
+    if let Some(m) = lib.models.get(kind) {
+        if m.guns.len() == ship.def.guns.len() {
+            ship.def.guns = m.guns.iter().map(|g| g.to_array()).collect();
+        }
+        if m.turrets.len() == ship.def.turrets.len() {
+            ship.def.turrets = m.turrets.iter().map(|(p, n)| (*p + *n * TURRET_MUZZLE).to_array()).collect();
+        }
+    }
     let r = ship.radius();
     let half = def.hull_box.map(|b| Vec3::new(b[0], b[1], b[2]));
     let name = def.name.clone();
     let model = lib.model(kind);
     let mut e = commands.spawn((ship, Hittable { radius: r, half_extents: half }, InMission, transform, Visibility::default(), Name::new(name)));
-    if let Some(m) = model.filter(|m| def.capital && !m.hull_boxes.is_empty()) {
-        e.insert(HullBoxes(m.hull_boxes.clone()));
+    if let Some(h) = model.filter(|_| def.capital).and_then(|m| m.hull.clone()) {
+        e.insert(HullBoxes(h));
     }
     e.with_children(|p| spawn_body(p, lib, model)).id()
 }
