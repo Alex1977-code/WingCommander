@@ -541,7 +541,7 @@ fn follow_camera(
     cache: Res<SkyCache>,
     cam: Query<(&Transform, &Projection, &Camera), With<MainCamera>>,
     mut sun: Query<(&mut Transform, &mut Visibility), (With<SunSprite>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>)>,
-    players: Query<(&Transform, &Ship), (With<Player>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>)>,
+    players: Query<(&Transform, &Ship), (With<Player>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>, Without<SunSprite>)>,
     mut specks: Query<(&DustSpeck, &mut Transform), (Without<MainCamera>, Without<Streak>)>,
     mut streaks: Query<(&Streak, &mut Transform, &mut Visibility), Without<MainCamera>>,
 ) {

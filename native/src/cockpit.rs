@@ -53,17 +53,22 @@ impl Plugin for CockpitPlugin {
                     hands::attach_hands,
                     cockpit_events,
                     test_damage,
-                    animate_controls,
+                    // frozen while paused like the web loop (lamps keep their state)
+                    animate_controls.run_if(not_paused),
                     update_lamps,
-                    screens::update_screens,
-                    update_sparks,
+                    screens::update_screens.run_if(not_paused),
+                    update_sparks.run_if(not_paused),
                 )
                     .chain()
                     .after(WeaponsSet::Dying)
                     .run_if(in_state(AppState::Flight)),
             )
-            .add_systems(PostUpdate, cockpit_visibility.before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, cockpit_visibility.after(crate::render::CameraRigSet).before(TransformSystems::Propagate));
     }
+}
+
+fn not_paused(p: Res<Paused>) -> bool {
+    !p.0
 }
 
 // ---------- layout ----------
@@ -255,7 +260,8 @@ fn setup_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut m
     let bolt = meshes.add(geom::cylinder(0.0035, 0.0035, 0.003, 6, true).transformed(&Mat4::from_rotation_x(FRAC_PI_2)).to_mesh());
     let spark = (
         meshes.add(geom::sphere(0.0034, 6, 4).to_mesh()),
-        mats.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(3.0 * WEB, 1.8 * WEB, 0.6 * WEB), unlit: true, ..default() }),
+        // unlit: Bevy shows only base_color (emissive is ignored); HDR > 1 blooms
+        mats.add(StandardMaterial { base_color: Color::LinearRgba(LinearRgba::rgb(3.0 * WEB, 1.8 * WEB, 0.6 * WEB)), unlit: true, ..default() }),
     );
     commands.insert_resource(CockpitAssets { mats: m, lamps: HashMap::new(), bolt, spark });
     commands.insert_resource(screens);
@@ -1303,7 +1309,7 @@ fn update_lamps(
         }
     }
     for mut l in &mut alarm {
-        l.intensity = if red && flash { 0.6 * CANDELA * SCALE * SCALE } else { 0.0 };
+        l.intensity = if red && flash { 0.9 * CANDELA * SCALE * SCALE } else { 0.0 };
     }
     for mut l in &mut screen_light {
         l.color = if red { Color::srgb(1.0, 0.6, 0.63) } else { Color::srgb(0.5, 0.88, 1.0) };

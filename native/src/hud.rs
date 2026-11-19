@@ -232,6 +232,7 @@ impl Plugin for HudPlugin {
             .add_systems(
                 PostUpdate,
                 hud_world
+                    .after(crate::render::CameraRigSet)
                     .after(TransformSystems::Propagate)
                     .after(CameraUpdateSystems)
                     .before(UiSystems::Prepare)
@@ -1309,8 +1310,10 @@ fn hud_comm(
     mut buf: Local<String>,
 ) {
     for m in msgs.read() {
+        // full: the new line is dropped (web app.js: `if (commQ.length < 6) commQ.push(...)`), so kill chatter
+        // never pushes queued story lines out
         if q.queue.len() >= 6 {
-            q.queue.pop_front();
+            continue;
         }
         let ch = data.campaign.chars.get(&m.who);
         let name = display_safe(&data.speaker(&m.who));
@@ -1422,7 +1425,8 @@ fn hud_alerts(
 
     // banners: a message, or the mission result
     for b in banners.read() {
-        anim.banner.clone_from(&b.0);
+        // Orbitron (display font) has no '·' or '„' and the banner is set in capitals
+        anim.banner = display_safe(&b.0);
         anim.banner_t = 0.0;
     }
     if let Some(end) = &status.ended {

@@ -845,8 +845,9 @@ fn draw_radar(c: &mut Canvas, sc: &mut Screens, t: f32) {
     }
     // far to near (top to bottom); label the three nearest foes
     sc.order.clear();
-    sc.order.extend(0..n);
+    // mines only within the scope's range (web: `mn.pos.distanceTo(p.pos) < range`), not pinned to the rim
     let contacts = &sc.contacts;
+    sc.order.extend((0..n).filter(|&i| contacts[i].kind != Kind::Mine || contacts[i].d < range));
     sc.order.sort_unstable_by(|a, b| contacts[*a].y.total_cmp(&contacts[*b].y));
     let mut near3 = [usize::MAX; 3];
     let mut near_d = [f32::MAX; 3];
@@ -867,7 +868,7 @@ fn draw_radar(c: &mut Canvas, sc: &mut Screens, t: f32) {
         }
     }
     let mut buf = std::mem::take(&mut sc.txt);
-    for oi in 0..n {
+    for oi in 0..sc.order.len() {
         let i = sc.order[oi];
         let k = &sc.contacts[i];
         let col = match k.kind {
