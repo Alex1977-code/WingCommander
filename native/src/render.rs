@@ -551,7 +551,8 @@ fn keep_in_bay(c: &Transform, ship: Vec3, cam: Vec3) -> Vec3 {
         return cam;
     }
     let lc = inv * (cam - c.translation);
-    let k = ((b.mouth + 40.0 - lc.z) / 40.0).clamp(0.0, 1.0);
+    // fully inside the tube profile from 5 m before the mouth on, so it passes the lamps below them
+    let k = ((b.mouth + 40.0 - lc.z) / 35.0).clamp(0.0, 1.0);
     if k <= 0.0 {
         return cam;
     }
