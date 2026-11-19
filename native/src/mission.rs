@@ -5,6 +5,7 @@
 //! Test hooks (environment variables, harmless in normal play):
 //! - SF_MISSION_LOG=1  print phase / nav / wave changes and the result to stdout
 //! - SF_AUTOJUMP=1     use the autopilot whenever it is available (skips the long flights, for screenshots)
+//! - SF_AUTOJUMP_DIST=<m> the autopilot stops this far before the nav point (default 2300)
 //! - SF_WAVE_DIST=<m> enemy waves jump in this far ahead of the player (dogfight screenshots)
 //! - SF_TIMESCALE=<x>  run the game clock x times faster (as far as the frame rate allows: steps are capped)
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
@@ -38,6 +39,7 @@ impl Plugin for MissionPlugin {
             autowin: env_on("SF_AUTOWIN"),
             autojump: env_on("SF_AUTOJUMP") || env_on("SF_AUTOWIN"),
             wave_dist: std::env::var("SF_WAVE_DIST").ok().and_then(|v| v.parse().ok()),
+            jump_dist: std::env::var("SF_AUTOJUMP_DIST").ok().and_then(|v| v.parse().ok()),
             kill: std::env::var("SF_TEST_KILL").ok().and_then(|v| {
                 let (who, t) = v.split_once('@')?;
                 Some((who.to_string(), t.parse().ok()?))
@@ -404,6 +406,8 @@ struct TestHooks {
     /// SF_TEST_KILL: (player | protect | convoy | wingman, mission seconds)
     kill: Option<(String, f32)>,
     wave_dist: Option<f32>,
+    /// SF_AUTOJUMP_DIST: autopilot stops this far before the nav instead of 2.3 km
+    jump_dist: Option<f32>,
     autowin: bool,
     autojump: bool,
 }
@@ -1396,7 +1400,7 @@ fn autopilot(
         return;
     }
     let rot = facing(-back, Vec3::Y);
-    let base = np + back * 2300.0;
+    let base = np + back * radio.test.jump_dist.unwrap_or(2300.0);
     ptf.translation = base;
     ptf.rotation = rot;
     pship.speed = pship.speed.min(pship.def.boost.unwrap_or(pship.def.speed));
