@@ -450,7 +450,7 @@ fn build_wire(lib: &ShipLibrary, meshes: &Assets<Mesh>, kind: &str) -> Option<Ve
 
 // ---------- the update system ----------
 
-type PlayerItem<'a> = (Entity, &'a Transform, &'a Ship, &'a Player, Option<&'a PlayerAim>, Option<&'a Trigger>);
+type PlayerItem<'a> = (Entity, &'a Transform, &'a Ship, &'a Player, Option<&'a PlayerAim>, Option<&'a Trigger>, Option<&'a crate::flight::Pilot>);
 type ShipItem<'a> = (Entity, &'a Transform, &'a Ship, Has<Dying>);
 
 /// Redraws whichever screens are due (at most two per frame) and uploads them.
@@ -469,7 +469,9 @@ pub fn update_screens(
     mines: MineQuery,
 ) {
     let Some(mut screens) = screens else { return };
-    let Ok((pe, ptf, ship, player, aim, trigger)) = players.single() else { return };
+    let Ok((pe, ptf, ship, player, aim, trigger, pilot)) = players.single() else { return };
+    // web P.boostLock: boost held with the tank run dry, until it refills to 30 %
+    let boost_lock = pilot.is_some_and(|p| p.boost_held) && !player.boosting && player.energy < 0.3;
     let t = time.elapsed_secs();
     let dt = time.delta_secs().min(0.1);
     screens.radar_ang += dt * 2.2;
@@ -567,7 +569,7 @@ pub fn update_screens(
                 }
                 Elem::Annun => draw_annunciator(&mut canvas, &state, t, f),
                 Elem::Seg => draw_seg(&mut canvas, ptf, ship, &status, state.mission_t, &mut sc.txt),
-                Elem::Bar => draw_bars(&mut canvas, ship, player, t),
+                Elem::Bar => draw_bars(&mut canvas, ship, player, boost_lock, t),
                 _ => {}
             }
             if matches!(elem, Elem::Mfd0 | Elem::Mfd1 | Elem::Mfd2) {
@@ -1164,10 +1166,9 @@ fn dymo_fit(c: &mut Canvas, txt: &str, x: f32, y: f32, h: f32, max_w: f32, tape:
     c.text_ex(txt, x + h * 0.4, y + (h - th) * 0.5, th, 1.3, [0.94, 0.94, 0.94, 0.92], Align::Left, sx);
 }
 
-fn draw_bars(c: &mut Canvas, ship: &Ship, player: &Player, t: f32) {
+fn draw_bars(c: &mut Canvas, ship: &Ship, player: &Player, lockout: bool, t: f32) {
     c.clear(hex(0x080808, 1.0));
     let sk = if ship.max_shield > 0.0 { ship.shield / ship.max_shield } else { 0.0 };
-    let lockout = !player.boosting && player.energy < 0.05;
     for (ci, (label, k)) in [("SCHILD", sk), ("BST", player.energy)].into_iter().enumerate() {
         let x = 30.0 + ci as f32 * 112.0;
         let n = 12;

@@ -808,8 +808,7 @@ fn enter_menu(mut commands: Commands, mut cache: ResMut<SkyCache>, mut info: Res
 }
 
 /// Carrier and fighters of the menu backdrop (needs the ShipLibrary, built at Startup). Visual models only
-/// (no Ship/Hittable/InMission): gameplay systems never see them. The fighters fly in formation clear above
-/// the Aurora's saucer (centre (0, 12, 100), radius ~110, y 3..23).
+/// (no Ship/Hittable/InMission): gameplay systems never see them.
 fn spawn_menu_ships(mut commands: Commands, mut pending: ResMut<MenuShipsPending>, lib: Res<ShipLibrary>) {
     if !std::mem::take(&mut pending.0) {
         return;
@@ -820,13 +819,13 @@ fn spawn_menu_ships(mut commands: Commands, mut pending: ResMut<MenuShipsPending
     }
 }
 
-/// Menu formation (web startAttract's echelon, moved inboard and lifted ~30 m above the native saucer so it
-/// shows above the hull from every point of the orbit)
-const MENU_FIGHTERS: [Vec3; 3] = [Vec3::new(38.0, 64.0, 150.0), Vec3::new(58.0, 57.0, 128.0), Vec3::new(78.0, 50.0, 106.0)];
+/// Menu formation: web startAttract's echelon, moved out past the rim of the native saucer (centre (0, 12, 100),
+/// radius ~110, y 3..23) and lifted clear of it, so the carrier never swallows it
+const MENU_FIGHTERS: [Vec3; 3] = [Vec3::new(135.0, 40.0, 150.0), Vec3::new(155.0, 33.0, 124.0), Vec3::new(175.0, 26.0, 98.0)];
 /// what the menu orbit looks at: between the carrier and its escort
-const MENU_FOCUS: Vec3 = Vec3::new(35.0, 30.0, 85.0);
+const MENU_FOCUS: Vec3 = Vec3::new(60.0, 24.0, 90.0);
 /// distance of the menu orbit from MENU_FOCUS
-const MENU_ORBIT: f32 = 340.0;
+const MENU_ORBIT: f32 = 320.0;
 
 fn exit_menu(mut commands: Commands, q: Query<Entity, With<MenuScene>>, mut pending: ResMut<MenuShipsPending>) {
     pending.0 = false;

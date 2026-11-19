@@ -40,7 +40,21 @@ impl Plugin for FxPlugin {
             .expect("fx shader");
         app.init_resource::<Fx>()
             .add_systems(Startup, setup_fx)
-            .add_systems(Update, (fx_messages, fx_damage, fx_simulate).chain().run_if(in_state(AppState::Flight)))
+            // after the ships moved and took their damage: shields follow this frame's position, blasts and
+            // hits of this frame show this frame
+            .add_systems(
+                Update,
+                (fx_messages, fx_damage, fx_simulate)
+                    .chain()
+                    .after(crate::flight::FlightSet::Collide)
+                    .after(crate::weapons::WeaponsSet::Dying)
+                    .run_if(in_state(AppState::Flight)),
+            )
+            // the shot-down wingman's jump-out (weapons.rs marks it and removes the ship in WeaponsSet::Dying)
+            .add_systems(
+                Update,
+                fx_jump_outs.after(crate::weapons::WeaponsSet::Damage).before(crate::weapons::WeaponsSet::Dying).run_if(in_state(AppState::Flight)),
+            )
             .add_systems(Update, (attach_plumes, drive_plumes).chain())
             .add_systems(PostUpdate, fx_upload.after(TransformSystems::Propagate))
             .add_systems(OnExit(AppState::Flight), fx_clear);
@@ -361,8 +375,6 @@ pub struct Fx {
     lights: Vec<Light>,
     pending: [Pending; N_PENDING],
     ribbons: Vec<Ribbon>,
-    /// last time a flat plasma ring wave was started (dying capitals pop every 0.13 s)
-    wave_t: f32,
     glow: Option<GpuSystem>,
     smoke_gpu: Option<GpuSystem>,
     streak_gpu: Option<GpuSystem>,
@@ -396,7 +408,6 @@ impl Default for Fx {
             lights: Vec::new(),
             pending: [Pending::default(); N_PENDING],
             ribbons: (0..RIB_MAX).map(|_| Ribbon::default()).collect(),
-            wave_t: -10.0,
             glow: None,
             smoke_gpu: None,
             streak_gpu: None,
@@ -854,8 +865,9 @@ impl Fx {
         let big = size >= 3.0;
         let r_ball = 6.0 + 9.0 * size;
         let life = (1.3 + 0.24 * size).min(3.4);
-        // sizes capped: a capital kill must not white out the screen (fireball and rings carry the scale)
-        let fs = size.min(4.0);
+        // sizes capped: a capital kill must not white out the screen (fireball and rings carry the scale);
+        // the 0.13 s pops of a dying capital ship are capped harder, they overlap
+        let fs = if (1.5..6.0).contains(&size) { size.min(2.5) } else { size.min(4.0) };
         self.flash(p, 45.0 * fs, C_FLASH, 0.22);
         self.lens(p, 110.0 * fs, C_LENS, 0.3 + fs * 0.04);
         self.light(p, (6.0e7 * size * size).min(2.5e9), 0.5 + size * 0.1, C_LIGHT, true);
@@ -907,12 +919,10 @@ impl Fx {
         if size < 1.5 || size >= 6.0 || self.rng.f() < 0.35 {
             self.ring(p, 34.0 * size, false, 0.45 + size * 0.05, true, 0.09, None);
         }
-        // capitals: a flat, Star-Trek-like plasma ring wave (tilted, rarely edge-on)
-        if size >= 6.0 || (big && self.time - self.wave_t > 0.6) {
-            self.wave_t = self.time;
+        // a capital kill's final blast: a flat, Star-Trek-like plasma ring wave (tilted, rarely edge-on), as on the web
+        if size >= 6.0 {
             let axis = Vec3::new(self.rng.range(-0.8, 0.8), 1.0, self.rng.range(-0.8, 0.8)).normalize();
-            let (rs, lf) = if size >= 6.0 { (120.0 * size, 1.6) } else { (45.0 * size, 1.0) };
-            self.ring(p, rs, true, lf, false, 0.3, Some(axis));
+            self.ring(p, 120.0 * size, true, 1.6, false, 0.3, Some(axis));
         }
         if size >= 6.0 {
             // the final blast: a big white flash and secondary blasts rippling through the wreck
@@ -1102,6 +1112,17 @@ fn fx_messages(
             fx.hull_hit(h.pos, c);
             fx.flash(h.pos, 9.0, c, 0.15);
         }
+    }
+}
+
+/// Web jumpOut(): a blue flash and a ring where a ship leaves (the shot-down wingman, see weapons.rs).
+fn fx_jump_outs(mut fx: ResMut<Fx>, q: Query<&Transform, Added<crate::weapons::JumpedOut>>) {
+    if !fx.ready {
+        return;
+    }
+    for tf in &q {
+        fx.flash(tf.translation, 120.0, Vec3::new(2.0, 3.0, 5.0), 0.6);
+        fx.ring(tf.translation, 40.0, true, 0.6, false, 0.18, None);
     }
 }
 
@@ -1307,7 +1328,7 @@ fn fx_damage(
     }
     let ear = cam.translation();
     for (tf, ship, hit, vis, is_player) in &ships {
-        if !vis.get() || (is_player && settings.view == View::Cockpit) || tf.translation.distance_squared(ear) > 1800.0 * 1800.0 {
+        if !vis.get() || (is_player && settings.view == View::Cockpit) || tf.translation.distance_squared(ear) > 1600.0 * 1600.0 {
             continue;
         }
         let hp = ship.hp / ship.max_hp.max(1.0);
@@ -1335,7 +1356,7 @@ fn fx_damage(
         let n = ((k - 0.3) * 70.0 * dt + fx.rng.f()) as usize;
         let heavy = k > 0.65;
         for _ in 0..n {
-            let (sz, lf, shade) = if heavy { (fx.rng.range(5.0, 8.0), fx.rng.range(2.2, 3.4), fx.rng.range(0.2, 0.28)) } else { (fx.rng.range(3.0, 5.0), fx.rng.range(1.4, 2.2), fx.rng.range(0.32, 0.42)) };
+            let (sz, lf, shade) = if heavy { (fx.rng.range(5.0, 8.0), fx.rng.range(2.2, 3.4), fx.rng.range(0.2, 0.28)) } else { (fx.rng.range(3.0, 5.0), fx.rng.range(1.4, 2.2), fx.rng.range(0.42, 0.55)) };
             fx.smoke(p, sz, lf, wake, shade, if heavy { 0.85 } else { 0.6 }, 0.0);
             if heavy && fx.rng.f() < 0.5 {
                 let v = wake + Vec3::new(fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0));

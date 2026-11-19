@@ -591,7 +591,7 @@ impl HudBuilder {
             n.border_radius = BorderRadius::MAX;
             self.flare.push(p.spawn((n, BackgroundGradient::default(), Visibility::Hidden)).id());
         }
-        self.flare.push(p.spawn((abs_node(1200.0, 6.0), BackgroundGradient::default(), Visibility::Hidden)).id());
+        self.flare.push(p.spawn((abs_node(1200.0, STREAK_H), BackgroundGradient::default(), Visibility::Hidden)).id());
         let vignette = p
             .spawn((
                 Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
@@ -1456,7 +1456,7 @@ fn hud_alerts(
     if anim.cine_t < CINE_DUR {
         anim.cine_t += dt;
         let ct = anim.cine_t;
-        ui.show(ids.cine, ct < CINE_DUR);
+        ui.show(ids.cine, ct < CINE_DUR && !paused.0);
         decoded(&mut buf, &anim.cine[0], ct, 60.0);
         ui.text(ids.cine_kicker, &buf);
         decoded(&mut buf, &anim.cine[1], ct, 22.0);
@@ -1847,11 +1847,15 @@ fn hud_world(
         ui.show(streak, kq > 0);
         if let Ok(mut g) = ui.grad.get_mut(streak) {
             g.0 = vec![
-                LinearGradient::to_right(vec![
-                    ColorStop::auto(rgba(150, 200, 255, 0.0)),
-                    ColorStop::auto(rgba(200, 230, 255, 0.2 * k)),
-                    ColorStop::auto(rgba(150, 200, 255, 0.0)),
-                ])
+                RadialGradient::new(
+                    UiPosition::CENTER,
+                    RadialGradientShape::Ellipse(percent(50.0), percent(50.0)),
+                    vec![
+                        ColorStop::percent(rgba(200, 230, 255, 0.2 * k), 0.0),
+                        ColorStop::percent(rgba(170, 215, 255, 0.07 * k), 45.0),
+                        ColorStop::percent(rgba(150, 200, 255, 0.0), 100.0),
+                    ],
+                )
                 .into(),
             ];
         }
@@ -1861,9 +1865,12 @@ fn hud_world(
         for (i, (tpos, r, ..)) in GHOSTS.iter().enumerate() {
             ui.center(ids.flare[i], q + to_c * *tpos, Vec2::splat(100.0), 0.0, r * 2.0 / 100.0);
         }
-        ui.center(ids.flare[6], q, Vec2::new(1200.0, 6.0), 0.0, w / 1500.0);
+        ui.center(ids.flare[6], q, Vec2::new(1200.0, STREAK_H), 0.0, w / 1500.0);
     }
 }
+
+/// height of the lens flare's anamorphic streak (web 2.4 px, soft-edged here)
+const STREAK_H: f32 = 4.0;
 
 fn hide_pool(ui: &mut Ui, pool: &[Entity], from: usize) {
     for &e in pool.iter().skip(from) {
