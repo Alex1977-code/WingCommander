@@ -4,12 +4,12 @@
 //!
 //! Model hierarchy of a spawned ship:
 //! ```text
-//! Ship root (Ship, Hittable, InMission, Transform)
+//! Ship root (Ship, Hittable, InMission, Transform; capitals also HullBoxes)
 //! └─ ShipBody (banking rotates only this)
 //!    ├─ mesh parts (Mesh3d + MeshMaterial3d)
 //!    ├─ EngineNozzle at every nozzle exit (radius = nozzle radius)
 //!    ├─ Muzzle { idx } at every def.guns position (wing guns snapped to their pods, as on the web)
-//!    ├─ Turret { idx } at every def.turrets position (capitals; +Y = outward normal) with a turret head
+//!    ├─ Turret { idx } at every def.turrets position (capitals; +Y = outward normal) with a TurretHead
 //!    └─ Blinker nav lights (billboard halos)
 //! ```
 //!
@@ -61,7 +61,7 @@ pub struct Muzzle {
 
 /// Capital-ship turret mount (child of the body); `idx` indexes `ShipDef::turrets`. Local +Y is the hull's
 /// outward normal, local +Z the ship's forward direction projected onto the hull. Its child is the turret
-/// head (barrels along local +Z): rotate the Turret's Transform about local Y to aim it.
+/// head (`TurretHead`, barrels along local +Z), which weapons.rs turns towards the turret's target.
 #[allow(dead_code)] // read by other modules (weapons, cutscenes)
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Turret {
