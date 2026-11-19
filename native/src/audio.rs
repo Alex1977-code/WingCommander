@@ -20,7 +20,7 @@
 //! (the music is rendered even without an audio device) and logs their levels.
 
 use crate::common::*;
-use crate::mission::MissionResult;
+use crate::mission::{BayStatus, MissionResult};
 use bevy::audio::{AddAudioSource, AudioSink, AudioSinkPlayback, ChannelCount, Decodable, PlaybackMode, Sample, SampleRate, Source, Volume};
 use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
@@ -35,11 +35,20 @@ impl Plugin for SfxPlugin {
     fn build(&self, app: &mut App) {
         app.add_audio_source::<SynthClip>()
             .add_audio_source::<EngineVoice>()
+            .add_message::<BeepMsg>()
             .init_resource::<AudioState>()
             .add_systems(Startup, setup_audio)
             .add_systems(Update, (probe_audio, play_sfx, engine_hum, music).chain())
             .add_systems(PostUpdate, reap_voices);
     }
+}
+
+/// A signal beep of a given pitch and level (web `audio.beep(f, vol)`, default 880 Hz at 0.14): the hangar's
+/// launch lights, landing clearance, tractor beam. Played from the beep clip, re-pitched.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct BeepMsg {
+    pub freq: f32,
+    pub vol: f32,
 }
 
 /// Output sample rate of everything synthesized here.
@@ -716,10 +725,12 @@ fn play_sfx(
     settings: Res<Settings>,
     mut state: ResMut<AudioState>,
     mut msgs: MessageReader<SfxMsg>,
+    mut beeps: MessageReader<BeepMsg>,
     voices: Query<(), With<SfxVoice>>,
 ) {
     if state.device != Device::Present {
         msgs.clear();
+        beeps.clear();
         return;
     }
     let now = time.elapsed_secs();
@@ -758,12 +769,24 @@ fn play_sfx(
         };
         play(&mut state, sfx, vol, pitch);
     }
+    for b in beeps.read() {
+        // the clip is the web's default beep (880 Hz, level 0.14)
+        play(&mut state, Sfx::Beep, (b.vol / 0.14).clamp(0.0, 2.0), b.freq / 880.0);
+    }
 }
 
 /// Engine hum follows the player's drive; silent outside a mission, while paused or dead.
-fn engine_hum(state: Res<AudioState>, settings: Res<Settings>, paused: Res<Paused>, app_state: Res<State<AppState>>, players: Query<(&Ship, &Player), Without<Dying>>) {
+fn engine_hum(
+    state: Res<AudioState>,
+    settings: Res<Settings>,
+    paused: Res<Paused>,
+    app_state: Res<State<AppState>>,
+    bay: Option<Res<BayStatus>>,
+    players: Query<(&Ship, &Player), Without<Dying>>,
+) {
     let Some((_, params)) = state.engine.as_ref() else { return };
-    let flying = *app_state.get() == AppState::Flight && !paused.0;
+    // parked in the hangar after the landing: the drive is shut down (web audio.stopEngine)
+    let flying = *app_state.get() == AppState::Flight && !paused.0 && !bay.is_some_and(|b| b.engine_off);
     let (thr, boost, imp, on) = match players.iter().next() {
         Some((ship, p)) if flying => {
             let thr = (ship.speed / ship.def.speed.max(1.0)).clamp(0.0, 1.0);

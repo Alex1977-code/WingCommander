@@ -134,8 +134,9 @@ pub struct ShipModel {
 }
 
 /// Materials of the TUS Aurora's hangar signal lamps, energy field and clamps: shared handles a launch
-/// sequence may recolour (dim red/amber/green by default; field cyan, clamps amber).
-#[allow(dead_code)] // read by other modules (weapons, cutscenes)
+/// sequence may recolour (dim red/amber/green by default; field cyan, clamps amber). Use the setters
+/// (web `setBayLights` / `setBayField` / `setClamps`); they only touch an asset when its value changes.
+/// The handles are shared by every Aurora (menu backdrop too): reset with `reset` when a mission starts or ends.
 #[derive(Clone, Default)]
 pub struct BayLights {
     pub red: Handle<StandardMaterial>,
@@ -143,6 +144,46 @@ pub struct BayLights {
     pub green: Handle<StandardMaterial>,
     pub field: Handle<StandardMaterial>,
     pub clamp: Handle<StandardMaterial>,
+}
+
+/// web BAY_LIGHTS.field opacity at full strength
+const BAY_FIELD: f32 = 0.32;
+
+impl BayLights {
+    fn set(mats: &mut Assets<StandardMaterial>, h: &Handle<StandardMaterial>, c: LinearRgba) {
+        let want = Color::LinearRgba(c);
+        if mats.get(h).is_some_and(|m| m.base_color != want)
+            && let Some(mut m) = mats.get_mut(h)
+        {
+            m.base_color = want;
+        }
+    }
+    /// signal lamps over the bay mouth: red (engines pre-heat), amber (clamps release), green (go)
+    pub fn set_lamps(&self, mats: &mut Assets<StandardMaterial>, r: bool, a: bool, g: bool) {
+        let pick = |on: bool, lit: [f32; 3], off: [f32; 3]| {
+            let c = if on { lit } else { off };
+            LinearRgba::rgb(c[0], c[1], c[2])
+        };
+        Self::set(mats, &self.red, pick(r, [3.0, 0.15, 0.1], [0.25, 0.02, 0.02]));
+        Self::set(mats, &self.amber, pick(a, [3.0, 1.8, 0.1], [0.25, 0.15, 0.02]));
+        Self::set(mats, &self.green, pick(g, [0.2, 3.0, 0.6], [0.02, 0.25, 0.06]));
+    }
+    /// energy field across the bay mouth: 1 = closed, 0 = off (fades in between)
+    pub fn set_field(&self, mats: &mut Assets<StandardMaterial>, k: f32) {
+        // quantized: a fade does not touch the asset every frame for invisible steps
+        let k = (k.clamp(0.0, 1.0) * 40.0).round() / 40.0;
+        Self::set(mats, &self.field, LinearRgba::rgb(0.25, 0.7, 1.4) * (BAY_FIELD * k));
+    }
+    /// glow of the hold-down clamps (on while a ship is clamped / parked)
+    pub fn set_clamps(&self, mats: &mut Assets<StandardMaterial>, on: bool) {
+        Self::set(mats, &self.clamp, if on { LinearRgba::rgb(2.4, 1.1, 0.2) } else { LinearRgba::rgb(0.15, 0.12, 0.1) });
+    }
+    /// idle state: lamps dim, field closed, clamps lit (web startMission)
+    pub fn reset(&self, mats: &mut Assets<StandardMaterial>) {
+        self.set_lamps(mats, false, false, false);
+        self.set_field(mats, 1.0);
+        self.set_clamps(mats, true);
+    }
 }
 
 /// Meshes and materials for every ship type, built once at Startup.
