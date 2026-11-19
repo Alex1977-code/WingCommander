@@ -1575,7 +1575,6 @@ struct FxTest {
     big: bool,
     hits: bool,
     booms: bool,
-    first: f32,
     period: f32,
     size: Option<f32>,
     dist: f32,
@@ -1592,18 +1591,16 @@ impl FxTest {
             return None;
         }
         let num = |k: &str| std::env::var(k).ok().and_then(|s| s.parse::<f32>().ok());
-        let first = num("SF_FX_AT").unwrap_or(1.0);
         Some(Self {
             big: v == "big",
             hits: v != "boom" && v != "big",
             booms: v != "hits",
-            first,
             period: num("SF_FX_PERIOD").unwrap_or(3.0),
             size: num("SF_FX_SIZE"),
             dist: num("SF_FX_DIST").unwrap_or(140.0),
             t: 0.0,
             n: 0,
-            next: first,
+            next: num("SF_FX_AT").unwrap_or(1.0),
             count: 0,
         })
     }
