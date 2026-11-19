@@ -18,7 +18,7 @@ use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::camera::{Exposure, Hdr};
-use bevy::core_pipeline::prepass::MotionVectorPrepass;
+use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{GeneratedEnvironmentMapLight, NotShadowCaster, Skybox};
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -333,7 +333,7 @@ fn apply_quality(
     let mut ec = commands.entity(cam);
     if applied.map(|a| a.0) != Some(mode) {
         // temporal upscalers bring their own jitter / mip bias / motion vectors: clear all of it first
-        ec.remove::<(Dlss, TemporalAntiAliasing, Fxaa, ContrastAdaptiveSharpening, TemporalJitter, MipBias, MotionVectorPrepass)>();
+        ec.remove::<(Dlss, TemporalAntiAliasing, Fxaa, ContrastAdaptiveSharpening, TemporalJitter, MipBias, MotionVectorPrepass, DepthPrepass)>();
         match mode {
             AaMode::Dlss(u) => {
                 ec.insert((

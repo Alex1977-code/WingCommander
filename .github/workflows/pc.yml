@@ -7,7 +7,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: pc-build
+  group: pc-build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
@@ -54,8 +54,7 @@ jobs:
           cp -r native/assets "$OUT/"
           cp "$DLSS_SDK/lib/Windows_x86_64/rel/nvngx_dlss.dll" "$OUT/"
           cp "$DLSS_SDK/LICENSE.txt" "$OUT/DLSS-LICENSE.txt"
-          cp native/LIESMICH.txt "$OUT/" 2>/dev/null || true
-          cp native/THIRD_PARTY_NOTICES.txt "$OUT/" 2>/dev/null || true
+          cp native/LIESMICH.txt native/THIRD_PARTY_NOTICES.txt "$OUT/"
           7z a -tzip Sternenfront-PC.zip "$OUT" > /dev/null
       - uses: actions/upload-artifact@v4
         with:

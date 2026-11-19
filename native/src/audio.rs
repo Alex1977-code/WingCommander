@@ -708,7 +708,7 @@ impl AudioState {
     }
 }
 
-/// SfxMsg (and radio lines) -> sound effect voices.
+/// SfxMsg -> sound effect voices (the radio blip comes from hud.rs when a line is shown, as on the web).
 #[allow(clippy::too_many_arguments)]
 fn play_sfx(
     mut commands: Commands,
@@ -716,16 +716,13 @@ fn play_sfx(
     settings: Res<Settings>,
     mut state: ResMut<AudioState>,
     mut msgs: MessageReader<SfxMsg>,
-    mut comm: MessageReader<CommMsg>,
     voices: Query<(), With<SfxVoice>>,
 ) {
     if state.device != Device::Present {
         msgs.clear();
-        comm.clear();
         return;
     }
     let now = time.elapsed_secs();
-    let radio = comm.read().count() > 0;
     let mut active = voices.iter().count();
     let mut play = |state: &mut AudioState, sfx: Sfx, vol: f32, pitch: f32| {
         let i = sfx_clip(sfx);
@@ -741,9 +738,6 @@ fn play_sfx(
             SfxVoice { until: now + state.durations[i] / speed + 0.5 },
         ));
     };
-    if radio {
-        play(&mut state, Sfx::Comm, 1.0, 1.0);
-    }
     for m in msgs.read() {
         let r = state.rand();
         let (sfx, vol, pitch) = match *m {

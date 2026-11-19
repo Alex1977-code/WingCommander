@@ -208,7 +208,7 @@ pub struct HudConfig {
 
 impl Default for HudConfig {
     fn default() -> Self {
-        Self { visible: true, radar_in_cockpit: true }
+        Self { visible: true, radar_in_cockpit: false }
     }
 }
 
@@ -223,7 +223,7 @@ impl Plugin for HudPlugin {
             .init_resource::<CommQueue>()
             .add_message::<HudBanner>()
             .add_systems(Update, fit_ui_scale)
-            .add_systems(OnEnter(AppState::Flight), (spawn_hud, start_cine))
+            .add_systems(OnEnter(AppState::Flight), (spawn_hud, start_cine).chain())
             .add_systems(OnExit(AppState::Flight), |mut c: Commands, mut q: ResMut<CommQueue>| {
                 c.remove_resource::<HudIds>();
                 *q = CommQueue::default();

@@ -10,9 +10,7 @@ uuid = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[features]
-# CI and machines without the DLSS SDK can build without it (no DLSS, everything else the same)
-default = []
+# building needs the NVIDIA DLSS SDK (env DLSS_SDK) and Vulkan headers (env VULKAN_SDK), see .github/workflows/pc.yml
 
 [profile.dev]
 opt-level = 1

@@ -1080,6 +1080,7 @@ fn fx_messages(
     ships: ShipQuery,
     cam: Query<&GlobalTransform, With<MainCamera>>,
     mut shake: Option<ResMut<CameraShake>>,
+    settings: Res<Settings>,
 ) {
     if !fx.ready {
         explode.clear();
@@ -1101,16 +1102,20 @@ fn fx_messages(
     for h in hits.read() {
         let c = Vec3::new(h.color.red, h.color.green, h.color.blue);
         let ship = ships.get(h.ship).ok();
+        let own = ship.as_ref().is_some_and(|s| s.2);
+        let sc = if own { 0.45 } else { 1.0 };
         if h.shield {
-            fx.flash(h.pos, 10.0, c, 0.15);
+            fx.flash(h.pos, 10.0 * sc, c, 0.15);
             if let Some((tf, s, is_player)) = ship {
                 if !is_player {
                     fx.shield(h.ship, tf.translation, s.radius(), s.team, s.capital(), h.pos);
                 }
             }
         } else {
-            fx.hull_hit(h.pos, c);
-            fx.flash(h.pos, 9.0, c, 0.15);
+            if !(own && settings.view == View::Cockpit) {
+                fx.hull_hit(h.pos, c);
+            }
+            fx.flash(h.pos, 9.0 * sc, c, 0.15);
         }
     }
 }
@@ -1617,7 +1622,8 @@ fn fx_upload(
     }
 
     // upload what changed; draw order: smoke first, additive glows on top
-    let systems_list = [(fx.glow.as_mut(), 0.0), (fx.smoke_gpu.as_mut(), 1.0e5), (fx.streak_gpu.as_mut(), 0.0), (fx.ribbon_gpu.as_mut(), 0.0)];
+    let smoke_back = fx.smoke_order.first().map_or(0.0, |s| s.0.sqrt());
+    let systems_list = [(fx.glow.as_mut(), 0.0), (fx.smoke_gpu.as_mut(), smoke_back), (fx.streak_gpu.as_mut(), 0.0), (fx.ribbon_gpu.as_mut(), 0.0)];
     for (sys, back) in systems_list {
         let Some(sys) = sys else { continue };
         let alive = sys.staging.chunks_exact(3).any(|c| c[0][3] > 0.0);

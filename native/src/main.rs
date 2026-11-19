@@ -20,8 +20,6 @@ mod weapons;
 
 use bevy::anti_alias::dlss::DlssProjectId;
 use bevy::prelude::*;
-use bevy::render::RenderPlugin;
-use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::{PresentMode, WindowMode};
 use common::*;
 
@@ -29,11 +27,21 @@ use common::*;
 const DLSS_PROJECT: bevy::asset::uuid::Uuid = bevy::asset::uuid::uuid!("5b2f0c3e-6a51-4d7e-9a0e-3c1f7d2a9b44");
 
 fn main() {
+    // release builds have no console: write panics to %APPDATA%\Sternenfront\absturz.log
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = std::fs::write(
+            save_dir().join("absturz.log"),
+            format!("{info}\n\n{}", std::backtrace::Backtrace::force_capture()),
+        );
+        prev(info);
+    }));
     let settings: Settings = load_json("settings.json");
     let progress: Progress = load_json("progress.json");
     let data = GameData::load();
     App::new()
-        // DLSS only exists on the Vulkan backend: request it (wgpu picks DX12 on Windows otherwise)
+        // with the `dlss` feature Bevy creates a raw Vulkan instance (needed by DLSS) and falls back to
+        // DX12/other backends only when Vulkan is unavailable; then render.rs uses TAA/FXAA
         .insert_resource(DlssProjectId(DLSS_PROJECT))
         .add_plugins(
             DefaultPlugins
@@ -44,10 +52,6 @@ fn main() {
                         mode: if settings.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Primary) } else { WindowMode::Windowed },
                         ..default()
                     }),
-                    ..default()
-                })
-                .set(RenderPlugin {
-                    render_creation: RenderCreation::Automatic(Box::new(WgpuSettings { backends: Some(Backends::VULKAN), ..default() })),
                     ..default()
                 }),
         )

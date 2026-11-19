@@ -224,7 +224,7 @@ impl Plugin for FlightPlugin {
             .add_systems(Update, (player_flight, ai_steer, bank_bodies).chain().in_set(FlightSet::Steer))
             .add_systems(Update, move_ships.in_set(FlightSet::Move))
             .add_systems(Update, player_collisions.in_set(FlightSet::Collide))
-            .add_systems(Update, cursor_capture);
+            .add_systems(Update, cursor_capture.after(FlightSet::Ai));
     }
 }
 
