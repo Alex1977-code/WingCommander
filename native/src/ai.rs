@@ -5,10 +5,13 @@
 //! Test hook: SF_AI_LOG=1 prints every fighter's state every 3 s.
 
 use crate::common::*;
-use crate::flight::{hull_distance, FlightSet, Obstacle};
+use crate::flight::{hull_distance, FlightSet, Obstacle, MAX_DT};
 use bevy::prelude::*;
 
 pub struct AiPlugin;
+
+/// The wingman only engages hostiles within this distance of the player.
+const WING_LEASH: f32 = 3000.0;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
@@ -210,7 +213,7 @@ fn think(
         AiQuery,
     )>,
 ) {
-    let dt = time.delta_secs().min(0.1);
+    let dt = time.delta_secs().min(MAX_DT);
     chatter.clock += dt;
     snaps.clear();
     rocks.clear();
@@ -290,10 +293,16 @@ fn think(
         // ---- fighters ----
         st.retarget -= dt;
         st.evade_t -= dt;
-        let tgt_alive = ai.target.and_then(|t| snaps.iter().find(|s| s.e == t)).filter(|s| s.e != e).copied();
-        let mut tgt = tgt_alive;
+        let leash = if ai.wingman { lead.map(|l| l.pos) } else { None };
+        let mut tgt = ai.target.and_then(|t| snaps.iter().find(|s| s.e == t)).filter(|s| s.e != e).copied();
+        // the wingman lets a target go that drags him too far from the player
+        if let (Some(t), Some(l)) = (tgt, leash) {
+            if t.pos.distance_squared(l) > WING_LEASH * WING_LEASH * 1.3 {
+                tgt = None;
+            }
+        }
         if tgt.is_none() || st.retarget <= 0.0 {
-            tgt = pick_target(&snaps, e, pos, &ship, ai.wingman, &ctx, &mut rng, &player_targets);
+            tgt = pick_target(&snaps, e, pos, &ship, leash, &ctx, &mut rng, &player_targets);
             ai.target = tgt.map(|t| t.e);
             st.retarget = rng.range(3.0, 6.0);
             // the wingman calls it when it peels an enemy off the player's tail
@@ -404,7 +413,7 @@ fn pick_target(
     me: Entity,
     pos: Vec3,
     ship: &Ship,
-    wingman: bool,
+    leash: Option<Vec3>,
     ctx: &AiContext,
     rng: &mut AiRng,
     player_targets: &dyn Fn(Entity, &[Snap]) -> bool,
@@ -431,12 +440,20 @@ fn pick_target(
         if o.player {
             d *= if ship.team == Team::Aszendenz && !want_cap { 0.28 } else { 0.75 };
         }
+        // the wingman fights near the player: far fights are left alone, nearer ones are preferred
+        if let Some(l) = leash {
+            let dl = o.pos.distance(l);
+            if dl > WING_LEASH {
+                continue;
+            }
+            d += dl * 0.5;
+        }
         if ship.team == Team::Union && !o.capital {
             if player_targets(o.e, snaps) {
                 d *= 3.0;
             }
             if o.hunts_player {
-                d *= if wingman { 0.45 } else { 0.7 };
+                d *= if leash.is_some() { 0.45 } else { 0.7 };
             }
         }
         d *= rng.range(0.8, 1.2);

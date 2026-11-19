@@ -6,15 +6,15 @@
 //! - SF_MISSION_LOG=1  print phase / nav / wave changes and the result to stdout
 //! - SF_AUTOJUMP=1     use the autopilot whenever it is available (skips the long flights, for screenshots)
 //! - SF_WAVE_DIST=<m> enemy waves jump in this far ahead of the player (dogfight screenshots)
-//! - SF_TIMESCALE=<x>  run the game clock x times faster (timer / fail tests)
+//! - SF_TIMESCALE=<x>  run the game clock x times faster (as far as the frame rate allows: steps are capped)
 //! - SF_AUTOWIN=1      cheat: player invulnerable, hostiles vanish one by one, objectives are flown for you;
 //!                     the game quits after the debrief appears (end-to-end test of every mission)
-//! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman after s seconds of mission time
-//!                     (failure paths); the game also quits after the debrief
+//! - SF_TEST_KILL=<who>@<s>  destroy the player / protect / convoy / wingman, or run out the timer (`timer`),
+//!                     after s seconds of mission time (failure paths); the game quits after the debrief
 
 use crate::ai::{AiContext, AiRng, Cruise};
 use crate::common::*;
-use crate::flight::{rotation_facing as facing, AutopilotRequest, Obstacle};
+use crate::flight::{rotation_facing as facing, AutopilotRequest, Obstacle, MAX_DT};
 use crate::render::CameraCutMsg;
 use crate::ships::{spawn_ship, ShipLibrary};
 use crate::weapons::{JumpedOut, WeaponsSet};
@@ -829,8 +829,8 @@ fn update_mission(
     pickups: Query<(Entity, &Transform), (With<Pickup>, Without<Ship>)>,
     obstacles: Query<(&Transform, &Obstacle), Without<Ship>>,
 ) {
-    // timers run on game time (Time<Virtual> already caps a hitch at 0.25 s)
-    let dt = time.delta_secs();
+    // same step as the flight model (web: dt capped at 0.05), so timers and ships agree on slow frames
+    let dt = time.delta_secs().min(MAX_DT);
     if st.ended || st.outcome.is_some() {
         return;
     }
@@ -1233,7 +1233,7 @@ fn update_mines(
     mut sfx: MessageWriter<SfxMsg>,
     mut fired: Local<Vec<(Entity, Vec3)>>,
 ) {
-    let dt = time.delta_secs().min(0.1);
+    let dt = time.delta_secs().min(MAX_DT);
     fired.clear();
     for e in shot.0.drain(..) {
         if let Ok((e, tf, _)) = mines.get(e) {
@@ -1672,9 +1672,18 @@ fn autowin(
 }
 
 /// SF_TEST_KILL: destroys the named ship(s) with real damage once, to test the failure and wingman paths.
-fn test_kill(st: Res<MissionState>, test: Res<TestHooks>, ships: Query<(Entity, &Transform, &Ship), Without<Dying>>, mut done: Local<bool>, mut dmg: MessageWriter<DamageMsg>) {
+fn test_kill(mut st: ResMut<MissionState>, test: Res<TestHooks>, ships: Query<(Entity, &Transform, &Ship), Without<Dying>>, mut done: Local<bool>, mut dmg: MessageWriter<DamageMsg>) {
     let Some((who, at)) = &test.kill else { return };
     if *done || st.time < *at {
+        return;
+    }
+    if who == "timer" {
+        // run out the current time limit (it may only start at the nav: wait for it)
+        if st.timer.is_some() {
+            *done = true;
+            st.timer = Some(0.5);
+            println!("[mission] TEST: timer runs out");
+        }
         return;
     }
     let victims: Vec<Entity> = match who.as_str() {
