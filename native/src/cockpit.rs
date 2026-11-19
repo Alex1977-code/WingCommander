@@ -1015,7 +1015,7 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
     // cracks in the canopy glass (the texture grows with heavy hits)
     let d = 0.5;
     let (a, c) = (l.s(-1.0, 1.0, d), l.s(1.0, -0.28, d));
-    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, a.z));
     b.commands.entity(cl).insert((CrackLayer, Visibility::Hidden));
     // HUD combiner frame
     let hc = l.s(0.0, -0.3, 0.58);

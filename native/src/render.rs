@@ -555,7 +555,8 @@ fn keep_in_bay(c: &Transform, ship: Vec3, cam: Vec3) -> Vec3 {
     if k <= 0.0 {
         return cam;
     }
-    let inside = Vec3::new(lc.x.clamp(-(b.hw - 1.5), b.hw - 1.5), lc.y.clamp(b.y - b.hh + 1.2, b.y + b.hh - 1.2), lc.z.max(b.back + 2.0));
+    // below the signal lamps hanging under the ceiling at the mouth (the camera must never sit in them)
+    let inside = Vec3::new(lc.x.clamp(-(b.hw - 1.5), b.hw - 1.5), lc.y.clamp(b.y - b.hh + 1.2, b.y + b.hh - 2.6), lc.z.max(b.back + 2.0));
     c.translation + c.rotation * lc.lerp(inside, k)
 }
 

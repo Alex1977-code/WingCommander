@@ -161,6 +161,8 @@ pub struct BayStatus {
     pub inside: bool,
     /// the player's position in carrier coordinates (for the guidance displays)
     pub local: Vec3,
+    /// the view the player had chosen before the launch forced the cockpit view: settings.json keeps this one
+    pub view_saved: Option<View>,
 }
 
 /// Launch: the lamps turn green (own thrust) this many seconds after the start (red -> amber at 1.2 s).
@@ -1801,7 +1803,8 @@ fn bay_seq(
                         p.held = false;
                         p.out = true;
                         out += 1;
-                        ship.speed = c_spd + p.v;
+                        // no faster than the player left the tube (carrier + 25), so he does not overtake him closely
+                        ship.speed = c_spd + p.v.min(25.0);
                         commands.entity(e).try_remove::<SeqHold>();
                     }
                     continue;
@@ -2062,6 +2065,7 @@ fn bay_seq(
     io.status.landing = me.filter(|p| p.held).and_then(|p| p.stage.map(|s| (s, p.stop.unwrap_or(BAY.back + 18.0))));
     io.status.land_clear = st.phase == Phase::Return && st.land_clear && ctf.is_some() && !me.is_some_and(|p| p.held);
     io.status.engine_off = st.engine_off;
+    io.status.view_saved = st.view_saved;
     let local = match (ctf, me.and_then(|p| ships.get(p.e).ok())) {
         (Some(c), Some(s)) => Some(bay_local(&c, s.1.translation)),
         _ => None,
