@@ -1899,6 +1899,7 @@ fn arrow(ui: &mut Ui, pr: &Proj, e: Entity, world: Vec3, cockpit: bool) {
 /// `SF_HUD_TEST=1`: fills mission status, radio and banner with sample data (screenshots before mission.rs).
 fn hud_test_hook(
     mut done: Local<bool>,
+    mut banner_done: Local<bool>,
     anim: Res<HudAnim>,
     mut status: ResMut<MissionStatus>,
     mut comm: MessageWriter<CommMsg>,
@@ -1928,6 +1929,10 @@ fn hud_test_hook(
         *done = true;
         comm.write(CommMsg { who: "rook".into(), text: "Rook an {cs}: Zwei Dorns auf zwölf Uhr. Ich nehme den linken, du den rechten.".into() });
         comm.write(CommMsg { who: "brandt".into(), text: "Aurora an Nachtfalken: Gute Jagd.".into() });
+    }
+    // late enough for a screenshot after the slow first frames of a software renderer (SF_SHOT_AT=7)
+    if !*banner_done && anim.time > 5.5 {
+        *banner_done = true;
         banner.write(HudBanner("Neue Feindwelle · Nav 2".into()));
     }
 }

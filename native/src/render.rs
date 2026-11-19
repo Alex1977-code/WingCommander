@@ -486,9 +486,9 @@ fn camera_rig(
                 ct.translation = MENU_FOCUS + orbit;
                 ct.look_at(MENU_FOCUS, Vec3::Y);
                 // the title menu covers the left ~45 % of the screen: turn the view left so the ships sit
-                // at ~38 % right of the centre
+                // at ~42 % right of the centre
                 let half_h = (62f32.to_radians() * 0.5).tan() * aspect;
-                ct.rotate_local_y((0.38 * half_h).atan());
+                ct.rotate_local_y((0.42 * half_h).atan());
             } else {
                 // briefing, debrief, flight without a pilot: the view drifts slowly (no shake: nothing would
                 // take its offset back out again)
