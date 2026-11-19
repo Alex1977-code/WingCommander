@@ -6,7 +6,9 @@
 //! spawned once per mission and only re-coloured / moved afterwards; text is rewritten only when it changes.
 
 use crate::common::*;
+use crate::mission::{BayStatus, LandStage, LAUNCH_GO};
 use crate::render::SkyInfo;
+use crate::ships::AURORA_BAY;
 use crate::weapons::{PlayerAim, SeekerWarning};
 use bevy::asset::io::file::FileAssetReader;
 use bevy::camera::CameraUpdateSystems;
@@ -226,12 +228,14 @@ impl Plugin for HudPlugin {
             .add_systems(OnEnter(AppState::Flight), (spawn_hud, start_cine).chain())
             .add_systems(OnExit(AppState::Flight), |mut c: Commands, mut q: ResMut<CommQueue>| {
                 c.remove_resource::<HudIds>();
+                c.remove_resource::<BayHud>();
                 *q = CommQueue::default();
             })
             .add_systems(Update, (hud_test_hook, hud_status, hud_comm, hud_alerts).chain().run_if(flying.clone()).run_if(resource_exists::<HudIds>))
             .add_systems(
                 PostUpdate,
-                hud_world
+                (hud_world, hud_bay.run_if(resource_exists::<BayHud>).run_if(resource_exists::<BayStatus>))
+                    .chain()
                     .after(crate::render::CameraRigSet)
                     .after(TransformSystems::Propagate)
                     .after(CameraUpdateSystems)
@@ -423,6 +427,13 @@ impl Ui<'_, '_> {
         self.text(t.text, s);
         self.text_color(t.text, color);
     }
+    /// centre a wide text (`spawn_wide_text`) horizontally on `p`, its top at p.y
+    fn tag_wide(&mut self, t: Tag, p: Vec2, s: &str, color: Color) {
+        self.show(t.root, true);
+        self.place(t.root, Vec2::new(p.x - BAY_TEXT_W * 0.5, p.y), 0.0, 1.0);
+        self.text(t.text, s);
+        self.text_color(t.text, color);
+    }
     fn width_pct(&mut self, e: Entity, k: f32) {
         if let Ok(mut n) = self.nodes.get_mut(e) {
             let want = percent((k.clamp(0.0, 1.0) * 1000.0).round() / 10.0);
@@ -566,6 +577,11 @@ fn spawn_hud(mut commands: Commands, f: Res<UiFonts>, cam: Query<Entity, With<Ma
     commands.entity(root).with_children(|p| b.build(p, &f, &ship_name));
     let ids = b.finish(root);
     commands.insert_resource(ids);
+    let mut bay = None;
+    commands.entity(root).with_children(|p| bay = Some(spawn_bay_hud(p, &f)));
+    if let Some(bay) = bay {
+        commands.insert_resource(bay);
+    }
 }
 
 /// Collects entity ids while the HUD tree is spawned.
@@ -1529,6 +1545,7 @@ fn hud_world(
     cfg: Res<HudConfig>,
     status: Res<MissionStatus>,
     sky: Option<Res<SkyInfo>>,
+    bay: Option<Res<BayStatus>>,
     scale: Res<UiScale>,
     mut anim: ResMut<HudAnim>,
     cam: Query<(&Camera, &GlobalTransform, &Projection), With<MainCamera>>,
@@ -1817,7 +1834,9 @@ fn hud_world(
     }
 
     // sun lens flare (web: ghosts along the line through the screen centre, plus an anamorphic streak)
-    let flare = sky.as_deref().and_then(|s| {
+    // (none inside the hangar tube: the hull hides the sun)
+    let in_bay = bay.is_some_and(|b| b.inside);
+    let flare = sky.as_deref().filter(|_| !in_bay).and_then(|s| {
         let q = pr.project(cam_tf.translation() + s.sun_dir * 20000.0)?;
         let off = ((q.x - w * 0.5).abs() / (w * 0.75)).max((q.y - h * 0.5).abs() / (h * 0.75)) - 0.6;
         let k = (1.0 - off.max(0.0) * 2.5).clamp(0.0, 1.0) * s.sun_visible.clamp(0.0, 1.0);
@@ -1877,6 +1896,292 @@ fn hud_world(
         }
         ui.center(ids.flare[6], q, Vec2::new(1200.0, STREAK_H), 0.0, w / 1500.0);
     }
+}
+
+// ---------- hangar: launch lights, landing guidance, approach aids (web hud.js seqHud / landHud) ----------
+
+const LAMP_COLS: [Color; 3] = [rgba(255, 61, 78, 1.0), rgba(255, 194, 61, 1.0), rgba(77, 255, 138, 1.0)];
+const LAMP_OFF: Color = rgba(40, 40, 40, 0.7);
+const BAY_TEXT_W: f32 = 1600.0;
+const SEQ_R: f32 = 120.0;
+const ILS_R: f32 = 120.0;
+
+/// Elements of the hangar overlay (children of the HUD root, so they hide with it).
+#[derive(Resource)]
+struct BayHud {
+    lamps: [Entity; 3],
+    /// launch countdown text / landing stage / "START FREI" (centred at 30 % height)
+    head: Tag,
+    /// stop mark distance and speed (landing on rails) or range and speed (hand landing)
+    sub: Tag,
+    /// hand landing: guidance title under the reticle
+    hint: Tag,
+    /// landing on rails: centre-line box
+    cross_box: Entity,
+    needle_v: Entity,
+    needle_h: Entity,
+    dots: [Entity; 8],
+    rings: [Entity; 6],
+    marker: Entity,
+    marker_tag: Tag,
+}
+
+fn spawn_wide_text(p: &mut ChildSpawnerCommands, f: &Handle<Font>, size: f32, color: Color) -> Tag {
+    let mut text = Entity::PLACEHOLDER;
+    let root = p
+        .spawn((
+            Node { position_type: PositionType::Absolute, left: px(0.0), top: px(0.0), width: px(BAY_TEXT_W), justify_content: JustifyContent::Center, ..default() },
+            Visibility::Hidden,
+            Pickable::IGNORE,
+        ))
+        .with_children(|b| {
+            text = b.spawn((label(f, size, color, 2.0, ""), TextLayout::justify(Justify::Center))).id();
+        })
+        .id();
+    Tag { root, text }
+}
+
+fn spawn_bay_hud(p: &mut ChildSpawnerCommands, f: &UiFonts) -> BayHud {
+    let line = |p: &mut ChildSpawnerCommands, w: f32, h: f32, c: Color| p.spawn((abs_node(w, h), BackgroundColor(c), Visibility::Hidden, Pickable::IGNORE)).id();
+    let rings = std::array::from_fn(|_| {
+        let mut n = abs_node(10.0, 10.0);
+        n.border = UiRect::all(px(2.0));
+        n.border_radius = BorderRadius::MAX;
+        p.spawn((n, BorderColor::all(CYAN), Visibility::Hidden, Pickable::IGNORE)).id()
+    });
+    // bay marker: four L-shaped corners on a box resized to the bay mouth on screen
+    let marker = p
+        .spawn((abs_node(60.0, 30.0), Visibility::Hidden, Pickable::IGNORE))
+        .with_children(|b| {
+            for (top, left) in [(true, true), (true, false), (false, true), (false, false)] {
+                let mut n = Node { position_type: PositionType::Absolute, width: px(22.0), height: px(14.0), ..default() };
+                let w = px(3.0);
+                if top {
+                    n.top = px(0.0);
+                    n.border.top = w;
+                } else {
+                    n.bottom = px(0.0);
+                    n.border.bottom = w;
+                }
+                if left {
+                    n.left = px(0.0);
+                    n.border.left = w;
+                } else {
+                    n.right = px(0.0);
+                    n.border.right = w;
+                }
+                b.spawn((n, BorderColor::all(LAMP_COLS[2]), BoxShadow::new(with_alpha(LAMP_COLS[2], 0.6), px(0.0), px(0.0), px(0.0), px(8.0))));
+            }
+        })
+        .id();
+    let marker_tag = spawn_wide_text(p, &f.display, 16.0, LAMP_COLS[2]);
+    let mut cb = abs_node(SEQ_R * 2.0, SEQ_R * 2.0);
+    cb.border = UiRect::all(px(1.5));
+    let cross_box = p.spawn((cb, BorderColor::all(rgba(127, 214, 255, 0.5)), Visibility::Hidden, Pickable::IGNORE)).id();
+    let needle_v = line(p, 3.5, ILS_R * 2.0, AMBER);
+    let needle_h = line(p, ILS_R * 2.0, 3.5, AMBER);
+    let dots = std::array::from_fn(|_| {
+        let mut n = abs_node(6.0, 6.0);
+        n.border = UiRect::all(px(1.2));
+        n.border_radius = BorderRadius::MAX;
+        p.spawn((n, BorderColor::all(rgba(127, 214, 255, 0.45)), Visibility::Hidden, Pickable::IGNORE)).id()
+    });
+    let lamps = std::array::from_fn(|i| {
+        let mut n = abs_node(52.0, 52.0);
+        n.border = UiRect::all(px(3.0));
+        n.border_radius = BorderRadius::MAX;
+        p.spawn((n, BackgroundColor(LAMP_OFF), BorderColor::all(rgba(0, 0, 0, 0.8)), BoxShadow::new(with_alpha(LAMP_COLS[i], 0.0), px(0.0), px(0.0), px(0.0), px(30.0)), Visibility::Hidden, Pickable::IGNORE))
+            .id()
+    });
+    BayHud {
+        lamps,
+        head: spawn_wide_text(p, &f.display, 28.0, CYAN),
+        sub: spawn_wide_text(p, &f.bold, 24.0, CYAN),
+        hint: spawn_wide_text(p, &f.display, 22.0, GREEN),
+        cross_box,
+        needle_v,
+        needle_h,
+        dots,
+        rings,
+        marker,
+        marker_tag,
+    }
+}
+
+/// Launch signal lights and countdown (engines pre-heat, clamps release, own thrust), the landing guidance
+/// on rails (centre-line cross, range to the stop mark) and, flying by hand with clearance, the approach
+/// aids: beam rings every 120 m in front of the bay, the bay marker, ILS needles, range and speed.
+#[allow(clippy::too_many_arguments)]
+fn hud_bay(
+    hud: Res<BayHud>,
+    bay: Res<BayStatus>,
+    scale: Res<UiScale>,
+    cam: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    player: Query<(&GlobalTransform, &Ship), (With<Player>, Without<Dying>)>,
+    mut shadows: Query<&mut BoxShadow>,
+    mut ui: Ui,
+    mut buf: Local<String>,
+) {
+    let Ok((camera, cam_tf)) = cam.single() else { return };
+    let Some(vp) = camera.logical_viewport_size() else { return };
+    let pr = Proj { view: cam_tf.affine().inverse().into(), clip: camera.clip_from_view(), size: vp / scale.0.max(0.01) };
+    let (w, h) = (pr.size.x, pr.size.y);
+    let cx = w * 0.5;
+    let pl = player.iter().next();
+    let b = &AURORA_BAY;
+    let l = bay.local;
+    let speed = pl.map_or(0.0, |p| p.1.speed);
+
+    let launch = bay.launch_t.filter(|_| pl.is_some());
+    let landing = bay.landing.filter(|_| pl.is_some());
+    let hand = bay.land_clear && pl.is_some() && landing.is_none() && launch.is_none();
+    let mut head_on = false;
+    let mut sub_on = false;
+    let mut hint_on = false;
+
+    // ---- launch lights ----
+    let lit = launch.map(|t| if t < 1.2 { 0 } else if t < LAUNCH_GO { 1 } else { 2 });
+    for (i, &e) in hud.lamps.iter().enumerate() {
+        ui.show(e, lit.is_some());
+        if let Some(lit) = lit {
+            let on = i == lit;
+            ui.center(e, Vec2::new(cx + (i as f32 - 1.0) * 80.0, h * 0.3), Vec2::splat(52.0), 0.0, 1.0);
+            ui.bg(e, if on { LAMP_COLS[i] } else { LAMP_OFF });
+            if let Ok(mut s) = shadows.get_mut(e) {
+                let want = with_alpha(LAMP_COLS[i], if on { 0.85 } else { 0.0 });
+                if s.0.first().is_some_and(|x| x.color != want) {
+                    s.0[0].color = want;
+                }
+            }
+        }
+    }
+    if let (Some(t), Some(lit)) = (launch, lit) {
+        let left = (LAUNCH_GO - t).ceil().max(1.0) as i32;
+        buf.clear();
+        let _ = match lit {
+            2 => write!(buf, "START FREI • TRIEBWERK VOLL"),
+            1 => write!(buf, "HALTEMAGNETE GELÖST • SCHLEUSENFELD AUS • {left}"),
+            _ => write!(buf, "TRIEBWERKE VORGLÜHEN • {left}"),
+        };
+        ui.tag_wide(hud.head, Vec2::new(cx, h * 0.3 + 50.0), &buf, LAMP_COLS[lit]);
+        head_on = true;
+    } else if bay.in_bay && pl.is_some() {
+        ui.tag_wide(hud.head, Vec2::new(cx, h * 0.3 - 16.0), "START FREI • SCHUB GEBEN • RAUS AUS DER BUCHT", LAMP_COLS[2]);
+        head_on = true;
+    }
+
+    // ---- landing on rails ----
+    ui.show(hud.cross_box, landing.is_some());
+    if let Some((stage, stop)) = landing {
+        let title = match stage {
+            LandStage::Parked => "AUFGESETZT",
+            LandStage::Final => "ENDANFLUG • BUCHT 1",
+            LandStage::Approach => "LANDEANFLUG • AUTOPILOT",
+        };
+        ui.tag_wide(hud.head, Vec2::new(cx, h * 0.3 - 16.0), title, CYAN);
+        head_on = true;
+        // centre-line cross: how far the ship is off the bay axis
+        let gy = h * 0.5;
+        ui.center(hud.cross_box, Vec2::new(cx, gy), Vec2::splat(SEQ_R * 2.0), 0.0, 1.0);
+        let dx = (l.x / 30.0).clamp(-1.0, 1.0);
+        let dy = ((l.y - b.y) / 20.0).clamp(-1.0, 1.0);
+        ui.show(hud.needle_v, true);
+        ui.show(hud.needle_h, true);
+        ui.bg(hud.needle_v, AMBER);
+        ui.bg(hud.needle_h, AMBER);
+        ui.center(hud.needle_v, Vec2::new(cx - dx * SEQ_R, gy), Vec2::new(3.5, SEQ_R * 2.0), 0.0, 1.0);
+        ui.center(hud.needle_h, Vec2::new(cx, gy + dy * SEQ_R), Vec2::new(SEQ_R * 2.0, 3.5), 0.0, 1.0);
+        if stage == LandStage::Final {
+            buf.clear();
+            let _ = write!(buf, "STOPPMARKE {} M · {} M/S", (l.z - stop).max(0.0).round(), speed.round());
+            ui.tag_wide(hud.sub, Vec2::new(cx, gy + SEQ_R + 22.0), &buf, CYAN);
+            sub_on = true;
+        }
+    }
+
+    // ---- hand landing: approach beam, bay marker, ILS needles ----
+    let c = bay.carrier;
+    let world = |x: f32, y: f32, z: f32| c.map_or(Vec3::ZERO, |c| c.translation + c.rotation * Vec3::new(x, y, z));
+    let dist = l.z - b.mouth;
+    let cam_pos = cam_tf.translation();
+    for (i, &e) in hud.rings.iter().enumerate() {
+        // k = 6 .. 1: rings every 120 m in front of the bay, the farthest first
+        let k = 6 - i;
+        let pt = world(0.0, b.y, b.mouth + k as f32 * 120.0);
+        let q = if hand && c.is_some() { pr.project(pt) } else { None };
+        ui.show(e, q.is_some());
+        if let Some(q) = q {
+            let r = (16.0 / cam_pos.distance(pt).max(1.0) * h * 1.1).max(8.0);
+            let passed = dist < k as f32 * 120.0;
+            let a = if passed { 0.25 } else { 0.35 + 0.1 * (6 - k) as f32 };
+            ui.size(e, r * 3.2, r * 2.0);
+            ui.center(e, q, Vec2::new((r * 3.2).round(), (r * 2.0).round()), 0.0, 1.0);
+            ui.border(e, rgba(127, 214, 255, (a * 20.0).round() / 20.0));
+        }
+    }
+    let m = if hand && c.is_some() { pr.project(world(0.0, b.y, b.mouth)) } else { None };
+    ui.show(hud.marker, m.is_some());
+    if let Some(m) = m {
+        let d_cam = cam_pos.distance(world(0.0, b.y, b.mouth)).max(1.0);
+        let bw = (b.hw / d_cam * h * 1.2).max(40.0);
+        let bh = (b.hh / d_cam * h * 1.2).max(18.0);
+        ui.size(hud.marker, bw * 2.0, bh * 2.0);
+        ui.center(hud.marker, m, Vec2::new((bw * 2.0).round(), (bh * 2.0).round()), 0.0, 1.0);
+        ui.tag_wide(hud.marker_tag, Vec2::new(m.x, m.y - bh - 26.0), "BUCHT 1", LAMP_COLS[2]);
+    } else {
+        ui.show(hud.marker_tag.root, false);
+    }
+    let ils = hand && dist > -10.0 && dist < 2500.0;
+    if hand {
+        let cy = h * 0.47;
+        let facing = pl.is_some_and(|(ptf, _)| c.is_some_and(|c| (c.rotation.inverse() * (ptf.rotation() * Vec3::Z)).z < -0.85));
+        let fast = speed > 120.0;
+        let aligned = l.x.abs() < 6.0 && (l.y - b.y).abs() < 3.0;
+        if ils {
+            let k = (dist * 0.06).max(20.0);
+            let dx = (-l.x / k).clamp(-1.0, 1.0);
+            let dy = ((l.y - b.y) / k).clamp(-1.0, 1.0);
+            let col = if aligned { GREEN } else { AMBER };
+            ui.bg(hud.needle_v, col);
+            ui.bg(hud.needle_h, col);
+            ui.center(hud.needle_v, Vec2::new(cx + dx * ILS_R, cy), Vec2::new(3.5, ILS_R * 2.0), 0.0, 1.0);
+            ui.center(hud.needle_h, Vec2::new(cx, cy + dy * ILS_R), Vec2::new(ILS_R * 2.0, 3.5), 0.0, 1.0);
+            for (i, &e) in hud.dots.iter().enumerate() {
+                let d = [-1.0, -0.5, 0.5, 1.0][i % 4];
+                let p = if i < 4 { Vec2::new(cx + d * ILS_R, cy + ILS_R + 12.0) } else { Vec2::new(cx + ILS_R + 12.0, cy + d * ILS_R) };
+                ui.center(e, p, Vec2::splat(6.0), 0.0, 1.0);
+            }
+        }
+        let title = if dist < 0.0 {
+            "IN DER BUCHT"
+        } else if !facing {
+            "AUSRICHTEN • NASE ZUR BUCHT"
+        } else if fast {
+            "ZU SCHNELL • SCHUB RAUS"
+        } else if aligned {
+            "AUF DEM LEITSTRAHL"
+        } else {
+            "ANFLUG BUCHT 1"
+        };
+        ui.tag_wide(hud.hint, Vec2::new(cx, cy + ILS_R + 40.0), title, if !facing || fast { AMBER } else { GREEN });
+        hint_on = true;
+        if ils {
+            buf.clear();
+            let _ = write!(buf, "{} M · {} M/S (MAX 120)", dist.max(0.0).round(), speed.round());
+            ui.tag_wide(hud.sub, Vec2::new(cx, cy + ILS_R + 72.0), &buf, if fast { RED } else { CYAN });
+            sub_on = true;
+        }
+    }
+    if landing.is_none() {
+        ui.show(hud.needle_v, ils);
+        ui.show(hud.needle_h, ils);
+    }
+    for &e in &hud.dots {
+        ui.show(e, ils);
+    }
+    ui.show(hud.head.root, head_on);
+    ui.show(hud.sub.root, sub_on);
+    ui.show(hud.hint.root, hint_on);
 }
 
 /// height of the lens flare's anamorphic streak (web 2.4 px, soft-edged here)

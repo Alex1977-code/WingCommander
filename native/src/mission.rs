@@ -15,6 +15,9 @@
 //! - SF_FLAGS=a,b,...  extra story flags for this run (on top of story.json)
 //! - SF_TEST_RETURN=1  skip every nav point once the launch is over: straight to the return and landing
 //! - SF_NO_BAY=1       start in front of the carrier and "land" by proximity (the web's non-bay fallback)
+//! - SF_BAY_FREEZE=<s> the launch countdown stops at s seconds (screenshots of the red / amber phase)
+//! - SF_LAND_FREEZE=<z> the player's landing on rails stops once it is at carrier-local z <= this (screenshots)
+//! - SF_BAY_CHASE=1    keep the chase view during the launch (screenshots; the game forces the cockpit)
 //!
 //! Launch and landing (web startLaunch / startLanding / captureInBay / updateSeq): every mission starts
 //! clamped in the TUS Aurora's hangar bay (red: engines pre-heat, amber: clamps release and the bay field
@@ -60,6 +63,8 @@ impl Plugin for MissionPlugin {
             }),
             test_return: env_on("SF_TEST_RETURN"),
             no_bay: env_on("SF_NO_BAY"),
+            bay_freeze: std::env::var("SF_BAY_FREEZE").ok().and_then(|v| v.parse().ok()),
+            land_freeze: std::env::var("SF_LAND_FREEZE").ok().and_then(|v| v.parse().ok()),
         };
         app            .add_message::<WarpFlashMsg>()
             .init_resource::<MissionState>()
@@ -147,6 +152,10 @@ pub struct BayStatus {
     pub land_clear: bool,
     /// everybody parked: the drive is shut down
     pub engine_off: bool,
+    /// the player is inside the hangar tube (no sun flare in there)
+    pub inside: bool,
+    /// the player's position in carrier coordinates (for the guidance displays)
+    pub local: Vec3,
 }
 
 /// Launch: the lamps turn green (own thrust) this many seconds after the start (red -> amber at 1.2 s).
@@ -321,11 +330,13 @@ struct BayPilot {
     wps: Vec<Vec3>,
     /// parked: attitude relative to the carrier
     park_rot: Quat,
+    /// SF_LAND_FREEZE: carrier-local position and attitude the landing stopped at
+    frozen: Option<(Vec3, Quat)>,
 }
 
 impl BayPilot {
     fn new(e: Entity, player: bool, launch_z: f32) -> Self {
-        Self { e, player, held: false, launch_z, in_bay: false, out: false, v: 0.0, stage: None, stop: None, wps: Vec::new(), park_rot: Quat::IDENTITY }
+        Self { e, player, held: false, launch_z, in_bay: false, out: false, v: 0.0, stage: None, stop: None, wps: Vec::new(), park_rot: Quat::IDENTITY, frozen: None }
     }
 }
 
@@ -561,6 +572,10 @@ struct TestHooks {
     test_return: bool,
     /// SF_NO_BAY: no hangar launch / landing
     no_bay: bool,
+    /// SF_BAY_FREEZE: launch countdown stops at this sequence time
+    bay_freeze: Option<f32>,
+    /// SF_LAND_FREEZE: the player's landing stops at this carrier-local z
+    land_freeze: Option<f32>,
 }
 
 const WARP_POOL: usize = 8;
@@ -929,7 +944,7 @@ fn start_mission(
         }
         st.seq = Some(Seq { kind: SeqKind::Launch, t: 0.0, light: 0, done_t: None });
         sp.lib.bay.set_lamps(&mut mats, true, false, false);
-        if settings.view != View::Cockpit {
+        if settings.view != View::Cockpit && !env_on("SF_BAY_CHASE") {
             st.view_saved = Some(settings.view);
             settings.view = View::Cockpit;
         }
@@ -1692,7 +1707,7 @@ fn bay_seq(
     if let Some(c) = ctf {
         // ---- launch (web updateSeq, kind 'launch') ----
         if let Some(seq) = st.seq.as_mut().filter(|q| q.kind == SeqKind::Launch) {
-            seq.t += dt;
+            seq.t = (seq.t + dt).min(radio.test.bay_freeze.unwrap_or(f32::INFINITY));
             let t = seq.t;
             // red: engines pre-heat · amber: clamps release, the ship floats free, the bay field drops · green: own thrust
             if seq.light == 0 && t > 1.2 {
@@ -1895,6 +1910,13 @@ fn bay_seq(
             let p = &mut pilots[idx];
             let l = bay_local(&c, tf.translation);
             let up = c.rotation * Vec3::Y;
+            if p.player && p.stage != Some(LandStage::Parked) && (p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| l.z <= z)) {
+                // SF_LAND_FREEZE: hold the ship where it is relative to the carrier (screenshots)
+                let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                tf.translation = bay_to_world(&c, fl);
+                tf.rotation = c.rotation * fr;
+                continue;
+            }
             ship.bank *= 1.0 - (dt * 6.0).min(1.0);
             match p.stage {
                 Some(LandStage::Approach) => {
@@ -2000,6 +2022,12 @@ fn bay_seq(
     io.status.landing = me.filter(|p| p.held).and_then(|p| p.stage.map(|s| (s, p.stop.unwrap_or(BAY.back + 18.0))));
     io.status.land_clear = st.phase == Phase::Return && st.land_clear && ctf.is_some() && !me.is_some_and(|p| p.held);
     io.status.engine_off = st.engine_off;
+    let local = match (ctf, me.and_then(|p| ships.get(p.e).ok())) {
+        (Some(c), Some(s)) => Some(bay_local(&c, s.1.translation)),
+        _ => None,
+    };
+    io.status.local = local.unwrap_or(Vec3::ZERO);
+    io.status.inside = local.is_some_and(|l| in_bay_corridor(l, 0.0) && l.z < BAY.mouth);
     st.bay = pilots;
 }
 

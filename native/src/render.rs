@@ -30,7 +30,8 @@ use bevy::render::view::Msaa;
 use bevy::tasks::{futures::check_ready, AsyncComputeTaskPool, Task};
 
 use crate::common::*;
-use crate::ships::{spawn_ship_model, ShipLibrary};
+use crate::mission::BayStatus;
+use crate::ships::{spawn_ship_model, ShipLibrary, AURORA_BAY};
 
 // ---------- light scale ----------
 
@@ -399,6 +400,7 @@ fn camera_rig(
     mut rig: ResMut<Rig>,
     mut shake: ResMut<CameraShake>,
     mut cuts: MessageReader<CameraCutMsg>,
+    bay: Option<Res<BayStatus>>,
     players: Query<PlayerItem, (With<Player>, Without<MainCamera>)>,
     mut bodies: Query<&mut Visibility, With<ShipBody>>,
     mut cam: Query<(&mut Transform, &mut Projection, Option<&mut Dlss>, Option<&mut TemporalAntiAliasing>), With<MainCamera>>,
@@ -456,6 +458,10 @@ fn camera_rig(
                 rig.q = if cut { pt.rotation } else { rig.q.slerp(pt.rotation, 1.0 - (-dt * 5.5).exp()) };
                 let back = 27.0 + sr * 9.0 + ir * 5.0;
                 ct.translation = pt.translation + rig.q * Vec3::new(0.0, 7.5, -back);
+                // in the hangar tube (landing, parked) the camera stays inside the tube, not in the hull
+                if let Some(c) = bay.as_ref().and_then(|b| b.carrier) {
+                    ct.translation = keep_in_bay(&c, pt.translation, ct.translation);
+                }
                 ct.rotation = rig.q * FLIP;
                 target_fov = cap_v(104.0).min(60.0) + sr * 10.0 + ir * 6.0;
             }
@@ -532,6 +538,25 @@ fn camera_rig(
             t.reset = true;
         }
     }
+}
+
+/// Chase camera near the TUS Aurora's hangar: while the ship is in or just in front of the tube, the camera
+/// is pulled inside the tube's cross-section (blended over the last 40 m before the mouth) and kept off the
+/// back wall, so it never sits inside the hull.
+fn keep_in_bay(c: &Transform, ship: Vec3, cam: Vec3) -> Vec3 {
+    let b = &AURORA_BAY;
+    let inv = c.rotation.inverse();
+    let ls = inv * (ship - c.translation);
+    if ls.x.abs() > b.hw + 20.0 || (ls.y - b.y).abs() > b.hh + 20.0 || ls.z > b.mouth + 70.0 || ls.z < b.back - 10.0 {
+        return cam;
+    }
+    let lc = inv * (cam - c.translation);
+    let k = ((b.mouth + 40.0 - lc.z) / 40.0).clamp(0.0, 1.0);
+    if k <= 0.0 {
+        return cam;
+    }
+    let inside = Vec3::new(lc.x.clamp(-(b.hw - 1.5), b.hw - 1.5), lc.y.clamp(b.y - b.hh + 1.2, b.y + b.hh - 1.2), lc.z.max(b.back + 2.0));
+    c.translation + c.rotation * lc.lerp(inside, k)
 }
 
 /// Dust specks and impulse streaks follow the camera (after the rig moved it).
