@@ -193,6 +193,21 @@ impl Layout {
             (Elem::Bar, on(self.pod(34.0) * tr(-0.042, 0.0, 0.0), 0.005 + SCREEN_GAP), Vec2::new(0.07, 0.06)),
         ]
     }
+    /// Screen height of a hand on a control at distance `d` whose top is `top` above the pivot: low enough
+    /// that the hand stays below the log screen above it (`deg` -23 / 23), at most `fy`.
+    fn hand_fy(&self, deg: f32, fy: f32, d: f32, top: f32) -> f32 {
+        let log = self.log_bezel(deg);
+        let bottom = [-1.0, 1.0].map(|sx| self.screen(log.transform_point3(Vec3::new(sx * 0.032, -0.04, 0.004 + SCREEN_GAP))).y);
+        fy.min(bottom[0].min(bottom[1]) - 0.04 - top / (d * self.k * self.th))
+    }
+    /// flight stick pivot (right hand; the top of the hand is about 0.18 above it)
+    fn stick(&self) -> Vec3 {
+        self.s(0.37, self.hand_fy(23.0, -1.64, 0.3, 0.18), 0.3)
+    }
+    /// throttle quadrant (left hand; the top of the hand is about 0.13 above it)
+    fn throttle(&self) -> Vec3 {
+        self.s(-0.44, self.hand_fy(-23.0, -1.56, 0.32, 0.13), 0.32)
+    }
     /// low side console beside the seat (`sx` -1 left, 1 right); local +Z is its face, the face is 0.26 x 0.42
     fn side_console(&self, sx: f32) -> Mat4 {
         trv(self.s(0.86 * sx, -1.15, 0.5)) * ry(-sx * 0.95) * rx(-1.05)
@@ -1014,7 +1029,7 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
 /// flight stick (right) and throttle quadrant (left)
 fn build_controls(b: &mut Builder, l: &Layout) {
     let root = b.root;
-    let stick = b.pivot(root, trv(l.s(0.37, -1.64, 0.3)));
+    let stick = b.pivot(root, trv(l.stick()));
     b.commands.entity(stick).insert(StickPivot);
     b.part_m(stick, &geom::cylinder(0.012, 0.03, 0.05, 14, true), M::Rubber, Mat4::IDENTITY);
     b.part_m(stick, &geom::cylinder(0.006, 0.007, 0.09, 10, true), M::Chrome, tr(0.0, 0.06, 0.0));
@@ -1027,7 +1042,7 @@ fn build_controls(b: &mut Builder, l: &Layout) {
     // boot at the base of the stick
     b.part_m(stick, &geom::cylinder(0.034, 0.05, 0.03, 16, true), M::Rubber, tr(0.0, -0.03, 0.0));
 
-    let thr = b.pivot(root, trv(l.s(-0.44, -1.56, 0.32)) * ry(0.25));
+    let thr = b.pivot(root, trv(l.throttle()) * ry(0.25));
     b.part_m(thr, &geom::rounded_slab(0.05, 0.16, 0.012, 0.018, 0.004), M::Metal, rx(-FRAC_PI_2));
     // slot in the rail
     b.part_m(thr, &geom::cuboid(0.014, 0.004, 0.13), M::Inset, tr(0.0, 0.0035, 0.0));
@@ -1533,7 +1548,16 @@ mod tests {
     fn all_displays_are_on_screen() {
         for aspect in ASPECTS {
             let l = Layout::new(aspect, layout_fov(aspect));
-            println!("aspect {aspect:.3}: fov {} r {:.3} ka {:.3} k {:.3} side MFD extent {:?}", l.fov, l.r, l.ka, l.k, l.side_mfd_extent());
+            println!(
+                "aspect {aspect:.3}: fov {} r {:.3} ka {:.3} k {:.3} side MFD extent {:?}, stick {:.2} throttle {:.2}",
+                l.fov,
+                l.r,
+                l.ka,
+                l.k,
+                l.side_mfd_extent(),
+                l.screen(l.stick()).y,
+                l.screen(l.throttle()).y
+            );
             for (e, xf, size) in l.displays() {
                 for p in samples(xf, size) {
                     let s = l.screen(p);
