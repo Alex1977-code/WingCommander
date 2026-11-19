@@ -45,8 +45,7 @@ impl Plugin for MissionPlugin {
                 Some((who.to_string(), t.parse().ok()?))
             }),
         };
-        app.add_message::<BannerMsg>()
-            .add_message::<WarpFlashMsg>()
+        app            .add_message::<WarpFlashMsg>()
             .init_resource::<MissionState>()
             .init_resource::<StoryFlags>()
             .init_resource::<MissionResult>()
@@ -101,10 +100,6 @@ fn env_on(name: &str) -> bool {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MissionSet;
 
-/// Big centre-screen announcement ("SEKTOR GESICHERT", "NEUE FEINDWELLE", ...) for hud.rs.
-#[allow(dead_code)]
-#[derive(Message, Clone, Debug)]
-pub struct BannerMsg(pub String);
 
 /// Story flags from earlier missions and dialogue choices (owner: menu.rs / campaign flow). They switch
 /// conditional wave entries (`["klinge", 1, "holtEscaped"]`) and radio lines (`if` / `ifNot`).
@@ -492,7 +487,7 @@ struct Spawner<'w, 's> {
 struct Radio<'w> {
     comm: MessageWriter<'w, CommMsg>,
     sfx: MessageWriter<'w, SfxMsg>,
-    banner: MessageWriter<'w, BannerMsg>,
+    banner: MessageWriter<'w, crate::hud::HudBanner>,
     warp: MessageWriter<'w, WarpFlashMsg>,
     progress: Res<'w, Progress>,
     test: Res<'w, TestHooks>,
@@ -510,7 +505,7 @@ impl Radio<'_> {
         }
     }
     fn banner(&mut self, text: &str) {
-        self.banner.write(BannerMsg(text.to_string()));
+        self.banner.write(crate::hud::HudBanner(text.to_string()));
     }
     fn log(&self, text: impl FnOnce() -> String) {
         if self.test.log {

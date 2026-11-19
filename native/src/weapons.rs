@@ -134,10 +134,15 @@ impl BoltKind {
 
 pub struct WeaponsPlugin;
 
+/// Ends every seeker/torpedo of the given team that is still in flight (web completeNav: team-1 missiles life = 0).
+#[derive(Message, Clone, Copy, Debug)]
+pub struct CancelSeekersMsg(pub Team);
+
 impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
         let running = |p: Res<Paused>| !p.0;
-        app.init_resource::<Projectiles>()
+        app.add_message::<CancelSeekersMsg>()
+            .init_resource::<Projectiles>()
             .init_resource::<TargetCache>()
             .init_resource::<SeekerWarning>()
             .insert_resource(WRng(0x9E37_79B9_7F4A_7C15))

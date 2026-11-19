@@ -57,6 +57,10 @@ pub struct Obstacle {
     pub radius: f32,
 }
 
+/// Blocks the impulse drive while the player is within `.0` metres (web IMPULSE.mine: live mines, 2200 m).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ImpulseBlock(pub f32);
+
 /// Per-pilot input and flight state on the `Player` entity (added automatically).
 #[derive(Component, Default, Clone, Debug)]
 pub struct Pilot {
@@ -382,6 +386,7 @@ fn impulse_clear(
     status: &MissionStatus,
     others: &Query<(&Transform, &Ship, &Hittable), (Without<Player>, Without<Dying>)>,
     rocks: &Query<(&Transform, &Obstacle), Without<Player>>,
+    blocks: &Query<(&Transform, &ImpulseBlock), Without<Player>>,
 ) -> bool {
     if status.ended.is_some() || status.timer.is_some() {
         return false;
@@ -389,6 +394,9 @@ fn impulse_clear(
     let Some(nav) = status.nav_pos else { return false };
     let pos = tf.translation;
     if pos.distance_squared(nav) < IMP_NAV * IMP_NAV {
+        return false;
+    }
+    if blocks.iter().any(|(btf, b)| btf.translation.distance_squared(pos) < b.0 * b.0) {
         return false;
     }
     let f = fwd(tf);
@@ -425,6 +433,7 @@ fn player_flight(
     mut pilots: Query<(&mut Transform, &mut Ship, &mut Player, &mut Pilot, &Trigger, Option<&Neutron>), Without<Dying>>,
     others: Query<(&Transform, &Ship, &Hittable), (Without<Player>, Without<Dying>)>,
     rocks: Query<(&Transform, &Obstacle), Without<Player>>,
+    blocks: Query<(&Transform, &ImpulseBlock), Without<Player>>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     for (mut tf, mut ship, mut player, mut pilot, trig, neutron) in &mut pilots {
@@ -451,7 +460,7 @@ fn player_flight(
         pilot.imp_chk_t -= dt;
         if pilot.imp_chk_t <= 0.0 {
             pilot.imp_chk_t = 0.2;
-            pilot.impulse_clear = impulse_clear(&tf, ship.team, &status, &others, &rocks);
+            pilot.impulse_clear = impulse_clear(&tf, ship.team, &status, &others, &rocks, &blocks);
         }
         let charging = neutron.is_some_and(|n| n.charge.is_some());
         pilot.imp_t = if boosting && pilot.impulse_clear && !trig.guns && !trig.missile && !charging { pilot.imp_t + dt } else { 0.0 };

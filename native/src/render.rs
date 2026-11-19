@@ -83,11 +83,16 @@ impl Plugin for GraphicsPlugin {
                 Update,
                 (apply_quality, update_sky, tumble_asteroids, spawn_menu_ships.run_if(in_state(AppState::Menu))),
             )
-            .add_systems(PostUpdate, (camera_rig, follow_camera).chain().before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (camera_rig, follow_camera).chain().in_set(CameraRigSet).before(TransformSystems::Propagate));
     }
 }
 
 // ---------- public API ----------
+
+/// PostUpdate set that moves MainCamera (rig + follow). Systems that project to the screen or follow the eye
+/// run `.after(CameraRigSet)` (and `.after(TransformSystems::Propagate)` when they read GlobalTransform).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CameraRigSet;
 
 /// Camera shake strength (web `P.shake`): decays by 2.2 per second. Bump it from anywhere, e.g. on hits.
 #[derive(Resource, Default, Clone, Copy, Debug)]
