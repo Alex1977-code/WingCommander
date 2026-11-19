@@ -603,7 +603,7 @@ impl HullShape {
             let ni = stack[sp];
             let n = self.nodes[ni as usize];
             let out = (n.lo - p).max(p - n.hi).max(Vec3::ZERO);
-            if out.length() >= bound {
+            if out.length() > bound {
                 continue;
             }
             if n.count > 0 {
@@ -663,7 +663,7 @@ fn capital_hull(kind: &str, built: &designs::Built, extent: f32) -> HullShape {
 }
 
 /// Voxelise the triangle surfaces at `cell` metres, fill everything the outside cannot reach (the hull's
-/// interior), clear the cells touching `carve` (body-space box lo, hi) and merge the solid cells greedily
+/// interior), then clear the cells touching `carve` (body-space box lo, hi) and merge the solid cells greedily
 /// into disjoint boxes (runs along x, grown along z, then y).
 fn voxel_boxes(geos: &[&mesh::Geo], cell: f32, carve: Option<(Vec3, Vec3)>) -> Vec<(Vec3, Vec3)> {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -698,22 +698,6 @@ fn voxel_boxes(geos: &[&mesh::Geo], cell: f32, carve: Option<(Vec3, Vec3)>) -> V
             }
         }
     }
-    if let Some((clo, chi)) = carve {
-        let eps = 1e-3;
-        let a = ((clo / cell).floor().as_ivec3() - i0).max(IVec3::ZERO);
-        let b = ((chi / cell).floor().as_ivec3() - i0).min(dim - IVec3::ONE);
-        for z in a.z..=b.z {
-            for y in a.y..=b.y {
-                for x in a.x..=b.x {
-                    let c0 = (IVec3::new(x, y, z) + i0).as_vec3() * cell;
-                    let c1 = c0 + Vec3::splat(cell);
-                    if c1.cmpgt(clo + Vec3::splat(eps)).all() && c0.cmplt(chi - Vec3::splat(eps)).all() {
-                        grid[at(x as usize, y as usize, z as usize)] = 3;
-                    }
-                }
-            }
-        }
-    }
     // flood the outside from a padding corner (6-neighbourhood): what it cannot reach is the hull's inside
     let mut stack = vec![at(0, 0, 0)];
     grid[at(0, 0, 0)] = 2;
@@ -721,7 +705,7 @@ fn voxel_boxes(geos: &[&mesh::Geo], cell: f32, carve: Option<(Vec3, Vec3)>) -> V
         let (x, y, z) = (i % nx, (i / nx) % ny, i / (nx * ny));
         let mut visit = |x: usize, y: usize, z: usize| {
             let j = at(x, y, z);
-            if grid[j] == 0 || grid[j] == 3 {
+            if grid[j] == 0 {
                 grid[j] = 2;
                 stack.push(j);
             }
@@ -743,6 +727,23 @@ fn voxel_boxes(geos: &[&mesh::Geo], cell: f32, carve: Option<(Vec3, Vec3)>) -> V
         }
         if z + 1 < nz {
             visit(x, y, z + 1);
+        }
+    }
+    // the carved tunnel is cut out of the filled hull afterwards, so the hull round it stays solid
+    if let Some((clo, chi)) = carve {
+        let eps = 1e-3;
+        let a = ((clo / cell).floor().as_ivec3() - i0).max(IVec3::ZERO);
+        let b = ((chi / cell).floor().as_ivec3() - i0).min(dim - IVec3::ONE);
+        for z in a.z..=b.z {
+            for y in a.y..=b.y {
+                for x in a.x..=b.x {
+                    let c0 = (IVec3::new(x, y, z) + i0).as_vec3() * cell;
+                    let c1 = c0 + Vec3::splat(cell);
+                    if c1.cmpgt(clo + Vec3::splat(eps)).all() && c0.cmplt(chi - Vec3::splat(eps)).all() {
+                        grid[at(x as usize, y as usize, z as usize)] = 3;
+                    }
+                }
+            }
         }
     }
     // greedy merge of the solid cells (surface or enclosed, never carved) into disjoint boxes

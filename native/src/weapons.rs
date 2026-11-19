@@ -2,14 +2,21 @@
 //! Aszendenz plasma seekers and bombers' fusion torpedoes, damage (shields, hull, kills) and dying ships.
 //!
 //! Gameplay numbers follow the web version (src/game.js). Projectiles are plain data in `Projectiles`;
-//! their visuals are pooled entities (no spawning while fighting), drawn as additive HDR glow meshes.
+//! their visuals are pooled entities (no spawning while fighting): an opaque unlit HDR core (it writes depth
+//! and motion vectors, so DLSS/TAA reproject it correctly) inside additive glow shells.
+//!
+//! Hits: fighters are spheres, capitals their box core plus the model hull (`ships::HullBoxes`), asteroids
+//! their ellipsoid (`render::Asteroid`), mines (`flight::Obstacle`) spheres.
 
 use crate::common::*;
-use crate::flight::{hull_distance, seg_point, segment_hull, FlightSet, MAX_DT};
+use crate::flight::{seg_point, segment_hull_shape, FlightSet, Obstacle, MAX_DT};
+use crate::render::{Asteroid, CameraShake};
+use crate::ships::{HullBoxes, HullShape, ShipLibrary, TurretHead};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::f32::consts::TAU;
+use std::sync::Arc;
 
 // ---------- tuning (web values) ----------
 
@@ -145,6 +152,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<Projectiles>()
             .init_resource::<TargetCache>()
             .init_resource::<SeekerWarning>()
+            .init_resource::<WeaponClock>()
             .insert_resource(WRng(0x9E37_79B9_7F4A_7C15))
             .configure_sets(
                 Update,
@@ -160,7 +168,7 @@ impl Plugin for WeaponsPlugin {
                 Update,
                 (ensure_armament, build_cache, shields, player_aim, fire_weapons, neutron_cannon, turrets).chain().in_set(WeaponsSet::Fire),
             )
-            .add_systems(Update, (update_bolts, update_seekers, update_beams, update_flashes).chain().in_set(WeaponsSet::Projectiles))
+            .add_systems(Update, (update_bolts, update_seekers, update_beams, update_flashes, aim_turret_heads).chain().in_set(WeaponsSet::Projectiles))
             .add_systems(Update, apply_damage.in_set(WeaponsSet::Damage))
             .add_systems(Update, dying.in_set(WeaponsSet::Dying));
         if std::env::var("SF_PILOT").is_ok() {
@@ -209,10 +217,18 @@ impl WRng {
     }
 }
 
+/// Mission time that stands still while paused (kill credit).
+#[derive(Resource, Default)]
+struct WeaponClock(f32);
+
 /// Per-ship weapon bookkeeping (added to every ship automatically).
 #[derive(Component, Default)]
 struct Armament {
     turret_cool: Vec<f32>,
+    /// where each turret last aimed (ship space, unit; zero = never fired): the visible heads follow it
+    turret_dir: Vec<Vec3>,
+    /// farthest model point from the ship's origin (web `modelR`)
+    extent: f32,
     seeker_cool: f32,
     /// elapsed time of the last hit by the player (kill credit)
     player_hit_at: Option<f32>,
@@ -278,9 +294,8 @@ struct Beam {
     local: Vec3,
     from: Vec3,
     end: Vec3,
-    /// segment roots
-    segs: Vec<Entity>,
-    core: Handle<StandardMaterial>,
+    /// segments: opaque core and additive glow (siblings, so the core can thin out under a steady glow)
+    segs: Vec<(Entity, Entity)>,
     glow: Handle<StandardMaterial>,
 }
 
@@ -311,7 +326,9 @@ struct Projectiles {
 #[derive(Resource, Default)]
 struct TargetCache {
     ships: Vec<Tgt>,
-    rocks: Vec<(Vec3, f32)>,
+    rocks: Vec<(Transform, Asteroid)>,
+    /// mines and other `Obstacle`s that are not asteroids: (centre, radius)
+    obstacles: Vec<(Vec3, f32)>,
     player: Option<(Entity, Vec3, Team)>,
     /// camera position and world size of one pixel at distance 1
     eye: Vec3,
@@ -323,6 +340,12 @@ struct Tgt {
     tf: Transform,
     hit: Hittable,
     torus: Option<[f32; 2]>,
+    /// capitals: the model hull (shared, an Arc clone per frame)
+    shape: Option<Arc<HullShape>>,
+    /// broad-phase radius: max(Hittable::radius, model extent)
+    reach: f32,
+    /// model extent (web modelR)
+    extent: f32,
     team: Team,
     capital: bool,
     player: bool,
@@ -331,6 +354,9 @@ struct Tgt {
 }
 
 impl Tgt {
+    fn shape(&self) -> Option<&HullShape> {
+        self.shape.as_deref()
+    }
     fn pos(&self) -> Vec3 {
         self.tf.translation
     }
@@ -357,6 +383,11 @@ fn emissive(c: LinearRgba, k: f32) -> StandardMaterial {
     }
 }
 
+/// The white-hot core: opaque unlit HDR, so it writes depth and motion vectors (DLSS/TAA).
+fn core_mat(c: LinearRgba, k: f32) -> StandardMaterial {
+    StandardMaterial { alpha_mode: AlphaMode::Opaque, ..emissive(c, k) }
+}
+
 fn setup_weapons(mut commands: Commands, mut proj: ResMut<Projectiles>, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
     let sphere = meshes.add(Sphere::new(1.0).mesh().uv(14, 8));
     let ico = meshes.add(Sphere::new(1.0).mesh().ico(1).expect("icosphere"));
@@ -369,10 +400,10 @@ fn setup_weapons(mut commands: Commands, mut proj: ResMut<Projectiles>, mut mesh
             .translated_by(Vec3::new(0.0, 0.0, -0.5)),
     );
     let cyl = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(10).build());
-    let bolt = BoltKind::ALL.map(|k| [mats.add(emissive(k.core(), 1.4)), mats.add(emissive(k.color(), 0.55)), mats.add(emissive(k.color(), 0.09))]);
+    let bolt = BoltKind::ALL.map(|k| [mats.add(core_mat(k.core(), 1.4)), mats.add(emissive(k.color(), 0.55)), mats.add(emissive(k.color(), 0.09))]);
     let flash = BoltKind::ALL.map(|k| mats.add(emissive(k.color(), 0.9)));
     let plasma = |core: LinearRgba, halo: LinearRgba, trail: LinearRgba, mats: &mut Assets<StandardMaterial>| {
-        [mats.add(emissive(core, 1.6)), mats.add(emissive(halo, 0.45)), mats.add(emissive(halo, 0.1)), mats.add(emissive(trail, 0.35))]
+        [mats.add(core_mat(core, 1.6)), mats.add(emissive(halo, 0.45)), mats.add(emissive(halo, 0.1)), mats.add(emissive(trail, 0.35))]
     };
     let seeker = [
         plasma(LinearRgba::rgb(1.6, 2.6, 3.8), LinearRgba::rgb(0.5, 1.2, 2.6), LinearRgba::rgb(0.35, 0.9, 2.2), &mut mats),
@@ -384,18 +415,18 @@ fn setup_weapons(mut commands: Commands, mut proj: ResMut<Projectiles>, mut mesh
     // neutron beams: fixed slots of cylinder segments, each slot with its own (fading) materials
     proj.beams.clear();
     for _ in 0..BEAM_SLOTS {
-        let core = mats.add(emissive(LANCE_CORE, 1.0));
+        // the core cannot fade (opaque): it thins out instead, the additive glow fades
+        let core = mats.add(core_mat(LANCE_CORE, 1.0));
         let glow = mats.add(emissive(LANCE_GLOW, 0.4));
         let segs = (0..BEAM_SEGS)
             .map(|_| {
-                let root = commands
-                    .spawn((WeaponVis, Mesh3d(cyl.clone()), MeshMaterial3d(core.clone()), NotShadowCaster, Transform::default(), Visibility::Hidden))
-                    .id();
-                commands.spawn((Mesh3d(cyl.clone()), MeshMaterial3d(glow.clone()), NotShadowCaster, Transform::from_scale(Vec3::new(3.2, 1.0, 3.2)), ChildOf(root)));
-                root
+                let mut seg = |mat: &Handle<StandardMaterial>| {
+                    commands.spawn((WeaponVis, Mesh3d(cyl.clone()), MeshMaterial3d(mat.clone()), NotShadowCaster, Transform::default(), Visibility::Hidden)).id()
+                };
+                (seg(&core), seg(&glow))
             })
             .collect();
-        proj.beams.push(Beam { segs, core, glow, ..default() });
+        proj.beams.push(Beam { segs, glow, ..default() });
     }
 
     // prewarm the pools so the first dogfight does not spawn anything
@@ -462,8 +493,9 @@ fn clear_weapons(mut proj: ResMut<Projectiles>, mut vis: Query<&mut Visibility, 
     }
     for beam in &mut p.beams {
         beam.active = false;
-        for &s in &beam.segs {
-            hide(&mut vis, s);
+        for &(c, g) in &beam.segs {
+            hide(&mut vis, c);
+            hide(&mut vis, g);
         }
     }
     warn.0 = false;
@@ -479,13 +511,16 @@ fn hide(vis: &mut Query<&mut Visibility, With<WeaponVis>>, e: Entity) {
 
 fn ensure_armament(
     mut commands: Commands,
+    lib: Res<ShipLibrary>,
     ships: Query<(Entity, &Ship), Without<Armament>>,
     players: Query<Entity, (With<Player>, Without<Neutron>)>,
     mut rng: ResMut<WRng>,
 ) {
     for (e, ship) in &ships {
         let turret_cool = ship.def.turrets.iter().map(|_| rng.range(0.0, 2.0)).collect();
-        commands.entity(e).insert(Armament { turret_cool, seeker_cool: rng.range(2.0, 5.0), ..default() });
+        let turret_dir = vec![Vec3::ZERO; ship.def.turrets.len()];
+        let extent = lib.model(&ship.kind).map_or(0.0, |m| m.extent);
+        commands.entity(e).insert(Armament { turret_cool, turret_dir, extent, seeker_cool: rng.range(2.0, 5.0), ..default() });
     }
     for e in &players {
         commands.entity(e).insert((Neutron::default(), PlayerAim::default()));
@@ -494,8 +529,9 @@ fn ensure_armament(
 
 fn build_cache(
     mut cache: ResMut<TargetCache>,
-    ships: Query<(Entity, &Transform, &Ship, &Hittable, Has<Player>, Option<&Ai>), Without<Dying>>,
-    rocks: Query<(&Transform, &crate::flight::Obstacle)>,
+    ships: Query<(Entity, &Transform, &Ship, &Hittable, Has<Player>, Option<&Ai>, Option<&HullBoxes>, Option<&Armament>), Without<Dying>>,
+    rocks: Query<(&Transform, &Asteroid)>,
+    obstacles: Query<(&Transform, &Obstacle), Without<Asteroid>>,
     camera: Query<(&GlobalTransform, &Projection), With<MainCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -510,19 +546,25 @@ fn build_cache(
     }
     cache.ships.clear();
     cache.rocks.clear();
+    cache.obstacles.clear();
     cache.player = None;
-    for (e, tf, ship, hit, player, ai) in &ships {
+    for (e, tf, ship, hit, player, ai, hull, arm) in &ships {
         if player {
             cache.player = Some((e, tf.translation, ship.team));
         }
         if ship.def.ghost {
             continue;
         }
+        let shape = hull.map(|h| h.0.clone());
+        let extent = shape.as_ref().map_or(0.0, |s| s.extent).max(arm.map_or(0.0, |a| a.extent));
         cache.ships.push(Tgt {
             e,
             tf: *tf,
             hit: *hit,
             torus: ship.def.torus,
+            shape,
+            reach: hit.radius.max(extent),
+            extent,
             team: ship.team,
             capital: ship.capital(),
             player,
@@ -531,13 +573,17 @@ fn build_cache(
         });
     }
     for (tf, rock) in &rocks {
-        cache.rocks.push((tf.translation, rock.radius));
+        cache.rocks.push((*tf, *rock));
+    }
+    for (tf, o) in &obstacles {
+        cache.obstacles.push((tf.translation, o.radius));
     }
 }
 
 /// Shields recharge after a pause without hits.
-fn shields(time: Res<Time>, mut q: Query<&mut Ship, Without<Dying>>) {
+fn shields(time: Res<Time>, mut clock: ResMut<WeaponClock>, mut q: Query<&mut Ship, Without<Dying>>) {
     let dt = time.delta_secs().min(MAX_DT);
+    clock.0 += dt;
     for mut s in &mut q {
         s.shield_t += dt;
         if s.shield_t > SHIELD_DELAY && s.shield < s.max_shield {
@@ -742,7 +788,9 @@ fn neutron_cannon(
     mut rng: ResMut<WRng>,
     mut q: Query<(Entity, &Transform, &Ship, &mut Player, &mut Neutron), Without<Dying>>,
     mut damage: MessageWriter<DamageMsg>,
+    mut hitfx: MessageWriter<HitFxMsg>,
     mut sfx: MessageWriter<SfxMsg>,
+    mut shake: ResMut<CameraShake>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     for (e, tf, ship, mut player, mut n) in &mut q {
@@ -760,7 +808,7 @@ fn neutron_cannon(
             // the field emitters can only swing the beam so far: a target far off the nose gets a straight shot
             let v = t.pos() - from;
             let d = v.length();
-            if d < LANCE_RANGE + t.hit.radius && v.dot(f) > d * 0.7 {
+            if d < LANCE_RANGE + t.reach && v.dot(f) > d * 0.7 {
                 dir = v / d;
             }
         }
@@ -772,10 +820,14 @@ fn neutron_cannon(
             }
             let amount = if t.capital { LANCE_CAP_DMG } else { LANCE_DMG };
             damage.write(DamageMsg { target: t.e, amount, source: Some(e), point: end });
+        } else if hit.is_some() {
+            // a rock or a mine took the beam (a mine goes off: mission.rs reads ship-less impacts)
+            hitfx.write(HitFxMsg { pos: end, ship: Entity::PLACEHOLDER, shield: false, color: COL_SPARK });
         }
         n.last_hit = Some(hit.is_some_and(|h| h.1.is_some()));
         player.shots += 1;
         sfx.write(SfxMsg::Lance);
+        shake.bump(0.25);
         // a free slot, or the one closest to fading out
         let slot = proj.beams.iter().position(|b| !b.active).or_else(|| (0..proj.beams.len()).min_by(|&a, &b| proj.beams[a].t.total_cmp(&proj.beams[b].t)));
         if let Some(beam) = slot.map(|i| &mut proj.beams[i]) {
@@ -810,11 +862,12 @@ fn lance_ray(cache: &TargetCache, from: Vec3, dir: Vec3, max_d: f32, team: Team)
             continue;
         }
         if t.capital {
-            let Some(enter) = sphere_entry(t.pos(), t.hit.radius + 6.0) else { continue };
+            // prows and towers reach past the radius (web: max(radius, modelR) + 6)
+            let Some(enter) = sphere_entry(t.pos(), t.reach + 6.0) else { continue };
             if enter >= best {
                 continue;
             }
-            if let Some((_, k)) = segment_hull(&t.tf, &t.hit, t.torus, from, from + dir * best, 2.5) {
+            if let Some((_, k)) = segment_hull_shape(&t.tf, &t.hit, t.torus, t.shape(), from, from + dir * best, 2.5) {
                 best *= k;
                 hit = Some(i);
                 found = true;
@@ -825,8 +878,15 @@ fn lance_ray(cache: &TargetCache, from: Vec3, dir: Vec3, max_d: f32, team: Team)
             found = true;
         }
     }
-    for &(c, r) in &cache.rocks {
-        if let Some(d) = sphere_entry(c, r * 0.9).filter(|d| *d < best) {
+    for (tf, rock) in &cache.rocks {
+        if let Some(d) = rock.ray(tf, from, dir, best) {
+            best = d;
+            hit = None;
+            found = true;
+        }
+    }
+    for &(c, r) in &cache.obstacles {
+        if let Some(d) = sphere_entry(c, r).filter(|d| *d < best) {
             best = d;
             hit = None;
             found = true;
@@ -887,6 +947,9 @@ fn turrets(
             let dir = ((lead - muzzle).normalize_or(Vec3::Z) + rng.dir() * spread).normalize();
             let dmg = if ally { ship.def.dmg * 0.25 } else { ship.def.dmg };
             spawn_bolt(&mut commands, &mut proj, muzzle, dir, e, ship.team, dmg, kind);
+            if let Some(d) = arm.turret_dir.get_mut(i) {
+                *d = tf.rotation.inverse() * dir;
+            }
         }
     }
 }
@@ -918,13 +981,14 @@ fn update_bolts(
                     continue;
                 }
                 let hit = if t.capital {
-                    let r = t.hit.radius + 4.0;
+                    let r = t.reach + 4.0;
                     if seg_point(prev, b.pos, t.pos()).0 > r * r {
                         continue;
                     }
-                    segment_hull(&t.tf, &t.hit, t.torus, prev, b.pos, 2.5).map(|h| h.0)
+                    segment_hull_shape(&t.tf, &t.hit, t.torus, t.shape(), prev, b.pos, 2.5).map(|h| h.0)
                 } else {
-                    let rr = if t.player { t.hit.radius * 0.85 } else { t.hit.radius * 1.15 };
+                    // web: the player is a little smaller, other fighters a little larger than their radius
+                    let rr = if t.player { t.hit.radius * 0.85 } else { (t.hit.radius * 1.15).max(t.extent * 0.92) };
                     let (d2, pt) = seg_point(prev, b.pos, t.pos());
                     (d2 < rr * rr).then_some(pt)
                 };
@@ -936,14 +1000,18 @@ fn update_bolts(
             }
         }
         if !done {
-            for &(c, r) in &cache.rocks {
-                let (d2, pt) = seg_point(prev, b.pos, c);
-                if d2 < r * r * 0.81 {
-                    // sparks on the rock (no ship: Entity::PLACEHOLDER)
-                    fx.write(HitFxMsg { pos: pt, ship: Entity::PLACEHOLDER, shield: false, color: COL_SPARK });
-                    done = true;
-                    break;
-                }
+            let seg = b.pos - prev;
+            let len = seg.length();
+            let dir = seg / len.max(1e-4);
+            // sparks on a rock or a mine (no ship: Entity::PLACEHOLDER)
+            let pt = cache
+                .rocks
+                .iter()
+                .find_map(|(tf, rock)| rock.ray(tf, prev, dir, len).map(|t| prev + dir * t))
+                .or_else(|| cache.obstacles.iter().find_map(|&(c, r)| seg_hit(prev, b.pos, c, r)));
+            if let Some(pt) = pt {
+                fx.write(HitFxMsg { pos: pt, ship: Entity::PLACEHOLDER, shield: false, color: COL_SPARK });
+                done = true;
             }
         }
         if done {
@@ -986,14 +1054,23 @@ fn update_seekers(
     mut damage: MessageWriter<DamageMsg>,
     mut explode: MessageWriter<ExplodeMsg>,
     mut warn: ResMut<SeekerWarning>,
+    mut cancel: MessageReader<CancelSeekersMsg>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     let p = &mut *proj;
     let player = cache.player.map(|p| p.0);
+    // nav point cleared: that side's seekers and torpedoes still in flight fizzle out (web completeNav)
+    let mut cancelled = [false; 3];
+    for c in cancel.read() {
+        cancelled[team_idx(c.0)] = true;
+    }
     let mut warning = false;
     let mut i = 0;
     while i < p.seekers.len() {
         let m = &mut p.seekers[i];
+        if cancelled[team_idx(m.team)] {
+            m.life = 0.0;
+        }
         m.life -= dt;
         m.speed = (m.speed + 260.0 * dt).min(m.max_speed);
         let tgt = m.target.and_then(|t| cache.get(t));
@@ -1019,8 +1096,9 @@ fn update_seekers(
                     continue;
                 }
                 let hit = if t.capital {
-                    let r = t.hit.radius + 10.0;
-                    m.pos.distance_squared(t.pos()) < r * r && hull_distance(&t.tf, &t.hit, t.torus, m.pos).0 < 5.0
+                    // swept like the bolts, so a fast seeker cannot slip through a saucer rim or a blade
+                    let r = t.reach + 10.0;
+                    m.pos.distance_squared(t.pos()) < r * r && segment_hull_shape(&t.tf, &t.hit, t.torus, t.shape(), prev, m.pos, 5.0).is_some()
                 } else {
                     let r = t.hit.radius + 7.0;
                     seg_point(prev, m.pos, t.pos()).0 < r * r
@@ -1038,7 +1116,8 @@ fn update_seekers(
             }
         }
         if !boom {
-            boom = cache.rocks.iter().any(|&(c, r)| m.pos.distance_squared(c) < r * r * 0.81);
+            boom = cache.rocks.iter().any(|(tf, rock)| rock.depth(tf, m.pos, 0.0).is_some())
+                || cache.obstacles.iter().any(|&(c, r)| m.pos.distance_squared(c) < r * r);
         }
         if boom {
             if m.life > 0.0 {
@@ -1082,9 +1161,11 @@ fn update_beams(
         beam.t -= dt;
         if beam.t <= 0.0 {
             beam.active = false;
-            for &s in &beam.segs {
-                if let Ok((_, mut v)) = vis.get_mut(s) {
-                    v.set_if_neq(Visibility::Hidden);
+            for &(c, g) in &beam.segs {
+                for s in [c, g] {
+                    if let Ok((_, mut v)) = vis.get_mut(s) {
+                        v.set_if_neq(Visibility::Hidden);
+                    }
                 }
             }
             continue;
@@ -1097,10 +1178,8 @@ fn update_beams(
         }
         let k = beam.t / LANCE_LIFE;
         let flicker = 0.85 + rng.f() * 0.3;
-        let fade = k * k * flicker;
-        if let Some(mut m) = mats.get_mut(&beam.core) {
-            m.base_color = Color::LinearRgba(LinearRgba::new(LANCE_CORE.red * fade, LANCE_CORE.green * fade, LANCE_CORE.blue * fade, 1.0));
-        }
+        // the opaque core keeps its colour and thins out as the charge bleeds off (was: k * k brightness)
+        let core_w = (k * k * flicker).min(1.0);
         if let Some(mut m) = mats.get_mut(&beam.glow) {
             let g = 0.4 * k * flicker;
             m.base_color = Color::LinearRgba(LinearRgba::new(LANCE_GLOW.red * g, LANCE_GLOW.green * g, LANCE_GLOW.blue * g, 1.0));
@@ -1114,16 +1193,17 @@ fn update_beams(
         let width = 0.35 + 0.45 * k;
         let fresh = beam.t > LANCE_LIFE - dt * 1.5;
         let mut a = bez(0.0);
-        for (i, &s) in beam.segs.iter().enumerate() {
+        for (i, &(core, glow)) in beam.segs.iter().enumerate() {
             let b = bez((i + 1) as f32 / BEAM_SEGS as f32);
             let seg = b - a;
             let len = seg.length();
-            if let Ok((mut tf, mut v)) = vis.get_mut(s) {
-                tf.translation = (a + b) * 0.5;
-                tf.rotation = Quat::from_rotation_arc(Vec3::Y, seg / len.max(1e-4));
-                tf.scale = Vec3::new(width, len + width, width);
-                if !fresh {
-                    v.set_if_neq(Visibility::Visible);
+            let rot = Quat::from_rotation_arc(Vec3::Y, seg / len.max(1e-4));
+            for (s, w, on) in [(core, width * core_w, core_w > 0.04), (glow, width * 3.2, true)] {
+                if let Ok((mut tf, mut v)) = vis.get_mut(s) {
+                    *tf = Transform { translation: (a + b) * 0.5, rotation: rot, scale: Vec3::new(w, len + width, w) };
+                    if !fresh {
+                        v.set_if_neq(if on { Visibility::Visible } else { Visibility::Hidden });
+                    }
                 }
             }
             a = b;
@@ -1164,14 +1244,31 @@ fn update_flashes(
     }
 }
 
+/// The visible turret heads swing towards where their turret last fired (yaw on the mount, some elevation).
+fn aim_turret_heads(time: Res<Time>, arms: Query<&Armament>, mut heads: Query<(&TurretHead, &mut Transform), Without<WeaponVis>>) {
+    let dt = time.delta_secs().min(MAX_DT);
+    for (h, mut tf) in &mut heads {
+        let Some(dir) = arms.get(h.ship).ok().and_then(|a| a.turret_dir.get(h.idx).copied()).filter(|d| *d != Vec3::ZERO) else { continue };
+        let l = h.base.inverse() * dir;
+        let yaw = l.x.atan2(l.z);
+        let elev = l.y.atan2(l.x.hypot(l.z)).clamp(0.0, 0.9);
+        let want = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-elev);
+        let rot = tf.rotation.rotate_towards(want, 2.5 * dt);
+        if rot != tf.rotation {
+            tf.rotation = rot;
+        }
+    }
+}
+
 // ---------- damage ----------
 
 /// DamageMsg -> shield, then hull; kills, wingman jump-outs, statistics, hit effects and sounds.
 #[allow(clippy::too_many_arguments)]
 fn apply_damage(
     mut commands: Commands,
-    time: Res<Time>,
+    clock: Res<WeaponClock>,
     cache: Res<TargetCache>,
+    mut shake: ResMut<CameraShake>,
     mut reader: MessageReader<DamageMsg>,
     mut ships: DamageQuery,
     mut killed: MessageWriter<KilledMsg>,
@@ -1181,7 +1278,7 @@ fn apply_damage(
     mut comm: MessageWriter<CommMsg>,
     mut bodies: Query<&mut Visibility, With<ShipBody>>,
 ) {
-    let now = time.elapsed_secs();
+    let now = clock.0;
     let player = cache.player;
     let pe = player.map(|p| p.0);
     for msg in reader.read() {
@@ -1209,6 +1306,7 @@ fn apply_damage(
         let is_player = pl.is_some();
         if is_player {
             sfx.write(if shielded { SfxMsg::ShieldHit } else { SfxMsg::HullHit });
+            shake.add(msg.amount * 0.035, 1.2);
         }
         if by_player {
             arm.player_hit_at = Some(now);
@@ -1245,6 +1343,7 @@ fn apply_damage(
         if let Some(p) = pl.as_mut() {
             // the wreck stays where it blew up (the camera keeps looking) until it is removed
             ship.speed = 0.0;
+            shake.bump(2.0);
             p.target = None;
             p.boosting = false;
             p.impulse = false;
@@ -1297,21 +1396,25 @@ fn dying(
     time: Res<Time>,
     mut rng: ResMut<WRng>,
     cache: Res<TargetCache>,
-    mut q: Query<(Entity, &mut Dying, &Ship, &Transform, &Hittable, Option<&mut Armament>, Has<JumpedOut>)>,
+    mut q: Query<(Entity, &mut Dying, &Ship, &Transform, &Hittable, Option<&mut Armament>, Has<JumpedOut>, Option<&HullBoxes>)>,
     mut explode: MessageWriter<ExplodeMsg>,
     mut sfx: MessageWriter<SfxMsg>,
 ) {
     let dt = time.delta_secs().min(MAX_DT);
     let ear = cache.player.map(|p| p.1);
-    for (e, mut d, ship, tf, hit, arm, jumped) in &mut q {
+    for (e, mut d, ship, tf, hit, arm, jumped, hull) in &mut q {
         d.t -= dt;
         if ship.capital() && !jumped {
             if let Some(mut arm) = arm {
                 arm.boom_t -= dt;
                 if arm.boom_t <= 0.0 && d.t > 0.0 {
                     arm.boom_t = 0.13;
-                    let h = hit.half_extents.unwrap_or(Vec3::splat(hit.radius * 0.5));
-                    let local = Vec3::new(rng.range(-h.x, h.x), rng.range(-h.y, h.y), rng.range(-h.z, h.z));
+                    // anywhere on the model's hull (saucer, nacelles, prow), not only in the core box
+                    let (pick, r) = (rng.f(), Vec3::new(rng.f(), rng.f(), rng.f()));
+                    let local = hull.and_then(|h| h.0.random_point(pick, r)).unwrap_or_else(|| {
+                        let h = hit.half_extents.unwrap_or(Vec3::splat(hit.radius * 0.5));
+                        h * (r * 2.0 - Vec3::ONE)
+                    });
                     explode.write(ExplodeMsg { pos: tf.translation + tf.rotation * local, size: rng.range(1.5, 3.5) });
                 }
             }
@@ -1326,4 +1429,18 @@ fn dying(
             commands.entity(e).try_despawn();
         }
     }
+}
+
+fn team_idx(t: Team) -> usize {
+    match t {
+        Team::Union => 0,
+        Team::Aszendenz => 1,
+        Team::Neutral => 2,
+    }
+}
+
+/// Closest point of the segment a-b to `c`, if it lies within `r`.
+fn seg_hit(a: Vec3, b: Vec3, c: Vec3, r: f32) -> Option<Vec3> {
+    let (d2, p) = seg_point(a, b, c);
+    (d2 < r * r).then_some(p)
 }
