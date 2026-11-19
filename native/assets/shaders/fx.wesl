@@ -294,7 +294,9 @@ fn fragment(in: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
                 let s = 1.0 - smoothstep(0.0, 1.0, d);
                 a = s * s;
             } else if in.ext.y < 1.5 {
-                a = select(0.0, mix(0.65, 1.0, exp(-d * d * 30.0)) * exp(-d * d * 3.2) * (1.0 - smoothstep(0.75, 1.0, d)), d < 1.0);
+                // radial glow texture of the web flash: 1 at the centre, .65 at .2, .18 at .5, 0 at the rim
+                let e = max(1.0 - d, 0.0);
+                a = exp(-d * d * 7.0) * 0.85 + 0.15 * e * e;
             } else {
                 let u = abs(in.uv.x);
                 let v = abs(in.uv.y);

@@ -40,7 +40,7 @@ impl Plugin for FxPlugin {
             .expect("fx shader");
         app.init_resource::<Fx>()
             .add_systems(Startup, setup_fx)
-            .add_systems(Update, (fx_messages, fx_simulate).chain().run_if(in_state(AppState::Flight)))
+            .add_systems(Update, (fx_messages, fx_damage, fx_simulate).chain().run_if(in_state(AppState::Flight)))
             .add_systems(Update, (attach_plumes, drive_plumes).chain())
             .add_systems(PostUpdate, fx_upload.after(TransformSystems::Propagate))
             .add_systems(OnExit(AppState::Flight), fx_clear);
@@ -885,7 +885,9 @@ impl Fx {
             self.fire_add(p + d * r_ball * 0.3, d * sp, base, sz, lf, 2.4, 3.0 * size, 1.0);
         }
         // glowing embers with short trails
-        let ne = (18.0 + size * 8.0).min(80.0) as usize;
+        // (the pops of a dying capital ship come every 0.13 s: fewer embers each)
+        let pop = if (1.5..6.0).contains(&size) { 0.5 } else { 1.0 };
+        let ne = ((18.0 + size * 8.0).min(80.0) * pop) as usize;
         let sp = self.rng.range(140.0, 260.0) * (0.6 + size * 0.3);
         self.embers(p, ne, sp, C_FLASH, 0.35 + size * 0.08, 1.4 + size * 0.1, 0.5, 0.06, true);
         // smoke, lit orange from inside at first, lingering after the fire is gone
@@ -1289,6 +1291,64 @@ fn fx_simulate(
     }
 }
 
+/// Damaged ships: fighters trail smoke (and flames when badly hit), capitals burn on their hull.
+fn fx_damage(
+    time: Res<Time>,
+    paused: Res<Paused>,
+    settings: Res<Settings>,
+    mut fx: ResMut<Fx>,
+    cam: Query<&GlobalTransform, With<MainCamera>>,
+    ships: Query<(&Transform, &Ship, &Hittable, &InheritedVisibility, Has<Player>), Without<Dying>>,
+) {
+    let dt = if paused.0 { 0.0 } else { time.delta_secs().min(0.05) * fx.time_scale };
+    let Ok(cam) = cam.single() else { return };
+    if dt <= 0.0 || !fx.ready {
+        return;
+    }
+    let ear = cam.translation();
+    for (tf, ship, hit, vis, is_player) in &ships {
+        if !vis.get() || (is_player && settings.view == View::Cockpit) || tf.translation.distance_squared(ear) > 1800.0 * 1800.0 {
+            continue;
+        }
+        let hp = ship.hp / ship.max_hp.max(1.0);
+        if ship.capital() {
+            if hp < 0.6 && fx.rng.f() < dt * if hp < 0.3 { 9.0 } else { 4.0 } {
+                let b = hit.half_extents.unwrap_or(Vec3::splat(hit.radius * 0.5));
+                let local = Vec3::new(fx.rng.range(-b.x, b.x), fx.rng.range(-b.y, b.y) * 0.6 + b.y * 0.4, fx.rng.range(-b.z, b.z));
+                let p = tf.translation + tf.rotation * local;
+                let v = Vec3::new(fx.rng.range(-4.0, 4.0), fx.rng.range(2.0, 8.0), fx.rng.range(-4.0, 4.0));
+                let (sz, lf) = (fx.rng.range(6.0, 14.0), fx.rng.range(0.5, 1.0));
+                fx.particle(p, v, Vec3::new(2.6, 1.1, 0.3), sz, lf, 0.8);
+                let (sz, lf) = (fx.rng.range(6.0, 10.0), fx.rng.range(2.0, 3.5));
+                fx.smoke(p, sz, lf, Vec3::ZERO, 0.12, 0.5, 0.0);
+            }
+            continue;
+        }
+        let k = 1.0 - hp;
+        if k < 0.3 {
+            continue;
+        }
+        // from a damaged spot slightly behind the cockpit, drifting back with the ship's wake
+        let r = ship.radius();
+        let p = tf.translation + tf.rotation * Vec3::new(r * 0.25 * (r * 7.0).sin(), r * 0.12, -r * 0.35);
+        let wake = tf.rotation * Vec3::Z * (-ship.speed * 0.15);
+        let n = ((k - 0.3) * 70.0 * dt + fx.rng.f()) as usize;
+        let heavy = k > 0.65;
+        for _ in 0..n {
+            let (sz, lf, shade) = if heavy { (fx.rng.range(5.0, 8.0), fx.rng.range(2.2, 3.4), fx.rng.range(0.2, 0.28)) } else { (fx.rng.range(3.0, 5.0), fx.rng.range(1.4, 2.2), fx.rng.range(0.42, 0.55)) };
+            fx.smoke(p, sz, lf, wake, shade, if heavy { 0.85 } else { 0.6 }, 0.0);
+            if heavy && fx.rng.f() < 0.5 {
+                let v = wake + Vec3::new(fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0), fx.rng.range(-5.0, 5.0));
+                let (sz, lf) = (fx.rng.range(3.0, 5.0), fx.rng.range(0.25, 0.45));
+                fx.particle(p, v, Vec3::new(2.8, 1.1, 0.3), sz, lf, 1.5);
+            }
+            if heavy && fx.rng.f() < 0.15 {
+                fx.sparks(p, C_SPARK, 2, 50.0);
+            }
+        }
+    }
+}
+
 /// Give every engine nozzle a plume (ships, menu models, cutscene models).
 fn attach_plumes(
     mut commands: Commands,
@@ -1652,6 +1712,8 @@ fn fx_test(
             let def = data.ship(kind);
             let mut ship = Ship::new(kind, def);
             ship.speed = def.speed * if i == 2 { 1.6 } else { 1.0 };
+            // damaged: heavy smoke and flames, light smoke, none
+            ship.hp = ship.max_hp * [0.2, 0.55, 1.0][i];
             commands.entity(e).insert(ship);
         }
     }
