@@ -232,6 +232,7 @@ impl Plugin for HudPlugin {
             .add_systems(
                 PostUpdate,
                 hud_world
+                    .after(crate::render::CameraRigSet)
                     .after(TransformSystems::Propagate)
                     .after(CameraUpdateSystems)
                     .before(UiSystems::Prepare)
@@ -590,7 +591,7 @@ impl HudBuilder {
             n.border_radius = BorderRadius::MAX;
             self.flare.push(p.spawn((n, BackgroundGradient::default(), Visibility::Hidden)).id());
         }
-        self.flare.push(p.spawn((abs_node(1200.0, 6.0), BackgroundGradient::default(), Visibility::Hidden)).id());
+        self.flare.push(p.spawn((abs_node(1200.0, STREAK_H), BackgroundGradient::default(), Visibility::Hidden)).id());
         let vignette = p
             .spawn((
                 Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
@@ -1196,9 +1197,12 @@ fn hud_status(
     ui.text(ids.neutron, &buf);
     ui.text_color(ids.neutron, if ship.missiles == 0 { MUTED } else { AMBER });
     ui.width_pct(ids.thr_fill, pl.throttle);
-    let top = ship.def.boost.unwrap_or(ship.def.speed * 1.6).max(1.0);
+    // the caret on the fill's scale: the throttle setting the speed the ship heads for corresponds to
+    // (web: want = speed * (0.15 + throttle * 0.85)); boost pins it to the end
+    let cruise = ship.def.speed.max(1.0);
+    let want_thr = ((pl.want_speed / cruise - 0.15) / 0.85).clamp(0.0, 1.0);
     if let Ok(mut n) = ui.nodes.get_mut(ids.thr_want) {
-        let want = percent(((pl.want_speed / top).clamp(0.0, 1.0) * 100.0).round() - 1.0);
+        let want = percent((want_thr * 100.0).round() - 1.0);
         if n.left != want {
             n.left = want;
         }
@@ -1309,16 +1313,20 @@ fn hud_comm(
     mut buf: Local<String>,
 ) {
     for m in msgs.read() {
+        // full: the new line is dropped (web app.js: `if (commQ.length < 6) commQ.push(...)`), so kill chatter
+        // never pushes queued story lines out
         if q.queue.len() >= 6 {
-            q.queue.pop_front();
+            continue;
         }
-        let ch = data.campaign.chars.get(&m.who);
-        let name = display_safe(&data.speaker(&m.who));
+        // unknown speakers are the controller (web: CHARS[who] || CHARS.erz)
+        let who = if data.campaign.chars.contains_key(&m.who) { m.who.as_str() } else { "erz" };
+        let ch = data.campaign.chars.get(who);
+        let name = display_safe(&data.speaker(who));
         let initials = ch.map(|c| c.short.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| name.chars().take(2).collect());
         let text = fill_callsign(&m.text, &progress.callsign);
         let chars = text.chars().count();
         let dur = 2.4 + chars as f32 * 0.045;
-        q.queue.push_back(CommLine { name, initials, color: char_color(&data, &m.who), text, chars, dur });
+        q.queue.push_back(CommLine { name, initials, color: char_color(&data, who), text, chars, dur });
     }
     if paused.0 {
         return;
@@ -1422,7 +1430,8 @@ fn hud_alerts(
 
     // banners: a message, or the mission result
     for b in banners.read() {
-        anim.banner.clone_from(&b.0);
+        // Orbitron (display font) has no '·' or '„' and the banner is set in capitals
+        anim.banner = display_safe(&b.0);
         anim.banner_t = 0.0;
     }
     if let Some(end) = &status.ended {
@@ -1452,7 +1461,7 @@ fn hud_alerts(
     if anim.cine_t < CINE_DUR {
         anim.cine_t += dt;
         let ct = anim.cine_t;
-        ui.show(ids.cine, ct < CINE_DUR);
+        ui.show(ids.cine, ct < CINE_DUR && !paused.0);
         decoded(&mut buf, &anim.cine[0], ct, 60.0);
         ui.text(ids.cine_kicker, &buf);
         decoded(&mut buf, &anim.cine[1], ct, 22.0);
@@ -1843,11 +1852,15 @@ fn hud_world(
         ui.show(streak, kq > 0);
         if let Ok(mut g) = ui.grad.get_mut(streak) {
             g.0 = vec![
-                LinearGradient::to_right(vec![
-                    ColorStop::auto(rgba(150, 200, 255, 0.0)),
-                    ColorStop::auto(rgba(200, 230, 255, 0.2 * k)),
-                    ColorStop::auto(rgba(150, 200, 255, 0.0)),
-                ])
+                RadialGradient::new(
+                    UiPosition::CENTER,
+                    RadialGradientShape::Ellipse(percent(50.0), percent(50.0)),
+                    vec![
+                        ColorStop::percent(rgba(200, 230, 255, 0.2 * k), 0.0),
+                        ColorStop::percent(rgba(170, 215, 255, 0.07 * k), 45.0),
+                        ColorStop::percent(rgba(150, 200, 255, 0.0), 100.0),
+                    ],
+                )
                 .into(),
             ];
         }
@@ -1857,9 +1870,12 @@ fn hud_world(
         for (i, (tpos, r, ..)) in GHOSTS.iter().enumerate() {
             ui.center(ids.flare[i], q + to_c * *tpos, Vec2::splat(100.0), 0.0, r * 2.0 / 100.0);
         }
-        ui.center(ids.flare[6], q, Vec2::new(1200.0, 6.0), 0.0, w / 1500.0);
+        ui.center(ids.flare[6], q, Vec2::new(1200.0, STREAK_H), 0.0, w / 1500.0);
     }
 }
+
+/// height of the lens flare's anamorphic streak (web 2.4 px, soft-edged here)
+const STREAK_H: f32 = 4.0;
 
 fn hide_pool(ui: &mut Ui, pool: &[Entity], from: usize) {
     for &e in pool.iter().skip(from) {
@@ -1883,6 +1899,7 @@ fn arrow(ui: &mut Ui, pr: &Proj, e: Entity, world: Vec3, cockpit: bool) {
 /// `SF_HUD_TEST=1`: fills mission status, radio and banner with sample data (screenshots before mission.rs).
 fn hud_test_hook(
     mut done: Local<bool>,
+    mut banner_done: Local<bool>,
     anim: Res<HudAnim>,
     mut status: ResMut<MissionStatus>,
     mut comm: MessageWriter<CommMsg>,
@@ -1912,6 +1929,10 @@ fn hud_test_hook(
         *done = true;
         comm.write(CommMsg { who: "rook".into(), text: "Rook an {cs}: Zwei Dorns auf zwölf Uhr. Ich nehme den linken, du den rechten.".into() });
         comm.write(CommMsg { who: "brandt".into(), text: "Aurora an Nachtfalken: Gute Jagd.".into() });
-        banner.write(HudBanner("NEUE FEINDWELLE".into()));
+    }
+    // late enough for a screenshot after the slow first frames of a software renderer (SF_SHOT_AT=7)
+    if !*banner_done && anim.time > 5.5 {
+        *banner_done = true;
+        banner.write(HudBanner("Neue Feindwelle · Nav 2".into()));
     }
 }

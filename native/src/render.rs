@@ -30,7 +30,7 @@ use bevy::render::view::Msaa;
 use bevy::tasks::{futures::check_ready, AsyncComputeTaskPool, Task};
 
 use crate::common::*;
-use crate::ships::{spawn_ship, ShipLibrary};
+use crate::ships::{spawn_ship_model, ShipLibrary};
 
 // ---------- light scale ----------
 
@@ -47,6 +47,10 @@ const SUN_LUX: f32 = 2.4 * NIT * WEB;
 
 /// angular radius of the sun's glow (web sprite: 5200 m wide at 28 km)
 const SUN_HALF: f32 = 0.0926;
+/// distance of the sun sprite from the camera (web: 28 km, inside the far plane)
+const SUN_DIST: f32 = 28_000.0;
+/// web sun sprite colour (3.2, 2.7, 2.0); the profile in sun_mesh() sets the brightness
+const SUN_COLOR: Vec3 = Vec3::new(3.2, 2.7, 2.0);
 const PLANET_DIST: f32 = 24_000.0;
 const PLANET_R: f32 = 7_000.0;
 const CAM_NEAR: f32 = 0.1;
@@ -374,11 +378,13 @@ struct Rig {
     menu_t: f32,
     shake_t: f32,
     cockpit: bool,
+    /// player and cockpit flag the own hull's visibility was last set for
+    hull: Option<(Entity, bool)>,
 }
 
 impl Default for Rig {
     fn default() -> Self {
-        Self { q: Quat::IDENTITY, fov: 62.0, view: None, player: None, state: None, cut: true, menu_t: 0.0, shake_t: 0.0, cockpit: false }
+        Self { q: Quat::IDENTITY, fov: 62.0, view: None, player: None, state: None, cut: true, menu_t: 0.0, shake_t: 0.0, cockpit: false, hull: None }
     }
 }
 
@@ -400,7 +406,8 @@ fn camera_rig(
     let Ok((mut ct, mut proj, dlss, taa)) = cam.single_mut() else { return };
     let dt = time.delta_secs().min(0.1);
     let st = *state.get();
-    let mut cut = cuts.read().count() > 0 || std::mem::take(&mut rig.cut);
+    let cut_msg = cuts.read().count() > 0;
+    let mut cut = std::mem::take(&mut rig.cut) || cut_msg;
     if rig.state != Some(st) {
         rig.state = Some(st);
         cut = true;
@@ -433,6 +440,7 @@ fn camera_rig(
             rig.cockpit = cockpit;
             if dying {
                 // the camera lets go of the wreck: drift back and keep it in view
+                rig.hull = None;
                 let goal = pt.translation + rig.q * Vec3::new(0.0, 14.0, -70.0);
                 ct.translation = ct.translation.lerp(goal, 1.0 - (-dt * 1.2).exp());
                 let look = Transform::from_translation(ct.translation).looking_at(pt.translation, rig.q * Vec3::Y);
@@ -451,8 +459,14 @@ fn camera_rig(
                 ct.rotation = rig.q * FLIP;
                 target_fov = cap_v(104.0).min(60.0) + sr * 10.0 + ir * 6.0;
             }
-            // own hull: hidden in the cockpit view
-            if let Some(children) = children {
+            // own hull: hidden in the cockpit view. Only written when the view (or the player) changes, so
+            // others may hide it too: weapons.rs hides the dying player's wreck, the ships showcase hook the
+            // player. While dying the hull is left alone.
+            if !dying
+                && let Some(children) = children
+                && rig.hull != Some((e, cockpit))
+            {
+                rig.hull = Some((e, cockpit));
                 let vis = if cockpit { Visibility::Hidden } else { Visibility::Inherited };
                 for c in children.iter() {
                     if let Ok(mut v) = bodies.get_mut(c) {
@@ -468,11 +482,18 @@ fn camera_rig(
                 // slow orbit around the carrier (web attract mode)
                 rig.menu_t += dt;
                 let a = rig.menu_t * 0.06 + 0.9;
-                ct.translation = Vec3::new(a.cos() * 330.0 + 60.0, 70.0 + (a * 0.7).sin() * 30.0, a.sin() * 330.0 + 60.0);
-                ct.look_at(Vec3::new(30.0, 8.0, 40.0), Vec3::Y);
+                let orbit = Vec3::new(a.cos() * MENU_ORBIT, 55.0 + (a * 0.7).sin() * 25.0, a.sin() * MENU_ORBIT);
+                ct.translation = MENU_FOCUS + orbit;
+                ct.look_at(MENU_FOCUS, Vec3::Y);
+                // the title menu covers the left ~45 % of the screen: turn the view left so the ships sit
+                // at ~42 % right of the centre
+                let half_h = (62f32.to_radians() * 0.5).tan() * aspect;
+                ct.rotate_local_y((0.42 * half_h).atan());
             } else {
-                // briefing, debrief, flight without a pilot: the view drifts slowly
+                // briefing, debrief, flight without a pilot: the view drifts slowly (no shake: nothing would
+                // take its offset back out again)
                 ct.rotate_y(dt * 0.012);
+                shake.0 = 0.0;
                 target_fov = rig.fov;
             }
         }
@@ -517,13 +538,29 @@ fn camera_rig(
 #[allow(clippy::type_complexity)]
 fn follow_camera(
     test: Res<RenderTest>,
+    cache: Res<SkyCache>,
     cam: Query<(&Transform, &Projection, &Camera), With<MainCamera>>,
-    players: Query<(&Transform, &Ship), (With<Player>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>)>,
+    mut sun: Query<(&mut Transform, &mut Visibility), (With<SunSprite>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>)>,
+    players: Query<(&Transform, &Ship), (With<Player>, Without<MainCamera>, Without<DustSpeck>, Without<Streak>, Without<SunSprite>)>,
     mut specks: Query<(&DustSpeck, &mut Transform), (Without<MainCamera>, Without<Streak>)>,
     mut streaks: Query<(&Streak, &mut Transform, &mut Visibility), Without<MainCamera>>,
 ) {
     let Ok((ct, proj, camera)) = cam.single() else { return };
     let c = ct.translation;
+    // the sun sprite: parallel to the image plane (round anywhere on screen), constant angular size
+    if let Ok((mut st, mut sv)) = sun.single_mut() {
+        match cache.shown_info {
+            Some(info) => {
+                st.translation = c + info.sun_dir * SUN_DIST;
+                st.rotation = ct.rotation;
+                st.scale = Vec3::splat(SUN_DIST * SUN_HALF.tan());
+                sv.set_if_neq(Visibility::Inherited);
+            }
+            None => {
+                sv.set_if_neq(Visibility::Hidden);
+            }
+        }
+    }
     if specks.is_empty() && streaks.is_empty() {
         return;
     }
@@ -606,7 +643,15 @@ pub struct SpaceAssets {
     speck_mat: Handle<StandardMaterial>,
     streak_mesh: Handle<Mesh>,
     streak_mat: Handle<StandardMaterial>,
+    sun_mat: Handle<StandardMaterial>,
 }
+
+/// The sun's glow: an unlit additive disc kept parallel to the image plane, so it is round at any FOV and
+/// anywhere on screen (a three.js Sprite). It is drawn at SUN_DIST in the camera's direction of the sun, i.e.
+/// at infinity like the skybox: the skybox's motion vectors underneath are the right ones for it under
+/// TAA/DLSS (additive, it writes neither depth nor motion vectors itself).
+#[derive(Component)]
+struct SunSprite;
 
 fn build_space_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
     // an icosphere with n subdivisions has 20·(n+1)² triangles: 4500 close up, 720 at a distance
@@ -631,7 +676,25 @@ fn build_space_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, 
         cull_mode: None,
         ..default()
     });
+    let sun_mat = mats.add(StandardMaterial {
+        base_color: Color::BLACK,
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        cull_mode: None,
+        fog_enabled: false,
+        ..default()
+    });
+    commands.spawn((
+        Name::new("Sonnenscheibe"),
+        SunSprite,
+        Mesh3d(meshes.add(sun_mesh())),
+        MeshMaterial3d(sun_mat.clone()),
+        Transform::default(),
+        Visibility::Hidden,
+        NotShadowCaster,
+    ));
     commands.insert_resource(SpaceAssets {
+        sun_mat,
         rocks,
         rock_mat,
         speck_mesh: meshes.add(Sphere::new(1.0).mesh().ico(1).expect("icosphere")),
@@ -639,6 +702,46 @@ fn build_space_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, 
         streak_mesh: meshes.add(streak_mesh()),
         streak_mat,
     });
+}
+
+/// unit disc in the XY plane, vertex colours = the glow's radial profile: a small white-hot core that blooms,
+/// a soft halo and a faint wide skirt (the web glow texture's reach, but less flat-white in the middle)
+fn sun_mesh() -> Mesh {
+    const RINGS: [f32; 16] = [0.0, 0.02, 0.04, 0.06, 0.08, 0.11, 0.15, 0.2, 0.26, 0.33, 0.42, 0.52, 0.64, 0.78, 0.9, 1.0];
+    const SEG: usize = 64;
+    let glow = |r: f32| {
+        let core = smoothstep(0.075, 0.03, r);
+        let skirt = 0.25 * (-r * r * 6.0).exp() * smoothstep(1.0, 0.6, r);
+        core * 3.0 + 0.9 * (-r * r * 30.0).exp() + skirt
+    };
+    let mut pos = vec![[0.0f32; 3]];
+    let g0 = glow(0.0);
+    let mut col = vec![[g0, g0, g0, 1.0]];
+    for &r in &RINGS[1..] {
+        let g = glow(r);
+        for k in 0..SEG {
+            let a = k as f32 / SEG as f32 * TAU;
+            pos.push([a.cos() * r, a.sin() * r, 0.0]);
+            col.push([g, g, g, 1.0]);
+        }
+    }
+    let mut idx: Vec<u16> = Vec::new();
+    for k in 0..SEG {
+        idx.extend([0, 1 + k as u16, 1 + ((k + 1) % SEG) as u16]);
+    }
+    for ring in 0..RINGS.len() - 2 {
+        let (a, b) = (1 + ring * SEG, 1 + (ring + 1) * SEG);
+        for k in 0..SEG {
+            let k1 = (k + 1) % SEG;
+            idx.extend([(a + k) as u16, (b + k) as u16, (b + k1) as u16, (a + k) as u16, (b + k1) as u16, (a + k1) as u16]);
+        }
+    }
+    let n = pos.len();
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; n])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+        .with_inserted_indices(Indices::U16(idx))
 }
 
 /// two crossed quads along +Z (0..1), bright head, fading tail
@@ -662,7 +765,7 @@ fn streak_mesh() -> Mesh {
         .with_inserted_indices(Indices::U16(vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]))
 }
 
-/// The sun's light for a sky (its disc and glow are baked into the HDR sky); tagged for the menu or the mission.
+/// The sun's light for a sky (its glow is the SunSprite); tagged for the menu or the mission.
 fn spawn_sun(commands: &mut Commands, sky: &SkyParams, menu: bool) -> SkyInfo {
     let info = sky.info();
     let up = if info.sun_dir.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
@@ -702,21 +805,25 @@ fn enter_menu(mut commands: Commands, mut cache: ResMut<SkyCache>, mut info: Res
     rig.menu_t = 0.0;
 }
 
-/// Carrier and fighters of the menu backdrop (needs the ShipLibrary, built at Startup).
-fn spawn_menu_ships(mut commands: Commands, mut pending: ResMut<MenuShipsPending>, lib: Res<ShipLibrary>, data: Res<GameData>) {
+/// Carrier and fighters of the menu backdrop (needs the ShipLibrary, built at Startup). Visual models only
+/// (no Ship/Hittable/InMission): gameplay systems never see them.
+fn spawn_menu_ships(mut commands: Commands, mut pending: ResMut<MenuShipsPending>, lib: Res<ShipLibrary>) {
     if !std::mem::take(&mut pending.0) {
         return;
     }
-    for (kind, pos) in [
-        ("aurora", Vec3::ZERO),
-        ("sperber", Vec3::new(70.0, 22.0, 120.0)),
-        ("falke", Vec3::new(92.0, 16.0, 96.0)),
-        ("greif", Vec3::new(112.0, 10.0, 70.0)),
-    ] {
-        let e = spawn_ship(&mut commands, &lib, &data, kind, Transform::from_translation(pos));
-        commands.entity(e).insert(MenuScene).entry::<Ship>().and_modify(|mut s| s.speed = 0.0);
+    for (kind, pos) in [("aurora", Vec3::ZERO), ("sperber", MENU_FIGHTERS[0]), ("falke", MENU_FIGHTERS[1]), ("greif", MENU_FIGHTERS[2])] {
+        let e = spawn_ship_model(&mut commands, &lib, kind, Transform::from_translation(pos));
+        commands.entity(e).insert(MenuScene);
     }
 }
+
+/// Menu formation: web startAttract's echelon, moved out past the rim of the native saucer (centre (0, 12, 100),
+/// radius ~110, y 3..23) and lifted clear of it, so the carrier never swallows it
+const MENU_FIGHTERS: [Vec3; 3] = [Vec3::new(135.0, 40.0, 150.0), Vec3::new(155.0, 33.0, 124.0), Vec3::new(175.0, 26.0, 98.0)];
+/// what the menu orbit looks at: between the carrier and its escort
+const MENU_FOCUS: Vec3 = Vec3::new(60.0, 24.0, 90.0);
+/// distance of the menu orbit from MENU_FOCUS
+const MENU_ORBIT: f32 = 320.0;
 
 fn exit_menu(mut commands: Commands, q: Query<Entity, With<MenuScene>>, mut pending: ResMut<MenuShipsPending>) {
     pending.0 = false;
@@ -787,7 +894,10 @@ fn enter_flight(
     }
 }
 
-fn tumble_asteroids(time: Res<Time>, mut q: Query<(&Asteroid, &mut Transform)>) {
+fn tumble_asteroids(time: Res<Time>, paused: Res<Paused>, mut q: Query<(&Asteroid, &mut Transform)>) {
+    if paused.0 {
+        return;
+    }
     let dt = time.delta_secs();
     for (a, mut t) in &mut q {
         t.rotation = (Quat::from_axis_angle(a.axis, a.rate * dt) * t.rotation).normalize();
@@ -887,6 +997,7 @@ struct SkyBake {
     sky: Image,
     env: Image,
     ambient: Vec3,
+    info: SkyInfo,
 }
 
 struct SkyEntry {
@@ -894,6 +1005,8 @@ struct SkyEntry {
     sky: Handle<Image>,
     env: Handle<Image>,
     ambient: Vec3,
+    /// sun direction and eclipse of this sky (for the live sun sprite)
+    info: SkyInfo,
 }
 
 #[derive(Resource, Default)]
@@ -904,6 +1017,8 @@ struct SkyCache {
     queue: Vec<SkyParams>,
     wanted: Option<u64>,
     shown: Option<u64>,
+    /// sun of the sky on screen
+    shown_info: Option<SkyInfo>,
     fade: f32,
 }
 
@@ -938,6 +1053,9 @@ fn update_sky(
     time: Res<Time>,
     mut cache: ResMut<SkyCache>,
     mut images: ResMut<Assets<Image>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    assets: Option<Res<SpaceAssets>>,
+    mut sun_k: Local<f32>,
     mut cam: Query<(Entity, &mut Skybox, &mut AmbientLight), With<MainCamera>>,
 ) {
     let cache = &mut *cache;
@@ -946,7 +1064,7 @@ fn update_sky(
     {
         let key = *key;
         cache.running = None;
-        cache.ready.push(SkyEntry { key, sky: images.add(bake.sky), env: images.add(bake.env), ambient: bake.ambient });
+        cache.ready.push(SkyEntry { key, sky: images.add(bake.sky), env: images.add(bake.env), ambient: bake.ambient, info: bake.info });
         debug_assert_eq!(key, bake.key);
         // keep at most two skies (~100 MB each at 2048²; never the one wanted or shown)
         while cache.ready.len() > 2 {
@@ -978,11 +1096,21 @@ fn update_sky(
         ambient.color = Color::LinearRgba(LinearRgba::rgb(e.ambient.x, e.ambient.y, e.ambient.z));
         ambient.brightness = NIT * WEB;
         cache.shown = Some(w);
+        cache.shown_info = Some(e.info);
         cache.fade = 0.0;
     }
     if cache.shown.is_some() && cache.fade < 1.0 {
         cache.fade = (cache.fade + time.delta_secs().min(0.1) / 0.6).min(1.0);
         sky.brightness = SKY_NITS * smoothstep(0.0, 1.0, cache.fade);
+    }
+    // the live sun fades in with its sky, and out behind the (baked) planet
+    let k = cache.shown_info.map_or(0.0, |i| i.sun_visible) * smoothstep(0.0, 1.0, cache.fade);
+    if (k - *sun_k).abs() > 1e-4
+        && let Some(assets) = assets
+        && let Some(mut m) = mats.get_mut(&assets.sun_mat)
+    {
+        *sun_k = k;
+        m.base_color = Color::LinearRgba(LinearRgba::rgb(SUN_COLOR.x * k, SUN_COLOR.y * k, SUN_COLOR.z * k));
     }
 }
 
@@ -1122,10 +1250,10 @@ fn dir_face(w: Vec3) -> (usize, f32, f32) {
     (face, u, v)
 }
 
-/// Runs `f(first_row, rows)` over chunks of `rows_per_job` rows on all cores.
+/// Runs `f(first_row, rows)` over chunks of `rows_per_job` rows on all cores but two (the game keeps running).
 fn par_rows<T: Send>(data: &mut [T], row_len: usize, rows_per_job: usize, f: impl Fn(usize, &mut [T]) + Sync) {
     let jobs = Mutex::new(data.chunks_mut(row_len * rows_per_job).enumerate());
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).max(1);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).max(1);
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(|| {
@@ -1418,20 +1546,6 @@ fn rgb9e5(c: Vec3) -> u32 {
     q(c.x) | (q(c.y) << 9) | (q(c.z) << 18) | ((e.clamp(0, 31) as u32) << 27)
 }
 
-/// sun disc and glow (web: glow sprite of 5200 m at 28 km, HDR colour 3.2/2.7/2.0), as stored in the sky
-#[inline]
-fn sun_glow(cs: f32) -> Vec3 {
-    let r = cs.clamp(-1.0, 1.0).acos() / SUN_HALF;
-    if r >= 1.0 {
-        return Vec3::ZERO;
-    }
-    // compact: far off-axis the perspective stretches anything baked into the sky, the round glow comes from bloom
-    let halo = 0.6 * (-r * r * 30.0).exp() + 0.15 * (-r * r * 6.0).exp() * smoothstep(1.0, 0.5, r);
-    let core = smoothstep(0.07, 0.03, r);
-    // the sky is shown at WEB times its value; the core is meant to bloom
-    Vec3::new(3.2, 2.7, 2.0) * ((halo + core * 4.0) / WEB)
-}
-
 /// bilinear lookup in a low resolution face grid
 #[inline]
 fn sample_grid(grid: &[Vec3], n: usize, face: usize, fx: f32, fy: f32) -> Vec3 {
@@ -1494,10 +1608,10 @@ fn bake_sky(p: &SkyParams, res: usize) -> SkyBake {
         }
     });
 
-    // 2. full resolution faces: upsampled nebula, planet, sun, stars (HDR, shared exponent)
+    // 2. full resolution faces: upsampled nebula, planet, stars (HDR, shared exponent). The sun is a live
+    //    camera-facing sprite (SunSprite): baked into the cube it would stretch to an oval at wide angles.
     let stars = make_stars(&ctx, res);
     let texel = std::f32::consts::FRAC_PI_2 / res as f32;
-    let cos_sun = SUN_HALF.cos();
     let k = nl as f32 / res as f32;
     let mut data = vec![0u32; 6 * res * res];
     par_rows(&mut data, res, 8, |row0, rows| {
@@ -1510,9 +1624,7 @@ fn bake_sky(p: &SkyParams, res: usize) -> SkyBake {
                 let neb = sample_grid(&neb, nl, face, (x as f32 + 0.5) * k - 0.5, fy);
                 let u = (x as f32 + 0.5) / res as f32 * 2.0 - 1.0;
                 let d = face_dir(face, u, v);
-                let cs = d.dot(ctx.sun);
-                let bg = if cs > cos_sun { neb + sun_glow(cs) } else { neb };
-                *px = ctx.sky_color(d, bg, texel);
+                *px = ctx.sky_color(d, neb, texel);
             }
             let list = &stars[face];
             let yc = y as f32 + 0.5;
@@ -1571,6 +1683,7 @@ fn bake_sky(p: &SkyParams, res: usize) -> SkyBake {
         // the environment map generator reads the source's size in the main world every frame
         env: cube_image(ENV_RES, env, TextureFormat::Rgba16Float, RenderAssetUsages::all()),
         ambient,
+        info: p.info(),
     }
 }
 

@@ -53,17 +53,22 @@ impl Plugin for CockpitPlugin {
                     hands::attach_hands,
                     cockpit_events,
                     test_damage,
-                    animate_controls,
+                    // frozen while paused like the web loop (lamps keep their state)
+                    animate_controls.run_if(not_paused),
                     update_lamps,
-                    screens::update_screens,
-                    update_sparks,
+                    screens::update_screens.run_if(not_paused),
+                    update_sparks.run_if(not_paused),
                 )
                     .chain()
                     .after(WeaponsSet::Dying)
                     .run_if(in_state(AppState::Flight)),
             )
-            .add_systems(PostUpdate, cockpit_visibility.before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, cockpit_visibility.after(crate::render::CameraRigSet).before(TransformSystems::Propagate));
     }
+}
+
+fn not_paused(p: Res<Paused>) -> bool {
+    !p.0
 }
 
 // ---------- layout ----------
@@ -255,7 +260,8 @@ fn setup_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut m
     let bolt = meshes.add(geom::cylinder(0.0035, 0.0035, 0.003, 6, true).transformed(&Mat4::from_rotation_x(FRAC_PI_2)).to_mesh());
     let spark = (
         meshes.add(geom::sphere(0.0034, 6, 4).to_mesh()),
-        mats.add(StandardMaterial { base_color: Color::BLACK, emissive: LinearRgba::rgb(3.0 * WEB, 1.8 * WEB, 0.6 * WEB), unlit: true, ..default() }),
+        // unlit: Bevy shows only base_color (emissive is ignored); HDR > 1 blooms
+        mats.add(StandardMaterial { base_color: Color::LinearRgba(LinearRgba::rgb(3.0 * WEB, 1.8 * WEB, 0.6 * WEB)), unlit: true, ..default() }),
     );
     commands.insert_resource(CockpitAssets { mats: m, lamps: HashMap::new(), bolt, spark });
     commands.insert_resource(screens);
@@ -321,6 +327,11 @@ struct ScreenLight;
 
 #[derive(Component)]
 struct CanopyGlass;
+
+/// The blended crack layer over the canopy: only drawn once the canopy has cracks (a screen-sized blended
+/// plane in front of everything otherwise swallowed the additive sun glow behind it).
+#[derive(Component)]
+struct CrackLayer;
 
 #[derive(Component)]
 struct Spark(usize);
@@ -876,7 +887,8 @@ fn build_canopy(b: &mut Builder, l: &Layout, screens: &Screens) {
     // cracks in the canopy glass (the texture grows with heavy hits)
     let d = 0.5;
     let (a, c) = (l.s(-1.0, 1.0, d), l.s(1.0, -0.28, d));
-    b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    let cl = b.part(root, &geom::plane(c.x - a.x, a.y - c.y), screens.crack_mat.clone(), tr((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, -d));
+    b.commands.entity(cl).insert((CrackLayer, Visibility::Hidden));
     // HUD combiner frame
     let hc = l.s(0.0, -0.3, 0.58);
     let (hw, hh) = (0.075, 0.05);
@@ -947,12 +959,17 @@ fn cockpit_visibility(
     state: Res<State<AppState>>,
     settings: Res<Settings>,
     players: Query<Has<Dying>, With<Player>>,
-    mut roots: Query<&mut Visibility, With<CockpitRoot>>,
+    cockpit: Res<CockpitState>,
+    mut roots: Query<&mut Visibility, (With<CockpitRoot>, Without<CrackLayer>)>,
+    mut cracks: Query<&mut Visibility, (With<CrackLayer>, Without<CockpitRoot>)>,
 ) {
     let alive = players.iter().next().is_some_and(|dying| !dying);
     let on = *state.get() == AppState::Flight && settings.view == View::Cockpit && alive;
     for mut v in &mut roots {
         v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+    }
+    for mut v in &mut cracks {
+        v.set_if_neq(if cockpit.cracks > 0 { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
@@ -1303,7 +1320,7 @@ fn update_lamps(
         }
     }
     for mut l in &mut alarm {
-        l.intensity = if red && flash { 0.6 * CANDELA * SCALE * SCALE } else { 0.0 };
+        l.intensity = if red && flash { 0.9 * CANDELA * SCALE * SCALE } else { 0.0 };
     }
     for mut l in &mut screen_light {
         l.color = if red { Color::srgb(1.0, 0.6, 0.63) } else { Color::srgb(0.5, 0.88, 1.0) };
