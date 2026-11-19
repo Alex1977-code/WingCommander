@@ -16,8 +16,11 @@
 //! - SF_TEST_RETURN=1  skip every nav point once the launch is over: straight to the return and landing
 //! - SF_NO_BAY=1       start in front of the carrier and "land" by proximity (the web's non-bay fallback)
 //! - SF_BAY_FREEZE=<s> the launch countdown stops at s seconds (screenshots of the red / amber phase)
-//! - SF_LAND_FREEZE=<z> the player's landing on rails stops once it is at carrier-local z <= this (screenshots)
+//! - SF_LAND_FREEZE=<z> the player stops once it is at carrier-local z <= this on the final approach, or flying
+//!   by hand towards the bay with clearance (screenshots)
+//! - SF_BAY_STAY=1     the mission does not end once everybody is parked (screenshots)
 //! - SF_BAY_CHASE=1    keep the chase view during the launch (screenshots; the game forces the cockpit)
+//! - SF_OUT_FREEZE=<z> the launched player stops once it is at carrier-local z >= this (screenshots)
 //!
 //! Launch and landing (web startLaunch / startLanding / captureInBay / updateSeq): every mission starts
 //! clamped in the TUS Aurora's hangar bay (red: engines pre-heat, amber: clamps release and the bay field
@@ -65,6 +68,8 @@ impl Plugin for MissionPlugin {
             no_bay: env_on("SF_NO_BAY"),
             bay_freeze: std::env::var("SF_BAY_FREEZE").ok().and_then(|v| v.parse().ok()),
             land_freeze: std::env::var("SF_LAND_FREEZE").ok().and_then(|v| v.parse().ok()),
+            out_freeze: std::env::var("SF_OUT_FREEZE").ok().and_then(|v| v.parse().ok()),
+            bay_stay: env_on("SF_BAY_STAY"),
         };
         app            .add_message::<WarpFlashMsg>()
             .init_resource::<MissionState>()
@@ -576,6 +581,10 @@ struct TestHooks {
     bay_freeze: Option<f32>,
     /// SF_LAND_FREEZE: the player's landing stops at this carrier-local z
     land_freeze: Option<f32>,
+    /// SF_OUT_FREEZE: the launched player stops at this carrier-local z
+    out_freeze: Option<f32>,
+    /// SF_BAY_STAY: stay parked, no mission end
+    bay_stay: bool,
 }
 
 const WARP_POOL: usize = 8;
@@ -1747,6 +1756,13 @@ fn bay_seq(
                 };
                 let l = bay_local(&c, tf.translation);
                 if !p.held {
+                    if p.player && !p.out && (p.frozen.is_some() || radio.test.out_freeze.is_some_and(|z| l.z >= z)) {
+                        // SF_OUT_FREEZE: hold the launched ship where it is (screenshots)
+                        let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                        tf.translation = bay_to_world(&c, fl);
+                        tf.rotation = c.rotation * fr;
+                        continue;
+                    }
                     if p.out || dying || l.z > BAY.mouth + 30.0 || t > 30.0 || !in_bay_corridor(l, 40.0) {
                         if p.in_bay {
                             p.in_bay = false;
@@ -1863,11 +1879,18 @@ fn bay_seq(
                     radio.banner("LANDEAUTOPILOT");
                     io.beep(900.0, 0.18);
                     radio.log(|| "landing autopilot".into());
-                } else if let Ok((_, tf, mut ship, pl, neutron, _, _)) = ships.get_mut(pe) {
+                } else if let Ok((_, mut tf, mut ship, pl, neutron, _, _)) = ships.get_mut(pe) {
                     // flown into the open bay by hand: the tractor beam catches the ship (web captureInBay),
                     // incl. a ship resting on the back wall
                     let l = bay_local(&c, tf.translation);
-                    if in_bay_corridor(l, 0.0) && l.z < BAY.mouth - 8.0 && l.z > BAY.back + 5.0 {
+                    let p = &mut pilots[pi];
+                    let inward = (c.rotation.inverse() * fwd(&tf)).z < 0.0;
+                    if p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| inward && l.z <= z) {
+                        // SF_LAND_FREEZE: hold the hand-flown ship where it is (screenshots of the approach aids)
+                        let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
+                        tf.translation = bay_to_world(&c, fl);
+                        tf.rotation = c.rotation * fr;
+                    } else if in_bay_corridor(l, 0.0) && l.z < BAY.mouth - 8.0 && l.z > BAY.back + 5.0 {
                         cancel_lance(&mut ship, neutron);
                         if let Some(mut pl) = pl {
                             pl.boosting = false;
@@ -1910,7 +1933,7 @@ fn bay_seq(
             let p = &mut pilots[idx];
             let l = bay_local(&c, tf.translation);
             let up = c.rotation * Vec3::Y;
-            if p.player && p.stage != Some(LandStage::Parked) && (p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| l.z <= z)) {
+            if p.player && p.stage == Some(LandStage::Final) && (p.frozen.is_some() || radio.test.land_freeze.is_some_and(|z| l.z <= z)) {
                 // SF_LAND_FREEZE: hold the ship where it is relative to the carrier (screenshots)
                 let (fl, fr) = *p.frozen.get_or_insert((l, c.rotation.inverse() * tf.rotation));
                 tf.translation = bay_to_world(&c, fl);
@@ -2000,7 +2023,7 @@ fn bay_seq(
                         st.engine_off = true;
                         radio.log(|| "landed".into());
                     }
-                    Some(d) if seq.t - d > 2.2 => {
+                    Some(d) if seq.t - d > 2.2 && !radio.test.bay_stay => {
                         st.seq = None;
                         io.lights((false, false, false), 1.0, true);
                         st.phase = Phase::Done;
